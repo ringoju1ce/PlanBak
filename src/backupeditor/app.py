@@ -1,0 +1,1298 @@
+"""Qt desktop file manager. The backup format and persistence live in backup.py."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import shutil
+import sys
+import threading
+import time
+import uuid
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
+
+from PySide6.QtCore import (
+    QAbstractTableModel,
+    QByteArray,
+    QEventLoop,
+    QFileSystemWatcher,
+    QMimeData,
+    QModelIndex,
+    QPoint,
+    QSettings,
+    QSize,
+    Qt,
+    QThread,
+    QTimer,
+    QUrl,
+    Signal,
+)
+from PySide6.QtGui import QAction, QActionGroup, QDesktopServices, QDrag, QIcon, QKeySequence
+from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QApplication,
+    QCheckBox,
+    QComboBox,
+    QDialog,
+    QDialogButtonBox,
+    QDockWidget,
+    QFileDialog,
+    QHeaderView,
+    QInputDialog,
+    QLabel,
+    QLineEdit,
+    QListView,
+    QListWidget,
+    QListWidgetItem,
+    QMainWindow,
+    QMenu,
+    QMessageBox,
+    QProgressDialog,
+    QPushButton,
+    QSlider,
+    QStackedWidget,
+    QTableView,
+    QToolBar,
+    QToolButton,
+    QVBoxLayout,
+    QWidget,
+)
+
+from . import __version__
+from .backup import BackupSession, Entry, detect_backups, digest, load_plist, stale_workspaces
+from .codec import BackupError, Cancelled
+
+INTERNAL_MIME = "application/x-backupeditor-entries"
+
+
+def human_size(size):
+    value = float(size)
+    for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
+        if value < 1024 or unit == "TiB":
+            return f"{value:.0f} {unit}" if unit == "B" else f"{value:.1f} {unit}"
+        value /= 1024
+
+
+def message(parent, title, text, icon=QMessageBox.Icon.Information):
+    box = QMessageBox(icon, title, "", parent=parent)
+    box.setTextFormat(Qt.TextFormat.PlainText)
+    box.setText(text)
+    box.exec()
+
+
+class Task(QThread):
+    progress = Signal(str, int, int)
+
+    def __init__(self, function, parent=None):
+        super().__init__(parent)
+        self.function = function
+        self.cancelled = threading.Event()
+        self.result = None
+        self.error = None
+
+    def run(self):
+        last_progress = [0.0]
+
+        def notify(text, done, total):
+            now = time.monotonic()
+            if now - last_progress[0] > 0.07 or (total and done == total):
+                last_progress[0] = now
+                self.progress.emit(text, done, total)
+
+        try:
+            self.result = self.function(notify, self.cancelled.is_set)
+        except Exception as exc:
+            self.error = exc
+        finally:
+            self.function = None  # Do not retain an unlock-password closure.
+
+
+class PasswordDialog(QDialog):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.setWindowTitle("解锁加密备份")
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel("输入这份备份的加密密码："))
+        self.password = QLineEdit()
+        self.password.setEchoMode(QLineEdit.EchoMode.Password)
+        self.password.setAccessibleName("备份加密密码")
+        layout.addWidget(self.password)
+        reveal = QCheckBox("显示密码")
+        reveal.toggled.connect(
+            lambda enabled: self.password.setEchoMode(
+                QLineEdit.EchoMode.Normal if enabled else QLineEdit.EchoMode.Password
+            )
+        )
+        layout.addWidget(reveal)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+        self.resize(360, 140)
+
+
+@dataclass(frozen=True)
+class BrowserRow:
+    name: str
+    domain: str
+    path: str
+    kind: str
+    entry: Entry | None = None
+
+
+class BrowserModel(QAbstractTableModel):
+    headers = ("名称", "类型", "大小", "修改时间", "状态")
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.rows = []
+        self.visible_count = 0
+        self.pending_tokens = set()
+
+    def set_rows(self, rows, pending_tokens=()):
+        self.beginResetModel()
+        self.rows = rows
+        self.pending_tokens = set(pending_tokens)
+        self.visible_count = min(len(rows), 500)
+        self.endResetModel()
+
+    def rowCount(self, parent=QModelIndex()):
+        return 0 if parent.isValid() else self.visible_count
+
+    def columnCount(self, parent=QModelIndex()):
+        return len(self.headers)
+
+    def canFetchMore(self, parent):
+        return not parent.isValid() and self.visible_count < len(self.rows)
+
+    def fetchMore(self, parent):
+        count = min(500, len(self.rows) - self.visible_count)
+        if count:
+            self.beginInsertRows(QModelIndex(), self.visible_count, self.visible_count + count - 1)
+            self.visible_count += count
+            self.endInsertRows()
+
+    def headerData(self, section, orientation, role):
+        if orientation == Qt.Orientation.Horizontal and role == Qt.ItemDataRole.DisplayRole:
+            return self.headers[section]
+        return None
+
+    def data(self, index, role=Qt.ItemDataRole.DisplayRole):
+        if not index.isValid() or index.row() >= self.visible_count:
+            return None
+        row = self.rows[index.row()]
+        entry = row.entry
+        if role == Qt.ItemDataRole.DisplayRole:
+            if index.column() == 0:
+                return row.name
+            if index.column() == 1:
+                return {
+                    "domain": "备份 Domain",
+                    "parent": "上层目录",
+                    "directory": "文件夹",
+                    "file": Path(row.name).suffix.lstrip(".").upper() or "文件",
+                    "special": "链接 / 特殊条目",
+                }.get(row.kind, row.kind)
+            if index.column() == 2:
+                return human_size(entry.size) if entry and entry.kind == "file" else ""
+            if index.column() == 3:
+                try:
+                    return (
+                        datetime.fromtimestamp(entry.mtime).strftime("%Y-%m-%d %H:%M")
+                        if entry and entry.mtime
+                        else ""
+                    )
+                except (ValueError, OverflowError, OSError):
+                    return ""
+            if index.column() == 4:
+                return "已暂挂" if entry and entry.token in self.pending_tokens else ""
+        if role == Qt.ItemDataRole.DecorationRole and index.column() == 0:
+            icon = "folder" if row.kind in ("domain", "parent", "directory") else "text-x-generic"
+            if row.kind == "parent":
+                icon = "go-up"
+            return QIcon.fromTheme(
+                icon,
+                QApplication.style().standardIcon(
+                    QApplication.style().StandardPixmap.SP_DirIcon
+                    if icon != "text-x-generic"
+                    else QApplication.style().StandardPixmap.SP_FileIcon
+                ),
+            )
+        if role == Qt.ItemDataRole.ToolTipRole:
+            return f"{row.domain}/{row.path}" + (
+                "\n修改在保存前只暂挂于当前会话"
+                if entry and entry.token in self.pending_tokens
+                else ""
+            )
+        return None
+
+    def flags(self, index):
+        if not index.isValid():
+            return Qt.ItemFlag.ItemIsDropEnabled
+        row = self.rows[index.row()]
+        flags = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
+        if row.entry and row.path:
+            flags |= Qt.ItemFlag.ItemIsDragEnabled
+        if row.kind in ("directory", "parent", "domain"):
+            flags |= Qt.ItemFlag.ItemIsDropEnabled
+        return flags
+
+
+class BrowserInteraction:
+    def setup_interaction(self, window):
+        self.controller = window
+        self.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.setDragEnabled(True)
+        self.setAcceptDrops(True)
+        self.setDropIndicatorShown(True)
+        self.setDragDropMode(QAbstractItemView.DragDropMode.DragDrop)
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.customContextMenuRequested.connect(lambda point: window.context_menu(self, point))
+        self.doubleClicked.connect(window.activate)
+
+    def startDrag(self, supportedActions):
+        self.controller.start_drag(self)
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasFormat(INTERNAL_MIME) or event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event):
+        self.dragEnterEvent(event)
+
+    def dropEvent(self, event):
+        if self.controller.handle_drop(event.mimeData(), self.indexAt(event.position().toPoint())):
+            event.setDropAction(
+                Qt.DropAction.MoveAction
+                if event.mimeData().hasFormat(INTERNAL_MIME)
+                else Qt.DropAction.CopyAction
+            )
+            event.accept()
+        else:
+            event.ignore()
+
+
+class BrowserTable(BrowserInteraction, QTableView):
+    pass
+
+
+class BrowserGrid(BrowserInteraction, QListView):
+    pass
+
+
+class ExportMimeData(QMimeData):
+    """Prepare file URLs only when an external drag consumer requests them."""
+
+    def __init__(self, window, tokens):
+        super().__init__()
+        self.window = window
+        self.tokens = tokens
+        self.exported = None
+        self.setData(
+            INTERNAL_MIME,
+            json.dumps({"session": window.session.session_id, "tokens": tokens}).encode(),
+        )
+
+    def formats(self):
+        return super().formats() + ["text/uri-list"]
+
+    def hasFormat(self, mime):
+        return mime == "text/uri-list" or super().hasFormat(mime)
+
+    def retrieveData(self, mime, preferred_type):
+        if mime == "text/uri-list":
+            if self.exported is None:
+                self.exported = self.window.drag_export(self.tokens)
+            return QByteArray(
+                b"\r\n".join(QUrl.fromLocalFile(str(p)).toEncoded().data() for p in self.exported)
+            )
+        return super().retrieveData(mime, preferred_type)
+
+
+@dataclass
+class OpenedFile:
+    token: str
+    path: Path
+    fingerprint: bytes
+    stamp: tuple
+    seen: tuple | None = None
+    stable: int = 0
+    later_until: float = 0
+    unreviewed: bool = False
+
+
+class MainWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.settings = QSettings("BackupEditor", "BackupEditor")
+        self.session = None
+        self.domain = None
+        self.path = ""
+        self.task = None
+        self.progress_dialog = None
+        self.opened: dict[str, OpenedFile] = {}
+        self.force_close = False
+        self.setWindowTitle("BackupEditor")
+        self.resize(1160, 760)
+        self.model = BrowserModel(self)
+        self.table = BrowserTable()
+        self.table.setModel(self.model)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.verticalHeader().hide()
+        self.table.setShowGrid(False)
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        for col, width in ((1, 155), (2, 100), (3, 150), (4, 100)):
+            self.table.setColumnWidth(col, width)
+        self.grid = BrowserGrid()
+        self.grid.setModel(self.model)
+        self.grid.setModelColumn(0)
+        self.grid.setViewMode(QListView.ViewMode.IconMode)
+        self.grid.setResizeMode(QListView.ResizeMode.Adjust)
+        self.grid.setMovement(QListView.Movement.Static)
+        self.grid.setWordWrap(True)
+        self.table.setup_interaction(self)
+        self.grid.setup_interaction(self)
+        self.stack = QStackedWidget()
+        self.stack.addWidget(self.table)
+        self.stack.addWidget(self.grid)
+        self.setCentralWidget(self.stack)
+        for view in (self.table, self.grid):
+            view.selectionModel().selectionChanged.connect(self.update_actions)
+        self._create_actions()
+        self._create_toolbar()
+        self._create_changes()
+        self.watcher = QFileSystemWatcher(self)
+        self.watcher.fileChanged.connect(self._file_event)
+        self.watcher.directoryChanged.connect(self._directory_event)
+        self.poll_timer = QTimer(self)
+        self.poll_timer.setInterval(2000)
+        self.poll_timer.timeout.connect(self.poll_open_files)
+        self.poll_timer.start()
+        self.grid_action.setChecked(self.settings.value("grid", False, type=bool))
+        self.set_view(self.grid_action.isChecked())
+        self.refresh()
+
+    def action(self, text, function, shortcut=None, icon=None):
+        action = QAction(QIcon.fromTheme(icon) if icon else QIcon(), text, self)
+        action.triggered.connect(function)
+        if shortcut:
+            action.setShortcut(QKeySequence(shortcut))
+        self.addAction(action)
+        return action
+
+    def _create_actions(self):
+        self.open_backup_action = self.action(
+            "选择备份目录…", self.open_backup, "Ctrl+O", "document-open"
+        )
+        self.add_action = self.action("添加文件…", self.add_files, icon="list-add")
+        self.add_folder_action = self.action("添加文件夹…", self.add_folder)
+        self.new_folder_action = self.action("新建文件夹…", self.new_folder, "Ctrl+Shift+N")
+        self.open_action = self.action("打开", self.open_file, icon="document-open")
+        self.extract_action = self.action("提取…", self.extract_selected, icon="document-save-as")
+        self.rename_action = self.action("重命名…", self.rename_selected, "F2")
+        self.delete_action = self.action("删除", self.delete_selected, "Delete", "edit-delete")
+        self.save_action = self.action("保存更改…", self.save, "Ctrl+S", "document-save")
+        self.discard_action = self.action("放弃未保存更改", self.discard)
+        self.undo_action = self.action("撤销", lambda: self.history(False), "Ctrl+Z", "edit-undo")
+        self.redo_action = self.action(
+            "重做", lambda: self.history(True), "Ctrl+Shift+Z", "edit-redo"
+        )
+        self.up_action = self.action("上层目录", self.up, "Backspace", "go-up")
+        select_all = self.action("全选", self.select_all, "Ctrl+A")
+        enter = self.action("打开 / 进入", self.activate_selection, "Return")
+        clear = self.action("清除选择", lambda: self.active_view().clearSelection(), "Escape")
+        for action in (
+            select_all,
+            enter,
+            clear,
+            self.delete_action,
+            self.rename_action,
+            self.up_action,
+            self.undo_action,
+            self.redo_action,
+        ):
+            self.removeAction(action)
+            action.setShortcutContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+            self.table.addAction(action)
+            self.grid.addAction(action)
+        file_menu = self.menuBar().addMenu("文件")
+        file_menu.addActions(
+            [
+                self.open_backup_action,
+                self.add_action,
+                self.add_folder_action,
+                self.new_folder_action,
+                self.extract_action,
+                self.save_action,
+            ]
+        )
+        file_menu.addSeparator()
+        file_menu.addAction(self.action("退出", self.close, "Ctrl+Q"))
+        edit_menu = self.menuBar().addMenu("编辑")
+        edit_menu.addActions(
+            [
+                self.undo_action,
+                self.redo_action,
+                select_all,
+                self.rename_action,
+                self.delete_action,
+                self.discard_action,
+            ]
+        )
+        help_menu = self.menuBar().addMenu("帮助")
+        help_menu.addAction(
+            self.action(
+                "关于",
+                lambda: message(
+                    self,
+                    "关于 BackupEditor",
+                    f"BackupEditor {__version__}\n离线浏览与编辑 Manifest.db 格式的 iOS 备份。\n"
+                    "编辑先暂挂，保存生成独立副本。\n加密输出已做离线校验，尚未验证真机恢复。",
+                ),
+            )
+        )
+
+    def _create_toolbar(self):
+        toolbar = QToolBar("文件操作", self)
+        toolbar.setMovable(False)
+        self.addToolBar(toolbar)
+        add_button = QToolButton()
+        add_button.setDefaultAction(self.add_action)
+        add_menu = QMenu(add_button)
+        add_menu.addActions([self.add_action, self.add_folder_action, self.new_folder_action])
+        add_button.setMenu(add_menu)
+        add_button.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
+        toolbar.addWidget(add_button)
+        toolbar.addAction(self.open_action)
+        toolbar.addSeparator()
+        self.list_action = QAction("列表", self, checkable=True)
+        self.grid_action = QAction("网格", self, checkable=True)
+        group = QActionGroup(self)
+        group.addAction(self.list_action)
+        group.addAction(self.grid_action)
+        self.list_action.setChecked(True)
+        self.list_action.triggered.connect(lambda: self.set_view(False))
+        self.grid_action.triggered.connect(lambda: self.set_view(True))
+        toolbar.addActions([self.list_action, self.grid_action])
+        self.sort_combo = QComboBox()
+        self.sort_combo.addItems(["名称", "类型", "大小", "修改时间"])
+        self.sort_combo.setToolTip("排序方式")
+        self.sort_combo.setCurrentIndex(self.settings.value("sort", 0, type=int))
+        self.sort_combo.currentIndexChanged.connect(self.refresh)
+        toolbar.addWidget(self.sort_combo)
+        self.descending = QAction("降序", self, checkable=True)
+        self.descending.setChecked(self.settings.value("descending", False, type=bool))
+        self.descending.toggled.connect(self.refresh)
+        toolbar.addAction(self.descending)
+        self.directories_first = QAction("文件夹优先", self, checkable=True)
+        self.directories_first.setChecked(self.settings.value("directories_first", True, type=bool))
+        self.directories_first.toggled.connect(self.refresh)
+        toolbar.addAction(self.directories_first)
+        toolbar.addWidget(QLabel(" 图标 "))
+        self.icon_slider = QSlider(Qt.Orientation.Horizontal)
+        self.icon_slider.setRange(24, 128)
+        self.icon_slider.setValue(self.settings.value("icons", 48, type=int))
+        self.icon_slider.setFixedWidth(90)
+        self.icon_slider.setAccessibleName("图标大小")
+        self.icon_slider.valueChanged.connect(self.set_icon_size)
+        toolbar.addWidget(self.icon_slider)
+        toolbar.addSeparator()
+        toolbar.addActions(
+            [self.extract_action, self.undo_action, self.redo_action, self.save_action]
+        )
+        self.set_icon_size(self.icon_slider.value())
+        navigation = QToolBar("导航", self)
+        navigation.setMovable(False)
+        self.addToolBarBreak()
+        self.addToolBar(navigation)
+        navigation.addActions([self.open_backup_action, self.up_action])
+        self.location = QLineEdit("/")
+        self.location.setAccessibleName("Domain 与目录路径")
+        self.location.returnPressed.connect(self.go_location)
+        navigation.addWidget(self.location)
+
+    def _create_changes(self):
+        self.changes_dock = QDockWidget("暂挂更改", self)
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        self.changes_list = QListWidget()
+        layout.addWidget(self.changes_list)
+        discard = QPushButton("放弃未保存更改")
+        discard.clicked.connect(self.discard)
+        layout.addWidget(discard)
+        self.changes_dock.setWidget(container)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.changes_dock)
+        self.changes_dock.hide()
+
+    def active_view(self):
+        return self.stack.currentWidget()
+
+    def selected_rows(self):
+        selection = self.active_view().selectionModel()
+        indices = (
+            selection.selectedRows(0)
+            if self.active_view() == self.table
+            else selection.selectedIndexes()
+        )
+        return [self.model.rows[i] for i in sorted({index.row() for index in indices})]
+
+    def selected_tokens(self):
+        return [row.entry.token for row in self.selected_rows() if row.entry and row.path]
+
+    def select_all(self):
+        # Fetch every row before selecting, including directories with >500 items.
+        while self.model.canFetchMore(QModelIndex()):
+            self.model.fetchMore(QModelIndex())
+        self.active_view().selectAll()
+
+    def update_actions(self, *_):
+        busy = self.task is not None
+        rows = self.selected_rows()
+        tokens = self.selected_tokens()
+        session = self.session
+        self.open_backup_action.setEnabled(not busy)
+        self.location.setEnabled(not busy) if hasattr(self, "location") else None
+        self.open_action.setEnabled(not busy and len(rows) == 1 and rows[0].kind == "file")
+        self.extract_action.setEnabled(not busy and bool(tokens))
+        self.rename_action.setEnabled(not busy and len(rows) == 1 and bool(tokens))
+        self.delete_action.setEnabled(not busy and bool(tokens))
+        for action in (self.add_action, self.add_folder_action, self.new_folder_action):
+            action.setEnabled(not busy and session is not None and self.domain is not None)
+        self.save_action.setEnabled(not busy and bool(session and session.dirty))
+        self.discard_action.setEnabled(not busy and bool(session and session.dirty))
+        self.undo_action.setEnabled(not busy and bool(session and session.undo_stack))
+        self.redo_action.setEnabled(not busy and bool(session and session.redo_stack))
+        self.up_action.setEnabled(not busy and self.domain is not None)
+        self.stack.setEnabled(not busy)
+        self.sort_combo.setEnabled(not busy) if hasattr(self, "sort_combo") else None
+        if hasattr(self, "descending"):
+            self.descending.setEnabled(not busy)
+            self.directories_first.setEnabled(not busy)
+        if hasattr(self, "changes_dock"):
+            self.changes_dock.setEnabled(not busy)
+
+    def refresh(self, *_):
+        if self.task or not hasattr(self, "sort_combo"):
+            return
+        rows = []
+        if self.session:
+            if self.domain is None:
+                rows = [BrowserRow(d, d, "", "domain") for d in self.session.domains()]
+            else:
+                if not self.session.at(self.domain, self.path):
+                    self.path = ""
+                rows = [
+                    BrowserRow(e.name, e.domain, e.path, e.kind, e)
+                    for e in self.session.children(self.domain, self.path)
+                ]
+        sort = self.sort_combo.currentIndex()
+
+        def key(row):
+            if sort == 1:
+                return (row.kind, Path(row.name).suffix.casefold(), row.name.casefold())
+            if sort == 2:
+                return (row.entry.size if row.entry else 0, row.name.casefold())
+            if sort == 3:
+                return (row.entry.mtime if row.entry else 0, row.name.casefold())
+            return row.name.casefold()
+
+        rows.sort(key=key, reverse=self.descending.isChecked())
+        if self.directories_first.isChecked():
+            rows.sort(key=lambda row: row.kind not in ("domain", "directory"))
+        if self.domain is not None:
+            parent = self.path.rpartition("/")[0]
+            rows.insert(0, BrowserRow("..", self.domain if self.path else "", parent, "parent"))
+        self.model.set_rows(rows, self.session.pending_tokens if self.session else ())
+        self.location.setText(
+            "/" + (self.domain + ("/" + self.path if self.path else "") if self.domain else "")
+        )
+        self.changes_list.clear()
+        if self.session:
+            for title, details in self.session.change_details:
+                item = QListWidgetItem(title)
+                item.setToolTip(details)
+                self.changes_list.addItem(item)
+            device = self.session.info.get("Device Name", self.session.root.name)
+            dirty = self.session.dirty
+            self.setWindowTitle(f"{'* ' if dirty else ''}{device} — BackupEditor")
+            self.statusBar().showMessage(
+                f"{device} · {'加密' if self.session.encrypted else '未加密'} · "
+                f"{len(rows) - (1 if self.domain else 0)} 个项目 · "
+                f"{len(self.session.changes)} 项暂挂操作"
+            )
+            if dirty:
+                self.changes_dock.show()
+            else:
+                self.changes_dock.hide()
+        else:
+            self.statusBar().showMessage("从“文件 → 选择备份目录”打开 iOS 备份")
+        self.update_actions()
+
+    def set_view(self, grid):
+        self.stack.setCurrentIndex(1 if grid else 0)
+        self.grid_action.setChecked(grid)
+        self.list_action.setChecked(not grid)
+        self.settings.setValue("grid", grid)
+        self.update_actions()
+
+    def set_icon_size(self, size):
+        self.grid.setIconSize(QSize(size, size))
+        self.grid.setGridSize(QSize(max(110, size + 44), size + 56))
+        self.table.setIconSize(QSize(min(size, 48), min(size, 48)))
+        self.table.verticalHeader().setDefaultSectionSize(min(size, 48) + 12)
+
+    def activate(self, index):
+        if not index.isValid() or self.task:
+            return
+        row = self.model.rows[index.row()]
+        if row.kind == "parent":
+            self.up()
+        elif row.kind in ("domain", "directory"):
+            self.domain, self.path = row.domain, row.path
+            self.refresh()
+        elif row.kind == "file":
+            self.open_file()
+
+    def activate_selection(self):
+        rows = self.selected_rows()
+        if len(rows) == 1:
+            self.activate(self.model.index(self.model.rows.index(rows[0]), 0))
+
+    def up(self):
+        if self.domain is None:
+            return
+        if self.path:
+            self.path = self.path.rpartition("/")[0]
+        else:
+            self.domain = None
+        self.refresh()
+
+    def go_location(self):
+        if not self.session:
+            return
+        text = self.location.text().strip("/")
+        if not text:
+            self.domain, self.path = None, ""
+        else:
+            domain, _, path = text.partition("/")
+            entry = self.session.at(domain, path)
+            if not entry or entry.kind != "directory":
+                message(
+                    self, "目录不存在", "请输入有效的 /Domain/目录 路径", QMessageBox.Icon.Warning
+                )
+                return
+            self.domain, self.path = domain, path
+        self.refresh()
+
+    def run_task(
+        self, title, function, callback=None, *, silent=False, on_error=None, on_done=None
+    ):
+        if self.task:
+            return
+        job = Task(function, self)
+        self.task = job
+        dialog = None
+        if not silent:
+            dialog = QProgressDialog(title, "取消", 0, 0, self)
+            dialog.setWindowTitle("BackupEditor")
+            dialog.setWindowModality(Qt.WindowModality.ApplicationModal)
+            dialog.setMinimumDuration(0)
+            dialog.setAutoClose(False)
+            dialog.setAutoReset(False)
+            dialog.canceled.connect(job.cancelled.set)
+
+            def progress(text, done, total):
+                if total > 0:
+                    dialog.setRange(0, 1000)
+                    dialog.setValue(min(999, int(done / total * 1000)))
+                else:
+                    dialog.setRange(0, 0)
+                dialog.setLabelText(text)
+
+            job.progress.connect(progress)
+            dialog.show()
+        self.update_actions()
+
+        def finished():
+            self.task = None
+            if dialog:
+                dialog.close()
+                dialog.deleteLater()
+            self.update_actions()
+            if job.error:
+                if isinstance(job.error, Cancelled):
+                    self.statusBar().showMessage("操作已取消")
+                elif on_error:
+                    on_error(job.error)
+                else:
+                    message(self, title, str(job.error), QMessageBox.Icon.Critical)
+            elif callback:
+                callback(job.result)
+            if on_done:
+                on_done()
+            job.deleteLater()
+
+        job.finished.connect(finished)
+        job.start()
+
+    def confirm_leave(self, continuation):
+        if self.task:
+            return
+        if any(
+            record.unreviewed or self.file_stamp(record.path) != record.stamp
+            for record in self.opened.values()
+        ):
+            choice = QMessageBox.question(
+                self,
+                "外部编辑尚未处理",
+                "临时打开的文件有尚未处理的修改。放弃这些临时修改并继续？",
+                QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel,
+            )
+            if choice != QMessageBox.StandardButton.Discard:
+                return
+        if not self.session or not self.session.dirty:
+            continuation()
+            return
+        box = QMessageBox(
+            QMessageBox.Icon.Question,
+            "未保存更改",
+            "是否将暂挂更改保存到新的备份目录？",
+            QMessageBox.StandardButton.Save
+            | QMessageBox.StandardButton.Discard
+            | QMessageBox.StandardButton.Cancel,
+            self,
+        )
+        result = box.exec()
+        if result == QMessageBox.StandardButton.Save:
+            self.save(after=continuation)
+        elif result == QMessageBox.StandardButton.Discard:
+            continuation()
+
+    def open_backup(self, *_):
+        if self.task:
+            return
+        path = QFileDialog.getExistingDirectory(self, "选择 iOS 备份目录")
+        if path:
+            self.confirm_leave(lambda: self.open_path(Path(path)))
+
+    def open_path(self, path):
+        try:
+            candidates = detect_backups(Path(path))
+            if len(candidates) > 1:
+                selected, ok = QInputDialog.getItem(
+                    self, "选择备份", "此目录包含多个备份：", [p.name for p in candidates], 0, False
+                )
+                if not ok:
+                    return
+                path = next(p for p in candidates if p.name == selected)
+            else:
+                path = candidates[0]
+            encrypted = load_plist(path / "Manifest.plist").get("IsEncrypted", False)
+        except Exception as exc:
+            message(self, "无法打开备份", str(exc), QMessageBox.Icon.Warning)
+            return
+        password = ""
+        if encrypted:
+            dialog = PasswordDialog(self)
+            if dialog.exec() != QDialog.DialogCode.Accepted:
+                return
+            password = dialog.password.text()
+            dialog.password.clear()
+            dialog.deleteLater()
+
+        def loaded(session):
+            self.clear_opened_files()
+            if self.session:
+                self.session.close()
+            self.session = session
+            self.domain, self.path = None, ""
+            self.refresh()
+
+        self.run_task(
+            "读取备份",
+            lambda progress, cancel: BackupSession(
+                Path(path), password, progress=progress, cancel=cancel
+            ),
+            loaded,
+        )
+
+    def clear_opened_files(self):
+        paths = self.watcher.files() + self.watcher.directories()
+        if paths:
+            self.watcher.removePaths(paths)
+        self.opened.clear()
+
+    def add_files(self):
+        paths, _ = QFileDialog.getOpenFileNames(self, "添加文件到当前备份目录")
+        if paths:
+            self.import_paths(paths, self.domain, self.path)
+
+    def add_folder(self):
+        path = QFileDialog.getExistingDirectory(self, "添加整个文件夹到当前备份目录")
+        if path:
+            self.import_paths([path], self.domain, self.path)
+
+    def collision_policy(self, *, exporting=False):
+        box = QMessageBox(
+            QMessageBox.Icon.Question,
+            "名称冲突",
+            "目标包含同名项目，请选择处理方式。该选择应用于本次操作的全部同名项目。",
+            parent=self,
+        )
+        replace = box.addButton(
+            "替换 / 合并" if exporting else "替换", QMessageBox.ButtonRole.AcceptRole
+        )
+        both = box.addButton("保留两者", QMessageBox.ButtonRole.ActionRole)
+        skip = box.addButton("跳过", QMessageBox.ButtonRole.ActionRole)
+        box.addButton("取消", QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+        return {replace: "replace", both: "keep_both", skip: "skip"}.get(box.clickedButton())
+
+    def import_paths(self, paths, domain, parent):
+        if not self.session or domain is None:
+            message(self, "选择目标目录", "请先进入一个 domain 目录")
+            return
+        conflict = any(
+            self.session.at(domain, f"{parent}/{Path(p).name}".lstrip("/")) for p in paths
+        )
+        policy = self.collision_policy() if conflict else "error"
+        if policy:
+            self.run_task(
+                "添加文件",
+                lambda progress, cancel: self.session.import_paths(
+                    paths, domain, parent, collision=policy, progress=progress, cancel=cancel
+                ),
+                lambda _: self.refresh(),
+            )
+
+    def new_folder(self):
+        name, ok = QInputDialog.getText(self, "新建文件夹", "名称：")
+        if ok and name:
+            try:
+                self.session.new_directory(self.domain, self.path, name)
+                self.refresh()
+            except BackupError as exc:
+                message(self, "无法新建文件夹", str(exc), QMessageBox.Icon.Warning)
+
+    def rename_selected(self):
+        rows = self.selected_rows()
+        if len(rows) != 1 or not rows[0].entry:
+            return
+        entry = rows[0].entry
+        name, ok = QInputDialog.getText(self, "重命名", "新名称：", text=entry.name)
+        if ok and name:
+            try:
+                target = f"{entry.parent}/{name}".lstrip("/")
+                existing = self.session.at(entry.domain, target)
+                policy = (
+                    self.collision_policy()
+                    if existing and existing.token != entry.token
+                    else "error"
+                )
+                if not policy:
+                    return
+                self.session.move(
+                    [entry.token], entry.domain, entry.parent, name=name, collision=policy
+                )
+                self.refresh()
+            except BackupError as exc:
+                message(self, "无法重命名", str(exc), QMessageBox.Icon.Warning)
+
+    def delete_selected(self):
+        tokens = self.selected_tokens()
+        if not tokens:
+            return
+        count = sum(len(self.session.subtree(e)) for e in self.session.roots(tokens))
+        box = QMessageBox(
+            QMessageBox.Icon.Question,
+            "暂挂删除",
+            "",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            self,
+        )
+        box.setTextFormat(Qt.TextFormat.PlainText)
+        names = ", ".join(row.name for row in self.selected_rows() if row.entry)
+        box.setText(f"删除 {names[:250]}？\n共影响 {count} 个文件和目录。保存前可以撤销。")
+        box.setDefaultButton(QMessageBox.StandardButton.No)
+        if box.exec() == QMessageBox.StandardButton.Yes:
+            self.run_task(
+                "暂挂删除",
+                lambda progress, cancel: self.session.delete(tokens),
+                lambda _: self.refresh(),
+            )
+
+    def history(self, redo):
+        if self.session:
+            self.session.redo() if redo else self.session.undo()
+            self.refresh()
+
+    def discard(self):
+        if self.task:
+            return
+        if (
+            self.session
+            and self.session.dirty
+            and QMessageBox.question(
+                self,
+                "放弃未保存更改",
+                "恢复到最近一次保存后的会话状态？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            == QMessageBox.StandardButton.Yes
+        ):
+            self.session.discard()
+            self.refresh()
+
+    def extract_selected(self):
+        tokens = self.selected_tokens()
+        if not tokens:
+            return
+        target = QFileDialog.getExistingDirectory(self, "提取到目录")
+        if not target:
+            return
+        conflict = any((Path(target) / self.session.get(t).name).exists() for t in tokens)
+        policy = self.collision_policy(exporting=True) if conflict else "error"
+        if policy:
+            self.run_task(
+                "提取文件",
+                lambda progress, cancel: self.session.export(
+                    tokens, Path(target), collision=policy, progress=progress, cancel=cancel
+                ),
+                lambda _: self.statusBar().showMessage(f"已提取到 {target}"),
+            )
+
+    def open_file(self):
+        rows = self.selected_rows()
+        if len(rows) != 1 or rows[0].kind != "file":
+            return
+        token = rows[0].entry.token
+        current = self.opened.get(token)
+        if current and current.path.exists():
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(current.path)))
+            return
+        target = self.session.workspace / "opened" / uuid.uuid4().hex / rows[0].name
+
+        def prepare(progress, cancel):
+            self.session.extract_file(token, target, cancel=cancel)
+            return digest(target, cancel=cancel)
+
+        def opened(fingerprint):
+            self.opened[token] = OpenedFile(token, target, fingerprint, self.file_stamp(target))
+            self.watcher.addPath(str(target))
+            self.watcher.addPath(str(target.parent))
+            if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(target))):
+                message(
+                    self,
+                    "无法启动默认应用",
+                    f"系统没有成功打开此文件。临时文件位于：\n{target}",
+                    QMessageBox.Icon.Warning,
+                )
+
+        self.run_task("提取并打开文件", prepare, opened)
+
+    @staticmethod
+    def file_stamp(path):
+        try:
+            st = path.stat()
+            return (st.st_size, st.st_mtime_ns, st.st_ctime_ns, st.st_ino)
+        except FileNotFoundError:
+            return (None,)
+
+    def _file_event(self, path):
+        for record in self.opened.values():
+            if str(record.path) == path:
+                record.stable = 0
+                record.unreviewed = self.file_stamp(record.path) != record.stamp
+
+    def _directory_event(self, path):
+        for record in self.opened.values():
+            if str(record.path.parent) == path:
+                self._file_event(str(record.path))
+
+    def poll_open_files(self):
+        if self.task or not self.session:
+            return
+        for record in list(self.opened.values()):
+            stamp = self.file_stamp(record.path)
+            if stamp == record.stamp:
+                continue
+            record.unreviewed = True
+            if record.seen != stamp:
+                record.seen, record.stable = stamp, 0
+                continue
+            record.stable += 1
+            if record.stable < 1 or time.monotonic() < record.later_until:
+                continue
+            if stamp == (None,):
+                choice = QMessageBox.question(
+                    self,
+                    "临时文件已删除",
+                    "外部应用删除或移动了临时文件。停止跟踪此副本？备份中的原文件不会因此删除。",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                )
+                if choice == QMessageBox.StandardButton.Yes:
+                    self.opened.pop(record.token, None)
+                else:
+                    record.later_until = time.monotonic() + 30
+                return
+            if str(record.path) not in self.watcher.files():
+                self.watcher.addPath(str(record.path))
+
+            def checked(fingerprint, rec=record, observed=stamp):
+                if self.file_stamp(rec.path) != observed:
+                    rec.seen, rec.stable = None, 0
+                    return
+                if fingerprint == rec.fingerprint:
+                    rec.stamp, rec.unreviewed = observed, False
+                    return
+                self.review_external(rec, fingerprint, observed)
+
+            self.run_task(
+                "检查外部编辑",
+                lambda progress, cancel, rec=record: digest(rec.path, cancel=cancel),
+                checked,
+                silent=True,
+            )
+            return
+
+    def review_external(self, record, fingerprint, stamp):
+        box = QMessageBox(QMessageBox.Icon.Question, "检测到外部编辑", "", parent=self)
+        box.setTextFormat(Qt.TextFormat.PlainText)
+        box.setText(f"{record.path.name} 已修改。是否将新内容暂挂到备份会话？")
+        stage = box.addButton("暂挂更改", QMessageBox.ButtonRole.AcceptRole)
+        ignore = box.addButton("忽略本次修改", QMessageBox.ButtonRole.DestructiveRole)
+        box.addButton("稍后处理", QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+        if box.clickedButton() == stage:
+
+            def staged(_):
+                record.fingerprint, record.stamp, record.unreviewed = fingerprint, stamp, False
+                self.refresh()
+
+            self.run_task(
+                "暂挂外部编辑",
+                lambda progress, cancel: self.session.stage_edit(record.token, record.path, cancel),
+                staged,
+            )
+        elif box.clickedButton() == ignore:
+            record.fingerprint, record.stamp, record.unreviewed = fingerprint, stamp, False
+        else:
+            record.later_until = time.monotonic() + 30
+
+    def save(self, *_args, after=None):
+        if not self.session or not self.session.dirty or self.task:
+            return
+        suggested = str(self.session.root.parent / (self.session.root.name + "-edited"))
+        target, _ = QFileDialog.getSaveFileName(
+            self, "保存为新的备份目录", suggested, "备份目录 (*)"
+        )
+        if not target:
+            return
+
+        def saved(destination):
+            self.refresh()
+            message(
+                self,
+                "保存完成",
+                f"修改版备份已保存：\n{destination}\n\n原备份保留在：\n{self.session.root}",
+            )
+            if after:
+                after()
+
+        self.run_task(
+            "保存备份副本",
+            lambda progress, cancel: self.session.save(
+                Path(target), progress=progress, cancel=cancel
+            ),
+            saved,
+        )
+
+    def context_menu(self, view, point: QPoint):
+        index = view.indexAt(point)
+        if not index.isValid():
+            view.clearSelection()
+        if index.isValid() and not view.selectionModel().isSelected(index):
+            view.clearSelection()
+            view.setCurrentIndex(index)
+            view.selectionModel().select(
+                index,
+                view.selectionModel().SelectionFlag.Select
+                | view.selectionModel().SelectionFlag.Rows,
+            )
+        self.update_actions()
+        menu = QMenu(self)
+        if index.isValid() and self.model.rows[index.row()].kind in (
+            "domain",
+            "directory",
+            "parent",
+        ):
+            action = menu.addAction("进入目录")
+            action.triggered.connect(lambda: self.activate(index))
+        menu.addActions([self.open_action, self.extract_action])
+        menu.addSeparator()
+        menu.addActions([self.rename_action, self.delete_action])
+        menu.addSeparator()
+        menu.addActions([self.add_action, self.add_folder_action, self.new_folder_action])
+        menu.exec(view.viewport().mapToGlobal(point))
+
+    def drop_location(self, index):
+        domain, parent = self.domain, self.path
+        if index.isValid():
+            row = self.model.rows[index.row()]
+            if row.kind in ("domain", "directory"):
+                domain, parent = row.domain, row.path
+            elif row.kind == "parent":
+                domain, parent = (row.domain or None), row.path
+        return domain, parent
+
+    def handle_drop(self, mime, index):
+        if self.task:
+            return False
+        domain, parent = self.drop_location(index)
+        if self.session is None:
+            if mime.hasUrls() and len(mime.urls()) == 1:
+                self.open_path(Path(mime.urls()[0].toLocalFile()))
+                return True
+            return False
+        if domain is None:
+            message(self, "选择目标目录", "请将项目拖入某个 domain 或其目录")
+            return False
+        if mime.hasFormat(INTERNAL_MIME):
+            try:
+                content = json.loads(bytes(mime.data(INTERNAL_MIME)))
+                if content["session"] != self.session.session_id:
+                    raise BackupError("不支持从其他会话直接移动；请先提取文件再添加")
+                tokens = content["tokens"]
+                entries = self.session.roots(tokens)
+                conflict = any(
+                    self.session.at(domain, f"{parent}/{e.name}".lstrip("/"))
+                    and (domain, f"{parent}/{e.name}".lstrip("/")) != (e.domain, e.path)
+                    for e in entries
+                )
+                policy = self.collision_policy() if conflict else "error"
+                if not policy:
+                    return False
+                self.run_task(
+                    "移动项目",
+                    lambda progress, cancel: self.session.move(
+                        tokens, domain, parent, collision=policy
+                    ),
+                    lambda _: self.refresh(),
+                )
+                return True
+            except (ValueError, KeyError, TypeError, BackupError) as exc:
+                message(self, "无法移动项目", str(exc), QMessageBox.Icon.Warning)
+                return False
+        paths = [url.toLocalFile() for url in mime.urls() if url.isLocalFile()]
+        if paths:
+            self.import_paths(paths, domain, parent)
+            return True
+        return False
+
+    def start_drag(self, view):
+        tokens = self.selected_tokens()
+        if not tokens or not self.session or self.task:
+            return
+        drag = QDrag(view)
+        drag.setMimeData(ExportMimeData(self, tokens))
+        drag.exec(Qt.DropAction.CopyAction | Qt.DropAction.MoveAction, Qt.DropAction.CopyAction)
+
+    def drag_export(self, tokens):
+        if self.task or not self.session:
+            return []
+        target = self.session.workspace / "exports" / uuid.uuid4().hex
+        loop = QEventLoop()
+        result = []
+
+        def done(paths):
+            result.extend(paths)
+
+        self.run_task(
+            "准备拖出文件",
+            lambda progress, cancel: self.session.export(
+                tokens, target, progress=progress, cancel=cancel
+            ),
+            done,
+            on_done=loop.quit,
+        )
+        loop.exec()
+        return result
+
+    def closeEvent(self, event):
+        if self.force_close:
+            self.settings.setValue("icons", self.icon_slider.value())
+            self.settings.setValue("sort", self.sort_combo.currentIndex())
+            self.settings.setValue("descending", self.descending.isChecked())
+            self.settings.setValue("directories_first", self.directories_first.isChecked())
+            self.clear_opened_files()
+            if self.session:
+                self.session.close()
+                self.session = None
+            event.accept()
+            return
+        event.ignore()
+
+        def leave():
+            self.force_close = True
+            self.close()
+
+        self.confirm_leave(leave)
+
+    def offer_temp_cleanup(self, after=None):
+        paths = stale_workspaces()
+        if not paths:
+            if after:
+                after()
+            return
+        answer = QMessageBox.question(
+            self,
+            "旧的会话临时文件",
+            f"发现 {len(paths)} 个已结束会话的临时目录，可能包含尚未保存的编辑副本。\n"
+            "是否删除？选择“否”可保留它们以便手动恢复。",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer == QMessageBox.StandardButton.Yes:
+
+            def cleanup(progress, cancel):
+                valid = set(stale_workspaces())
+                for path in paths:
+                    if cancel():
+                        raise Cancelled("清理已取消")
+                    if path in valid:
+                        shutil.rmtree(path)
+
+            self.run_task("清理旧会话", cleanup, on_done=after)
+        elif after:
+            after()
+
+
+def main():
+    parser = argparse.ArgumentParser(description="离线浏览与编辑 iOS 备份")
+    parser.add_argument("backup", nargs="?", type=Path, help="备份目录（可选）")
+    args = parser.parse_args()
+    app = QApplication(sys.argv[:1])
+    app.setApplicationName("BackupEditor")
+    app.setApplicationVersion(__version__)
+    app.setStyle("Fusion")
+    window = MainWindow()
+    window.show()
+    QTimer.singleShot(
+        0,
+        lambda: window.offer_temp_cleanup(
+            (lambda: window.open_path(args.backup)) if args.backup else None
+        ),
+    )
+    sys.exit(app.exec())
+
+
+if __name__ == "__main__":
+    main()

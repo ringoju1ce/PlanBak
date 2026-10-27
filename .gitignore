@@ -1,0 +1,33 @@
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+build/
+dist/
+*.log
+.env
+
+# Local validation fixtures and tests are intentionally not versioned.
+/tests/
+
+# macOS Finder metadata and resource forks
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.AppleDB
+.AppleDesktop
+.apdisk
+__MACOSX/
+
+# macOS volume and temporary metadata
+.Spotlight-V100/
+.Trashes/
+.fseventsd/
+.TemporaryItems/
+.DocumentRevisions-V100/
+.VolumeIcon.icns
+Network Trash Folder/
+Temporary Items/

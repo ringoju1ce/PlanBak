@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "backupeditor"
+version = "0.1.0"
+description = "Offline desktop browser and editor for iOS Manifest.db backups"
+requires-python = ">=3.12"
+dependencies = ["PySide6>=6.8,<7", "cryptography>=43"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-qt>=4", "ruff>=0.9", "iphone_backup_decrypt>=0.11.2"]
+
+[project.scripts]
+backupeditor = "backupeditor.app:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]
