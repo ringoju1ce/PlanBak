@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from PySide6.QtCore import QDate, QRegularExpression, QSize, Qt, QTime, Signal
-from PySide6.QtGui import QAction, QKeySequence, QRegularExpressionValidator
+from PySide6.QtGui import QAction, QFontDatabase, QKeySequence, QRegularExpressionValidator
 from PySide6.QtWidgets import (
     QComboBox,
     QDateEdit,
@@ -222,6 +222,20 @@ class DateValue(QWidget):
         )
 
 
+def data_ascii_preview(data, limit=4096):
+    """Bounded display only: retain undecodable bytes as visible escapes."""
+    truncated = len(data) > limit
+    sample = data[:limit].strip(b" \t\r\n")
+    if not data:
+        return "空 Data", False
+    if not sample:
+        return "预览片段去除首尾空白后为空" if truncated else "去除首尾空白后无可见内容", truncated
+    return "".join(
+        chr(byte) if 32 <= byte <= 126 or byte in (9, 10, 13) else f"\\x{byte:02X}"
+        for byte in sample
+    ), truncated
+
+
 class ValueDialog(FixedDialog):
     def __init__(self, node, parent_kind, siblings, binary, parent=None):
         super().__init__(parent)
@@ -261,12 +275,27 @@ class ValueDialog(FixedDialog):
         self.fixed_value = QLabel()
         self.fixed_value.setWordWrap(True)
         self.fixed_value.setTextFormat(Qt.TextFormat.PlainText)
+        data_page = QWidget()
+        data_layout = QVBoxLayout(data_page)
+        self.data_info = QLabel()
+        self.data_preview = QPlainTextEdit()
+        self.data_preview.setReadOnly(True)
+        self.data_preview.setFont(QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont))
+        self.data_preview.setAccessibleName("Data ASCII 预览（只读）")
+        data_note = QLabel(
+            "预览仅移除首尾空白，不改变原始字节。替换或查看完整内容请使用 Data 条目的右键菜单。"
+        )
+        data_note.setWordWrap(True)
+        data_layout.addWidget(self.data_info)
+        data_layout.addWidget(self.data_preview, 1)
+        data_layout.addWidget(data_note)
         for widget in (
             self.value_field,
             number_page,
             boolean_page,
             self.date_field,
             self.fixed_value,
+            data_page,
         ):
             self.values.addWidget(widget)
         layout.addWidget(self.values, 1)
@@ -318,16 +347,19 @@ class ValueDialog(FixedDialog):
         elif kind == "Date":
             self.values.setCurrentIndex(3)
             self.date_field.set_value(self.node.value if existing else datetime(2001, 1, 1))
+        elif kind == "Data":
+            self.values.setCurrentIndex(5)
+            data = self.node.value if existing else b""
+            preview, truncated = data_ascii_preview(data)
+            self.data_info.setText(
+                f"{len(data)} 字节 · ASCII 预览（只读）"
+                + (" · 仅显示前 4096 字节，已截断" if truncated else "")
+            )
+            self.data_preview.setPlainText(preview)
         else:
             self.values.setCurrentIndex(4)
             self.fixed_value.setText(
-                (
-                    f"{len(self.node.value) if existing else 0} 字节；使用编辑器的 Data 导入/导出按钮。"
-                    if kind == "Data"
-                    else "null"
-                    if kind == "Null"
-                    else "子项目在树中管理；非空容器需先清空才能更改类型。"
-                )
+                ("null" if kind == "Null" else "子项目在树中管理；非空容器需先清空才能更改类型。")
             )
 
     def accept(self):
@@ -398,9 +430,6 @@ class PlistEditor(FixedDialog):
             ("添加", self.add_node, "add_button"),
             ("编辑", self.edit_node, "edit_button"),
             ("删除", self.delete_node, "delete_button"),
-            ("以十六进制查看", self.view_data_hex, "hex_button"),
-            ("导入 Data…", self.import_data, "import_button"),
-            ("导出 Data…", self.export_data, "export_button"),
             ("XML 编辑器", lambda: self.switch_mode(1), "xml_button"),
         ):
             button = QPushButton(label)
@@ -603,17 +632,25 @@ class PlistEditor(FixedDialog):
         delete = menu.addAction("删除")
         edit.setEnabled(len(self.tree.selectedItems()) == 1)
         delete.setEnabled(bool(self.deletion_roots()))
-        view_hex = None
+        data_actions = {}
         node = self.selected_node()
         if node and node.kind == "Data":
-            view_hex = menu.addAction("以十六进制查看")
+            menu.addSeparator()
+            for title, callback in (
+                ("以十六进制查看", self.view_data_hex),
+                ("导入 Data…", self.import_data),
+                ("导出 Data…", self.export_data),
+            ):
+                action = menu.addAction(title)
+                action.setEnabled(not self._busy)
+                data_actions[action] = callback
         chosen = menu.exec(self.tree.viewport().mapToGlobal(point))
         if chosen == edit and edit.isEnabled():
             self.edit_node()
         elif chosen == delete and delete.isEnabled():
             self.delete_node()
-        elif view_hex is not None and chosen == view_hex:
-            self.view_data_hex()
+        elif chosen in data_actions and chosen.isEnabled():
+            data_actions[chosen]()
 
     def make_item(self, node, label, parent=None):
         item = QTreeWidgetItem([label, node.kind, node.preview[:160].replace("\n", " ↵ ")])
@@ -673,9 +710,6 @@ class PlistEditor(FixedDialog):
         self.add_button.setEnabled(bool(node and node.container))
         self.edit_button.setEnabled(node is not None)
         self.delete_button.setEnabled(bool(self.deletion_roots()))
-        self.import_button.setEnabled(bool(node and node.kind == "Data"))
-        self.export_button.setEnabled(bool(node and node.kind == "Data"))
-        self.hex_button.setEnabled(bool(node and node.kind == "Data" and not self._busy))
         self.save_button.setEnabled(self.dirty and not self._busy and self._available)
         self.setWindowTitle(
             f"{'* ' if self.dirty else ''}{self.name} — plist 编辑器 ({'二进制' if self.document.format == plistlib.FMT_BINARY else 'XML'})"
