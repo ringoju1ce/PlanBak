@@ -37,12 +37,9 @@ from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
-    QDialog,
     QDialogButtonBox,
     QDockWidget,
-    QFileDialog,
     QHeaderView,
-    QInputDialog,
     QLabel,
     QLineEdit,
     QListView,
@@ -50,8 +47,6 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMainWindow,
     QMenu,
-    QMessageBox,
-    QProgressDialog,
     QPushButton,
     QSlider,
     QStackedWidget,
@@ -65,6 +60,11 @@ from PySide6.QtWidgets import (
 from . import __version__
 from .backup import BackupSession, Entry, detect_backups, digest, load_plist, stale_workspaces
 from .codec import BackupError, Cancelled
+from .dialogs import FixedDialog as QDialog
+from .dialogs import FixedFileDialog as QFileDialog
+from .dialogs import FixedInputDialog as QInputDialog
+from .dialogs import FixedMessageBox as QMessageBox
+from .dialogs import FixedProgressDialog as QProgressDialog
 from .navigation import Location, ViewState, split_domain
 
 INTERNAL_MIME = "application/x-backupeditor-entries"
@@ -135,7 +135,7 @@ class PasswordDialog(QDialog):
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
-        self.resize(360, 140)
+        self.lock_size(QSize(380, 180))
 
 
 @dataclass(frozen=True)
