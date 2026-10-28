@@ -68,6 +68,7 @@ from .dialogs import FixedMessageBox as QMessageBox
 from .dialogs import FixedProgressDialog
 from .hex_viewer import HexViewer
 from .icons import ApplicationIcons
+from .item_style import ItemViewStyle
 from .navigation import Location, ViewState, split_domain
 from .pane_focus import BrowserPaneFocus
 from .pending_view import PendingChangesModel
@@ -2426,7 +2427,7 @@ def main():
     app = QApplication(sys.argv[:1])
     app.setApplicationName("BackupEditor")
     app.setApplicationVersion(__version__)
-    app.setStyle("Fusion")
+    app.setStyle(ItemViewStyle("Fusion"))
     window = MainWindow()
     window.show()
     QTimer.singleShot(
