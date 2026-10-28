@@ -424,13 +424,47 @@ class BackupSession:
                 self._restore(command, 3)
                 self.undo_stack.append(command)
 
-    def discard(self):
-        with self.lock, self.db:
-            self.db.execute("DELETE FROM EditorEntries")
-            self.db.execute("INSERT INTO EditorEntries SELECT * FROM EditorBaseline")
+    def discard(self, *, progress=None, cancel=None):
+        progress = progress or (lambda *args: None)
+        with self.lock:
+            # The earliest before-image is the saved state for each affected token.
+            # An after-only token was added since the baseline and must disappear.
+            original = {}
+            progress("收集需要还原的条目…", 0, 0)
+            for command in self.undo_stack:
+                check_cancel(cancel)
+                for row in command[2]:
+                    original.setdefault(row["token"], row)
+                for row in command[3]:
+                    original.setdefault(row["token"], None)
+            tokens = list(original)
+            rows = [row for row in original.values() if row is not None]
+            total = len(tokens) + len(rows)
+            check_cancel(cancel)
+            # One transaction makes cancellation/failure leave both the index and
+            # history intact. Delete all affected paths before restoring originals
+            # so moves, replacements and swaps cannot cause transient collisions.
+            with self.db:
+                for start in range(0, len(tokens), 1000):
+                    check_cancel(cancel)
+                    batch = tokens[start : start + 1000]
+                    self.db.executemany(
+                        "DELETE FROM EditorEntries WHERE token=?", ((token,) for token in batch)
+                    )
+                    progress("还原暂挂更改…", start + len(batch), total)
+                for start in range(0, len(rows), 1000):
+                    check_cancel(cancel)
+                    batch = rows[start : start + 1000]
+                    self.db.executemany(
+                        "INSERT INTO EditorEntries VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                        (tuple(row[column] for column in COLUMNS) for row in batch),
+                    )
+                    progress("还原暂挂更改…", len(tokens) + start + len(batch), total)
+                check_cancel(cancel)
             self.undo_stack.clear()
             self.redo_stack.clear()
             self.saved_signature = ()
+            progress("已放弃暂挂更改", total, total)
 
     def new_directory(self, domain, parent, name):
         safe_path(name, root=False)

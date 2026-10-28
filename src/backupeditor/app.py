@@ -1376,8 +1376,12 @@ class MainWindow(QMainWindow):
             )
             == QMessageBox.StandardButton.Yes
         ):
-            self.session.discard()
-            self.refresh()
+            session = self.session
+            self.run_task(
+                "放弃暂挂更改",
+                lambda progress, cancel: session.discard(progress=progress, cancel=cancel),
+                lambda _: self.refresh(),
+            )
 
     def extract_selected(self):
         tokens = self.selected_tokens()
