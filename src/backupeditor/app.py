@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import shutil
 import sys
@@ -68,6 +69,7 @@ from .dialogs import FixedMessageBox as QMessageBox
 from .dialogs import FixedProgressDialog
 from .icons import ApplicationIcons
 from .navigation import Location, ViewState, split_domain
+from .plist_editor import PlistDocument, PlistEditor
 from .sidebar import DirectoryTree
 
 INTERNAL_MIME = "application/x-backupeditor-entries"
@@ -362,6 +364,16 @@ class OpenedFile:
     unreviewed: bool = False
 
 
+@dataclass
+class OpenedPlist:
+    token: str
+    editor: PlistEditor
+    directory: Path
+    source_digest: bytes
+    observed_digest: bytes
+    revision: tuple
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -379,6 +391,7 @@ class MainWindow(QMainWindow):
         self.task = None
         self.progress_dialog = None
         self.opened: dict[str, OpenedFile] = {}
+        self.plist_editors = {}
         self.force_close = False
         self._exit_requested = False
         self.setWindowTitle("BackupEditor")
@@ -814,6 +827,8 @@ class MainWindow(QMainWindow):
 
     def update_actions(self, *_):
         busy = self.task is not None
+        for record in self.plist_editors.values():
+            record.editor.set_busy(busy)
         self.directory_tree.directory_model.suspended = busy
         self.directory_tree.setEnabled(not busy)
         rows = self.selected_rows()
@@ -833,7 +848,16 @@ class MainWindow(QMainWindow):
             self.delete_action.setEnabled(not busy and entry is not None)
         for action in (self.add_action, self.add_folder_action, self.new_folder_action):
             action.setEnabled(not busy and session is not None and self.domain is not None)
-        self.save_action.setEnabled(not busy and bool(session and session.dirty))
+        self.save_action.setEnabled(
+            not busy
+            and bool(
+                session
+                and (
+                    session.dirty
+                    or any(record.editor.document.dirty for record in self.plist_editors.values())
+                )
+            )
+        )
         self.discard_action.setEnabled(not busy and bool(session and session.dirty))
         self.undo_action.setEnabled(not busy and bool(session and session.undo_stack))
         self.redo_action.setEnabled(not busy and bool(session and session.redo_stack))
@@ -942,6 +966,8 @@ class MainWindow(QMainWindow):
         else:
             self.statusBar().showMessage("从“文件 → 选择备份目录”打开 iOS 备份")
         self.update_actions()
+
+        QTimer.singleShot(0, self.check_plist_editors)
 
     def set_view(self, grid):
         outgoing = self.remember_view_state()
@@ -1071,6 +1097,9 @@ class MainWindow(QMainWindow):
     def confirm_leave(self, continuation, *, exiting=False):
         if self.task:
             return
+        for record in list(self.plist_editors.values()):
+            if not record.editor.close():
+                return
         if not self.session:
             continuation()
             return
@@ -1368,14 +1397,27 @@ class MainWindow(QMainWindow):
                 lambda _: self.statusBar().showMessage(f"已提取到 {target}"),
             )
 
-    def open_file(self):
+    def open_file(self, *, external=False):
+        if self.task or not self.session:
+            return
         rows = self.selected_rows()
         if len(rows) != 1 or rows[0].kind != "file":
             return
         token = rows[0].entry.token
+        if token in self.plist_editors:
+            editor = self.plist_editors[token].editor
+            editor.showNormal()
+            editor.raise_()
+            editor.activateWindow()
+            editor.tree.setFocus()
+            self.check_plist_editors()
+            return
         current = self.opened.get(token)
         if current and current.path.exists():
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(current.path)))
+            return
+        if not external and Path(rows[0].name).suffix.lower() == ".plist":
+            self.open_plist(token, rows[0].name)
             return
         target = self.session.workspace / "opened" / uuid.uuid4().hex / rows[0].name
 
@@ -1397,6 +1439,155 @@ class MainWindow(QMainWindow):
 
         self.run_task("提取并打开文件", prepare, opened)
 
+    def plist_revision(self, token):
+        entry = self.session.get(token)
+        source = (
+            Path(entry.staged) if entry.staged else self.session.payload_path(entry.original_id)
+        )
+        return (str(source), self.file_stamp(source))
+
+    def open_plist(self, token, name):
+        session = self.session
+        directory = session.workspace / "plist-editor" / uuid.uuid4().hex
+        target = directory / name
+
+        def prepare(progress, cancel):
+            session.extract_file(token, target, cancel=cancel)
+            data = target.read_bytes()
+            return PlistDocument(data), hashlib.sha256(data).digest()
+
+        def opened(result):
+            document, fingerprint = result
+
+            def stage(data):
+                if self.task or self.session is not session:
+                    raise BackupError("备份操作进行中，请稍后再保存")
+                latest = directory / "before-save.plist"
+                session.extract_file(token, latest)
+                current = latest.read_bytes()
+                current_digest = hashlib.sha256(current).digest()
+                if current_digest != record.source_digest and current != data:
+                    box = QMessageBox(
+                        QMessageBox.Icon.Question,
+                        "plist 文件已更改",
+                        "备份中的文件已有更新。请选择重新加载，或确认用当前编辑覆盖更新版本。",
+                        parent=editor,
+                    )
+                    reload_button = box.addButton("重新加载", QMessageBox.ButtonRole.AcceptRole)
+                    overwrite = box.addButton(
+                        "覆盖更新版本", QMessageBox.ButtonRole.DestructiveRole
+                    )
+                    cancel_button = box.addButton("取消", QMessageBox.ButtonRole.RejectRole)
+                    box.setDefaultButton(cancel_button)
+                    box.exec()
+                    record.observed_digest = current_digest
+                    record.revision = self.plist_revision(token)
+                    editor.set_source_state(conflict=True)
+                    if box.clickedButton() == reload_button:
+                        self.reload_plist(record, current)
+                        return False
+                    if box.clickedButton() != overwrite:
+                        return False
+                if current != data:
+                    target.write_bytes(data)
+                    session.stage_edit(token, target)
+                record.source_digest = record.observed_digest = hashlib.sha256(data).digest()
+                record.revision = self.plist_revision(token)
+                editor.set_source_state()
+                self.refresh(focus_browser=False)
+                return True
+
+            editor = PlistEditor(document, name, stage, self)
+            record = OpenedPlist(
+                token, editor, directory, fingerprint, fingerprint, self.plist_revision(token)
+            )
+            self.plist_editors[token] = record
+            editor.contents_changed.connect(self.update_actions)
+
+            def closed(_):
+                self.plist_editors.pop(token, None)
+                shutil.rmtree(directory, ignore_errors=True)
+                editor.deleteLater()
+                self.update_actions()
+
+            editor.finished.connect(closed)
+            editor.show()
+
+        def cleanup():
+            if token not in self.plist_editors:
+                shutil.rmtree(directory, ignore_errors=True)
+
+        self.run_task("读取 plist", prepare, opened, on_done=cleanup)
+
+    def reload_plist(self, record, data):
+        try:
+            document = PlistDocument(data)
+        except Exception as exc:
+            record.editor.show_error(exc)
+            return False
+        record.source_digest = record.observed_digest = hashlib.sha256(data).digest()
+        record.editor.reload_document(document)
+        return True
+
+    def check_plist_editors(self):
+        if self.task or not self.session or self.force_close or QApplication.activeModalWidget():
+            return False
+        for record in list(self.plist_editors.values()):
+            try:
+                entry = self.session.get(record.token)
+                revision = self.plist_revision(record.token)
+            except BackupError:
+                record.editor.set_source_state(available=False)
+                continue
+            record.editor.name = entry.name
+            record.editor.set_source_state(conflict=record.editor._conflict)
+            if revision == record.revision:
+                continue
+            target = record.directory / "latest.plist"
+            session = self.session
+
+            def read(progress, cancel, rec=record, path=target):
+                session.extract_file(rec.token, path, cancel=cancel)
+                return path.read_bytes()
+
+            def checked(data, rec=record, version=revision):
+                if rec.token not in self.plist_editors:
+                    return
+                try:
+                    if self.plist_revision(rec.token) != version:
+                        return
+                except BackupError:
+                    return
+                rec.revision = version
+                fingerprint = hashlib.sha256(data).digest()
+                if fingerprint == rec.observed_digest:
+                    return
+                rec.observed_digest = fingerprint
+                if fingerprint == rec.source_digest:
+                    rec.editor.set_source_state()
+                    return
+                rec.editor.set_source_state(conflict=True)
+                text = "这份 plist 的内容已更改，是否重新加载更新版本？"
+                if rec.editor.document.dirty:
+                    text += "\n重新加载将丢弃编辑器中未保存的修改。"
+                answer = QMessageBox.question(
+                    rec.editor,
+                    "plist 文件已更改",
+                    text,
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No,
+                )
+                if answer == QMessageBox.StandardButton.Yes:
+                    self.reload_plist(rec, data)
+
+            def failed(exc, rec=record, version=revision):
+                rec.revision = version
+                rec.editor.show_error(exc)
+
+            self.run_task("检查 plist 更新", read, checked, silent=True, on_error=failed)
+            return True
+        return False
+
     @staticmethod
     def file_stamp(path):
         try:
@@ -1417,7 +1608,9 @@ class MainWindow(QMainWindow):
                 self._file_event(str(record.path))
 
     def poll_open_files(self):
-        if self.task or not self.session:
+        if self.task or not self.session or QApplication.activeModalWidget():
+            return
+        if self.check_plist_editors():
             return
         for record in list(self.opened.values()):
             stamp = self.file_stamp(record.path)
@@ -1487,7 +1680,12 @@ class MainWindow(QMainWindow):
             record.later_until = time.monotonic() + 30
 
     def save(self, *_args, after=None, quiet=False):
-        if not self.session or not self.session.dirty or self.task:
+        if not self.session or self.task:
+            return
+        for record in list(self.plist_editors.values()):
+            if record.editor.document.dirty and not record.editor.save_document():
+                return
+        if not self.session.dirty:
             return
         suggested = str(self.session.root.parent / (self.session.root.name + "-edited"))
         target, _ = QFileDialog.getSaveFileName(
@@ -1538,6 +1736,15 @@ class MainWindow(QMainWindow):
             action = menu.addAction("进入目录")
             action.triggered.connect(lambda: self.activate(index))
         menu.addActions([self.open_action, self.extract_action])
+        rows = self.selected_rows()
+        if (
+            len(rows) == 1
+            and rows[0].kind == "file"
+            and Path(rows[0].name).suffix.lower() == ".plist"
+        ):
+            external = menu.addAction("使用系统应用打开")
+            external.setEnabled(not self.task)
+            external.triggered.connect(lambda: self.open_file(external=True))
         menu.addSeparator()
         menu.addActions([self.rename_action, self.delete_action])
         menu.addSeparator()
@@ -1632,6 +1839,8 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         if self.force_close:
+            for record in list(self.plist_editors.values()):
+                record.editor.discard_and_close()
             self.remember_sidebar_width()
             self.settings.setValue("sidebar_width", self._sidebar_width)
             self.settings.setValue("sidebar_visible", self.sidebar_action.isChecked())
