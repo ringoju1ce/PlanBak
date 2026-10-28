@@ -251,6 +251,11 @@ class ValueDialog(FixedDialog):
         self.boolean_field = QComboBox()
         self.boolean_field.addItem("true", True)
         self.boolean_field.addItem("false", False)
+        boolean_page = QWidget()
+        boolean_layout = QVBoxLayout(boolean_page)
+        boolean_layout.setContentsMargins(0, 0, 0, 0)
+        boolean_layout.addWidget(self.boolean_field)
+        boolean_layout.addStretch()
         self.date_field = DateValue(binary)
         self.fixed_value = QLabel()
         self.fixed_value.setWordWrap(True)
@@ -258,7 +263,7 @@ class ValueDialog(FixedDialog):
         for widget in (
             self.value_field,
             number_page,
-            self.boolean_field,
+            boolean_page,
             self.date_field,
             self.fixed_value,
         ):
