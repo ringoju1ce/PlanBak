@@ -631,7 +631,7 @@ class MainWindow(QMainWindow):
         navigation.setMovable(False)
         self.addToolBarBreak()
         self.addToolBar(navigation)
-        navigation.addActions([self.open_backup_action, self.up_action])
+        navigation.addAction(self.up_action)
         self.location = QLineEdit("/")
         self.location.setAccessibleName("Domain 与目录路径")
         self.location.returnPressed.connect(self.go_location)
