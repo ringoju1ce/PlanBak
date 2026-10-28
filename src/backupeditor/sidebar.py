@@ -259,6 +259,8 @@ class DirectoryTree(QTreeView):
         self.focus_changed.emit()
 
     def current_entry(self):
+        if not self.selectionModel().isSelected(self.currentIndex()):
+            return None
         node = self.directory_model.node(self.currentIndex())
         return node.entry if node and node.entry and node.entry.path else None
 
