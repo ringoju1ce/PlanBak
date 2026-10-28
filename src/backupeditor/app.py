@@ -372,6 +372,7 @@ class MainWindow(QMainWindow):
         self.progress_dialog = None
         self.opened: dict[str, OpenedFile] = {}
         self.force_close = False
+        self._exit_requested = False
         self.setWindowTitle("BackupEditor")
         self.resize(1160, 760)
         self.model = BrowserModel(self)
@@ -941,6 +942,15 @@ class MainWindow(QMainWindow):
                 dialog.close()
                 dialog.deleteLater()
             self.update_actions()
+            if self._exit_requested:
+                if isinstance(job.result, BackupSession) and job.result is not self.session:
+                    job.result.close()
+                if on_done:
+                    on_done()
+                self._exit_requested = False
+                job.deleteLater()
+                QTimer.singleShot(0, self.close)
+                return
             if job.error:
                 if isinstance(job.error, Cancelled):
                     self.statusBar().showMessage("操作已取消")
@@ -957,37 +967,74 @@ class MainWindow(QMainWindow):
         job.finished.connect(finished)
         job.start()
 
-    def confirm_leave(self, continuation):
+    def confirm_leave(self, continuation, *, exiting=False):
         if self.task:
             return
-        if any(
-            record.unreviewed or self.file_stamp(record.path) != record.stamp
-            for record in self.opened.values()
-        ):
-            choice = QMessageBox.question(
-                self,
-                "外部编辑尚未处理",
-                "临时打开的文件有尚未处理的修改。放弃这些临时修改并继续？",
-                QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel,
-                QMessageBox.StandardButton.Cancel,
-            )
-            if choice != QMessageBox.StandardButton.Discard:
-                return
-        if not self.session or not self.session.dirty:
+        if not self.session:
+            continuation()
+            return
+        external = []
+        for record in self.opened.values():
+            if record.unreviewed or self.file_stamp(record.path) != record.stamp:
+                try:
+                    self.session.get(record.token)
+                except BackupError:
+                    # A staged deletion takes precedence over its old editor copy.
+                    continue
+                external.append(record)
+        if not self.session.dirty and not external:
             continuation()
             return
         box = QMessageBox(
             QMessageBox.Icon.Question,
             "未保存更改",
-            "是否将暂挂更改保存到新的备份目录？",
+            (
+                "退出前是否应用未保存的改动？\n应用会保存为新的备份副本；不应用则丢弃改动并清理临时文件。"
+                if exiting
+                else "是否应用当前改动并保存为新的备份副本？"
+            ),
             QMessageBox.StandardButton.Save
             | QMessageBox.StandardButton.Discard
             | QMessageBox.StandardButton.Cancel,
             self,
         )
+        box.button(QMessageBox.StandardButton.Save).setText("应用")
+        box.button(QMessageBox.StandardButton.Discard).setText("不应用")
+        box.button(QMessageBox.StandardButton.Cancel).setText("取消")
+        box.setDefaultButton(QMessageBox.StandardButton.Cancel)
         result = box.exec()
         if result == QMessageBox.StandardButton.Save:
-            self.save(after=continuation)
+            if not external:
+                self.save(after=continuation, quiet=exiting)
+                return
+
+            def stage_external(progress, cancel):
+                updates = []
+                for record in external:
+                    stamp = self.file_stamp(record.path)
+                    if stamp == (None,):
+                        raise BackupError(f"外部编辑文件已被移动或删除：{record.path.name}")
+                    self.session.stage_edit(record.token, record.path, cancel)
+                    staged = Path(self.session.get(record.token).staged)
+                    updates.append((record, digest(staged, cancel=cancel), stamp))
+                return updates
+
+            def staged(updates):
+                for record, fingerprint, stamp in updates:
+                    record.fingerprint, record.stamp = fingerprint, stamp
+                    record.unreviewed = self.file_stamp(record.path) != stamp
+                self.refresh()
+                if any(record.unreviewed for record in external):
+                    message(
+                        self,
+                        "外部文件仍在修改",
+                        "请先在外部应用中保存文件，然后重试。",
+                        QMessageBox.Icon.Warning,
+                    )
+                    return
+                self.save(after=continuation, quiet=exiting)
+
+            self.run_task("应用外部编辑", stage_external, staged)
         elif result == QMessageBox.StandardButton.Discard:
             continuation()
 
@@ -999,6 +1046,8 @@ class MainWindow(QMainWindow):
             self.confirm_leave(lambda: self.open_path(Path(path)))
 
     def open_path(self, path):
+        if self._exit_requested:
+            return
         try:
             candidates = detect_backups(Path(path))
             if len(candidates) > 1:
@@ -1302,7 +1351,7 @@ class MainWindow(QMainWindow):
         else:
             record.later_until = time.monotonic() + 30
 
-    def save(self, *_args, after=None):
+    def save(self, *_args, after=None, quiet=False):
         if not self.session or not self.session.dirty or self.task:
             return
         suggested = str(self.session.root.parent / (self.session.root.name + "-edited"))
@@ -1314,11 +1363,12 @@ class MainWindow(QMainWindow):
 
         def saved(destination):
             self.refresh()
-            message(
-                self,
-                "保存完成",
-                f"修改版备份已保存：\n{destination}\n\n原备份保留在：\n{self.session.root}",
-            )
+            if not quiet:
+                message(
+                    self,
+                    "保存完成",
+                    f"修改版备份已保存：\n{destination}\n\n原备份保留在：\n{self.session.root}",
+                )
             if after:
                 after()
 
@@ -1451,6 +1501,7 @@ class MainWindow(QMainWindow):
             self.settings.setValue("sort", self.sort_combo.currentIndex())
             self.settings.setValue("descending", self.descending.isChecked())
             self.settings.setValue("directories_first", self.directories_first.isChecked())
+            self.poll_timer.stop()
             self.clear_opened_files()
             self.clear_navigation_state()
             if self.session:
@@ -1459,12 +1510,16 @@ class MainWindow(QMainWindow):
             event.accept()
             return
         event.ignore()
+        if self.task:
+            self._exit_requested = True
+            self.task.cancelled.set()
+            return
 
         def leave():
             self.force_close = True
-            self.close()
+            QTimer.singleShot(0, self.close)
 
-        self.confirm_leave(leave)
+        self.confirm_leave(leave, exiting=True)
 
     def offer_temp_cleanup(self, after=None):
         paths = stale_workspaces()
