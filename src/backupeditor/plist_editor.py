@@ -9,24 +9,30 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
-from PySide6.QtCore import QSize, Qt, Signal
-from PySide6.QtGui import QAction, QKeySequence
+from PySide6.QtCore import QDate, QRegularExpression, QSize, Qt, QTime, Signal
+from PySide6.QtGui import QAction, QKeySequence, QRegularExpressionValidator
 from PySide6.QtWidgets import (
     QComboBox,
+    QDateEdit,
     QDialogButtonBox,
     QFormLayout,
     QHBoxLayout,
     QHeaderView,
     QLabel,
     QLineEdit,
+    QMenu,
     QPlainTextEdit,
     QPushButton,
+    QStackedWidget,
+    QTimeEdit,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
+    QWidget,
 )
 
 from .dialogs import FixedDialog, FixedFileDialog, FixedMessageBox
+from .plist_xml import PlistXmlError, XmlPane, parse_xml
 
 TYPES = (
     "Dictionary",
@@ -92,6 +98,15 @@ class PlistNode:
             return [child.to_value() for child in self.children]
         return self.value
 
+    def same_as(self, other):
+        return (
+            self.kind == other.kind
+            and self.key == other.key
+            and same_value(self.value, other.value)
+            and len(self.children) == len(other.children)
+            and all(a.same_as(b) for a, b in zip(self.children, other.children))
+        )
+
     @property
     def container(self):
         return self.kind in ("Dictionary", "Array")
@@ -149,7 +164,7 @@ class PlistDocument:
 
     @property
     def dirty(self):
-        return self.root != self.saved_root
+        return not self.root.same_as(self.saved_root)
 
     def serialize(self):
         value = self.root.to_value()
@@ -161,6 +176,49 @@ class PlistDocument:
 
     def mark_saved(self):
         self.saved_root = copy.deepcopy(self.root)
+
+
+class DateValue(QWidget):
+    def __init__(self, binary, parent=None):
+        super().__init__(parent)
+        layout = QFormLayout(self)
+        self.date = QDateEdit()
+        self.date.setCalendarPopup(True)
+        self.date.setDateRange(QDate(1, 1, 1), QDate(9999, 12, 31))
+        self.date.setDisplayFormat("yyyy-MM-dd")
+        self.time = QTimeEdit()
+        self.time.setDisplayFormat("HH:mm:ss")
+        self.fraction = QLineEdit()
+        self.fraction.setValidator(
+            QRegularExpressionValidator(QRegularExpression("[0-9]{6}"), self)
+        )
+        self.fraction.setMaxLength(6)
+        self.fraction.setEnabled(binary)
+        self.fraction.setToolTip("小数秒的六位数字；XML 日期只支持整秒")
+        layout.addRow("日期（UTC）：", self.date)
+        layout.addRow("时间（UTC）：", self.time)
+        layout.addRow("小数秒（六位）：0.", self.fraction)
+
+    def set_value(self, value):
+        self.date.setDate(QDate(value.year, value.month, value.day))
+        self.time.setTime(QTime(value.hour, value.minute, value.second))
+        self.fraction.setText(f"{value.microsecond:06d}")
+
+    def value(self):
+        if not all(
+            control.hasAcceptableInput() for control in (self.date, self.time, self.fraction)
+        ):
+            raise ValueError("请输入合法的 UTC 日期、时间及六位小数秒")
+        day, time = self.date.date(), self.time.time()
+        return datetime(
+            day.year(),
+            day.month(),
+            day.day(),
+            time.hour(),
+            time.minute(),
+            time.second(),
+            int(self.fraction.text()),
+        )
 
 
 class ValueDialog(FixedDialog):
@@ -180,9 +238,32 @@ class ValueDialog(FixedDialog):
         self.type_field.setCurrentText(node.kind)
         form.addRow("类型：", self.type_field)
         layout.addLayout(form)
+        self.values = QStackedWidget()
         self.value_field = QPlainTextEdit()
         self.value_field.setTabChangesFocus(True)
-        layout.addWidget(self.value_field, 1)
+        self.number_field = QLineEdit()
+        self.number_help = QLabel()
+        number_page = QWidget()
+        number_layout = QVBoxLayout(number_page)
+        number_layout.addWidget(self.number_field)
+        number_layout.addWidget(self.number_help)
+        number_layout.addStretch()
+        self.boolean_field = QComboBox()
+        self.boolean_field.addItem("true", True)
+        self.boolean_field.addItem("false", False)
+        self.date_field = DateValue(binary)
+        self.fixed_value = QLabel()
+        self.fixed_value.setWordWrap(True)
+        self.fixed_value.setTextFormat(Qt.TextFormat.PlainText)
+        for widget in (
+            self.value_field,
+            number_page,
+            self.boolean_field,
+            self.date_field,
+            self.fixed_value,
+        ):
+            self.values.addWidget(widget)
+        layout.addWidget(self.values, 1)
         self.error = QLabel()
         self.error.setTextFormat(Qt.TextFormat.PlainText)
         self.error.setWordWrap(True)
@@ -200,22 +281,48 @@ class ValueDialog(FixedDialog):
         self.lock_size(QSize(600, 460))
 
     def update_value(self, kind):
-        self.value_field.setReadOnly(kind in ("Dictionary", "Array", "Data", "Null"))
-        if kind == self.node.kind:
-            text = self.node.preview
+        self.error.clear()
+        existing = kind == self.node.kind
+        if kind == "String":
+            self.values.setCurrentIndex(0)
+            self.value_field.setPlainText(self.node.value if existing else "")
+        elif kind in ("Integer", "Real", "UID"):
+            self.values.setCurrentIndex(1)
+            expression = {
+                "Integer": r"[+-]?[0-9]+",
+                "UID": r"[+]?[0-9]+",
+                "Real": r"[-+]?(?:(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][-+]?[0-9]+)?|inf|nan)",
+            }[kind]
+            self.number_field.setValidator(
+                QRegularExpressionValidator(QRegularExpression(expression), self.number_field)
+            )
+            self.number_field.setText(
+                self.node.preview if existing else ("0.0" if kind == "Real" else "0")
+            )
+            self.number_help.setText(
+                {
+                    "Integer": "整数范围：−2⁶³ 至 2⁶⁴−1",
+                    "Real": "支持小数和科学计数法；保留原值精度",
+                    "UID": "对象引用（UID）：0 至 2⁶⁴−1；不会自动调整对象关系",
+                }[kind]
+            )
+        elif kind == "Boolean":
+            self.values.setCurrentIndex(2)
+            self.boolean_field.setCurrentIndex(0 if existing and self.node.value else 1)
+        elif kind == "Date":
+            self.values.setCurrentIndex(3)
+            self.date_field.set_value(self.node.value if existing else datetime(2001, 1, 1))
         else:
-            text = {
-                "Boolean": "false",
-                "Integer": "0",
-                "Real": "0.0",
-                "UID": "0",
-                "Date": "2001-01-01T00:00:00Z",
-            }.get(kind, "")
-        if kind == "Data":
-            text = f"{len(self.node.value) if self.node.kind == 'Data' else 0} 字节；使用编辑器的 Data 导入/导出按钮。"
-        elif kind in ("Dictionary", "Array"):
-            text = "容器的子项目在目录树中编辑。非空容器需先清空才能更改类型。"
-        self.value_field.setPlainText(text)
+            self.values.setCurrentIndex(4)
+            self.fixed_value.setText(
+                (
+                    f"{len(self.node.value) if existing else 0} 字节；使用编辑器的 Data 导入/导出按钮。"
+                    if kind == "Data"
+                    else "null"
+                    if kind == "Null"
+                    else "子项目在树中管理；非空容器需先清空才能更改类型。"
+                )
+            )
 
     def accept(self):
         try:
@@ -232,8 +339,20 @@ class ValueDialog(FixedDialog):
                 value = None
             elif kind == "Data":
                 value = self.node.value if self.node.kind == "Data" else b""
+            elif kind == "Boolean":
+                value = bool(self.boolean_field.currentData())
+            elif kind == "Date":
+                value = self.date_field.value()
+            elif kind == "String":
+                value = self.value_field.toPlainText()
+            elif (
+                kind == "Real"
+                and self.node.kind == "Real"
+                and self.number_field.text() == self.node.preview
+            ):
+                value = self.node.value
             else:
-                value = parse_value(kind, self.value_field.toPlainText())
+                value = parse_value(kind, self.number_field.text())
             # Validate XML control characters and scalar serialization before accepting.
             fmt = plistlib.FMT_BINARY if self.binary else plistlib.FMT_XML
             plistlib.dumps({key: ""}, fmt=fmt)
@@ -259,7 +378,23 @@ class PlistEditor(FixedDialog):
         self._busy = False
         self._available = True
         self._conflict = False
+        self._xml_initialized = False
+        self._xml_saved_text = ""
+        self._xml_parsed_text = ""
+        self._xml_snapshot = None
+        self._xml_cache = ""
+        self.xml_reason = ""
         layout = QVBoxLayout(self)
+        modes = QHBoxLayout()
+        self.mode = QComboBox()
+        self.mode.addItems(["树形", "XML"])
+        modes.addWidget(QLabel("编辑模式："))
+        modes.addWidget(self.mode)
+        self.mode_hint = QLabel()
+        self.mode_hint.setTextFormat(Qt.TextFormat.PlainText)
+        self.mode_hint.setWordWrap(True)
+        modes.addWidget(self.mode_hint, 1)
+        layout.addLayout(modes)
         actions = QHBoxLayout()
         for label, method, attribute in (
             ("添加", self.add_node, "add_button"),
@@ -273,10 +408,16 @@ class PlistEditor(FixedDialog):
             setattr(self, attribute, button)
             actions.addWidget(button)
         actions.addStretch()
-        layout.addLayout(actions)
+        action_bar = QWidget()
+        action_bar.setLayout(actions)
+        layout.addWidget(action_bar)
+        self.tree_actions = action_bar
         self.tree = QTreeWidget()
         self.tree.setHeaderLabels(["键 / 索引", "类型", "值"])
         self.tree.setAlternatingRowColors(True)
+        self.tree.setSelectionMode(QTreeWidget.SelectionMode.ExtendedSelection)
+        self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.tree.customContextMenuRequested.connect(self.context_menu)
         self.tree.setEditTriggers(QTreeWidget.EditTrigger.NoEditTriggers)
         self.tree.header().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         self.tree.setColumnWidth(0, 280)
@@ -284,7 +425,13 @@ class PlistEditor(FixedDialog):
         self.tree.itemExpanded.connect(self.populate)
         self.tree.itemSelectionChanged.connect(self.update_actions)
         self.tree.itemDoubleClicked.connect(self.edit_node)
-        layout.addWidget(self.tree, 1)
+        self.pages = QStackedWidget()
+        self.pages.addWidget(self.tree)
+        self.xml = XmlPane()
+        self.pages.addWidget(self.xml)
+        self.xml.code.textChanged.connect(self.xml_changed)
+        self.mode.currentIndexChanged.connect(self.switch_mode)
+        layout.addWidget(self.pages, 1)
         note = "保存会将修改暂挂到会话；主窗口“保存更改”才会生成备份副本。"
         if (
             isinstance(document.root.to_value(), dict)
@@ -309,6 +456,7 @@ class PlistEditor(FixedDialog):
             ("Ctrl+S", self.save_document, self),
             ("F2", self.edit_node, self.tree),
             ("Delete", self.delete_node, self.tree),
+            ("Ctrl+A", self.select_visible, self.tree),
         ):
             action = QAction(self)
             action.setShortcut(QKeySequence(key))
@@ -318,9 +466,152 @@ class PlistEditor(FixedDialog):
         self.rebuild()
         self.lock_size(QSize(940, 650))
 
+    @property
+    def dirty(self):
+        if self.pages.currentIndex() == 1 and self._xml_initialized:
+            return self.xml.code.toPlainText() != self._xml_saved_text
+        return self.document.dirty or (
+            self._xml_initialized
+            and same_value(self.document.root.to_value(), self._xml_snapshot)
+            and self.xml.code.toPlainText() != self._xml_saved_text
+        )
+
     def selected_node(self):
-        item = self.tree.currentItem()
-        return item.data(0, Qt.ItemDataRole.UserRole) if item else None
+        items = self.tree.selectedItems()
+        return items[0].data(0, Qt.ItemDataRole.UserRole) if len(items) == 1 else None
+
+    def refresh_xml_support(self):
+        try:
+            pending = [self.document.root]
+            while pending:
+                node = pending.pop()
+                if node.kind in ("UID", "Null"):
+                    raise ValueError(f"标准 plist XML 无法表示 {node.kind} 类型")
+                if node.kind == "Date" and node.value.microsecond:
+                    raise ValueError("此 Date 包含小数秒，XML 日期只支持整秒")
+                pending.extend(node.children)
+            value = self.document.root.to_value()
+            data = plistlib.dumps(value, fmt=plistlib.FMT_XML, sort_keys=False)
+            if not same_value(parse_xml(data.decode("utf-8")), value):
+                raise ValueError("当前值无法无损转换为 XML（日期的小数秒会丢失）")
+            self._xml_cache = data.decode("utf-8")
+            self.xml_reason = ""
+        except Exception as exc:
+            self._xml_cache = ""
+            self.xml_reason = f"无法使用 XML 模式：{exc}"
+        self.mode.model().item(1).setEnabled(not self.xml_reason)
+        self.mode_hint.setText(self.xml_reason)
+        self.mode_hint.setToolTip(self.xml_reason)
+
+    def xml_changed(self):
+        self.update_actions()
+        self.contents_changed.emit()
+
+    def sync_xml(self):
+        text = self.xml.code.toPlainText()
+        if text == self._xml_parsed_text:
+            return True
+        try:
+            value = parse_xml(text)
+            # Validate against the original file format before changing the typed tree.
+            data = plistlib.dumps(value, fmt=self.document.format, sort_keys=False)
+            if not same_value(plistlib.loads(data), value):
+                raise ValueError("源文件格式无法无损保存这些值")
+        except Exception as exc:
+            self.xml.error.setText(str(exc))
+            if isinstance(exc, PlistXmlError):
+                self.xml.code.show_error(exc.line, exc.column)
+            return False
+        self.document.root = PlistNode.from_value(value)
+        self._xml_snapshot = copy.deepcopy(value)
+        self._xml_parsed_text = text
+        self.xml.clear_error()
+        return True
+
+    def switch_mode(self, index):
+        if index == 1:
+            self.refresh_xml_support()
+            if self.xml_reason:
+                self.mode.blockSignals(True)
+                self.mode.setCurrentIndex(0)
+                self.mode.blockSignals(False)
+                return
+            value = self.document.root.to_value()
+            if not self._xml_initialized or not same_value(value, self._xml_snapshot):
+                self.set_xml_text(self._xml_cache)
+                self._xml_snapshot = copy.deepcopy(value)
+                self._xml_parsed_text = self._xml_cache
+            self.pages.setCurrentIndex(1)
+            self.xml.code.setFocus()
+        else:
+            if not self.sync_xml():
+                self.mode.blockSignals(True)
+                self.mode.setCurrentIndex(1)
+                self.mode.blockSignals(False)
+                return
+            self.pages.setCurrentIndex(0)
+            self.rebuild()
+            self.tree.setFocus()
+        self.tree_actions.setVisible(index == 0)
+        self.update_actions()
+
+    def set_xml_text(self, text, *, saved=False):
+        first = not self._xml_initialized
+        self._xml_initialized = True
+        if first:
+            try:
+                baseline = self.document.saved_root.to_value()
+                xml = plistlib.dumps(baseline, fmt=plistlib.FMT_XML, sort_keys=False)
+                self._xml_saved_text = (
+                    xml.decode("utf-8")
+                    if same_value(parse_xml(xml.decode("utf-8")), baseline)
+                    else None
+                )
+            except Exception:
+                self._xml_saved_text = None
+        if saved:
+            self._xml_saved_text = text
+        self.xml.code.setPlainText(text)
+
+    def select_visible(self):
+        self.tree.clearSelection()
+        item = self.tree.topLevelItem(0)
+        while item:
+            item.setSelected(True)
+            item = self.tree.itemBelow(item)
+
+    def deletion_roots(self):
+        selected = self.tree.selectedItems()
+        identities = {id(item) for item in selected if item.parent()}
+        roots = []
+        for item in selected:
+            if not item.parent():
+                continue
+            ancestor = item.parent()
+            while ancestor and id(ancestor) not in identities:
+                ancestor = ancestor.parent()
+            if ancestor is None:
+                roots.append(item)
+        return roots
+
+    def context_menu(self, point):
+        item = self.tree.itemAt(point)
+        if not item:
+            return
+        if not item.isSelected():
+            self.tree.clearSelection()
+            self.tree.setCurrentItem(item)
+            item.setSelected(True)
+        menu = QMenu(self)
+        edit = menu.addAction("编辑")
+        delete = menu.addAction("删除")
+        edit.setEnabled(len(self.tree.selectedItems()) == 1)
+        delete.setEnabled(bool(self.deletion_roots()))
+        chosen = menu.exec(self.tree.viewport().mapToGlobal(point))
+        if chosen == edit and edit.isEnabled():
+            self.edit_node()
+        elif chosen == delete and delete.isEnabled():
+            self.delete_node()
 
     def make_item(self, node, label, parent=None):
         item = QTreeWidgetItem([label, node.kind, node.preview[:160].replace("\n", " ↵ ")])
@@ -370,6 +661,8 @@ class PlistEditor(FixedDialog):
         restore(root)
         if not self.tree.currentItem():
             self.tree.setCurrentItem(root)
+        if self.pages.currentIndex() == 0:
+            self.refresh_xml_support()
         self.update_actions()
         self.contents_changed.emit()
 
@@ -377,12 +670,12 @@ class PlistEditor(FixedDialog):
         node = self.selected_node()
         self.add_button.setEnabled(bool(node and node.container))
         self.edit_button.setEnabled(node is not None)
-        self.delete_button.setEnabled(bool(node and self.tree.currentItem().parent()))
+        self.delete_button.setEnabled(bool(self.deletion_roots()))
         self.import_button.setEnabled(bool(node and node.kind == "Data"))
         self.export_button.setEnabled(bool(node and node.kind == "Data"))
-        self.save_button.setEnabled(self.document.dirty and not self._busy and self._available)
+        self.save_button.setEnabled(self.dirty and not self._busy and self._available)
         self.setWindowTitle(
-            f"{'* ' if self.document.dirty else ''}{self.name} — plist 编辑器 ({'二进制' if self.document.format == plistlib.FMT_BINARY else 'XML'})"
+            f"{'* ' if self.dirty else ''}{self.name} — plist 编辑器 ({'二进制' if self.document.format == plistlib.FMT_BINARY else 'XML'})"
         )
 
     def set_busy(self, busy):
@@ -400,16 +693,27 @@ class PlistEditor(FixedDialog):
         self.update_actions()
 
     def reload_document(self, document):
+        previous_mode = self.pages.currentIndex()
         self.document = document
+        self._xml_initialized = False
+        self._xml_saved_text = self._xml_parsed_text = ""
+        self._xml_snapshot = None
+        self.mode.blockSignals(True)
+        self.mode.setCurrentIndex(0)
+        self.mode.blockSignals(False)
+        self.pages.setCurrentIndex(0)
+        self.tree_actions.show()
         self.set_source_state()
         self.tree.clear()
         self.rebuild()
+        if previous_mode == 1 and not self.xml_reason:
+            self.mode.setCurrentIndex(1)
 
     def edit_node(self, *_):
-        item = self.tree.currentItem()
         node = self.selected_node()
         if not node:
             return
+        item = self.tree.selectedItems()[0]
         parent_node = item.parent().data(0, Qt.ItemDataRole.UserRole) if item.parent() else None
         dialog = ValueDialog(
             node,
@@ -447,28 +751,38 @@ class PlistEditor(FixedDialog):
         )
         if dialog.exec() == FixedDialog.DialogCode.Accepted:
             parent_node.children.append(dialog.result_node)
-            self.tree.currentItem().setExpanded(True)
+            self.tree.selectedItems()[0].setExpanded(True)
             self.rebuild(dialog.result_node)
         dialog.deleteLater()
 
     def delete_node(self):
-        item = self.tree.currentItem()
-        if not item or not item.parent():
+        items = self.deletion_roots()
+        if not items:
             return
-        node = self.selected_node()
-        parent_node = item.parent().data(0, Qt.ItemDataRole.UserRole)
-        if node.container and node.children:
+
+        def count(node):
+            return 1 + sum(count(child) for child in node.children)
+
+        nodes = [item.data(0, Qt.ItemDataRole.UserRole) for item in items]
+        if len(items) > 1 or any(node.children for node in nodes):
+            affected = sum(count(node) for node in nodes)
             answer = FixedMessageBox.question(
                 self,
                 "删除条目",
-                "删除该容器及全部子项目？",
+                f"删除选中的 {len(items)} 个项目？共影响 {affected} 个节点（包含子项目）。",
                 FixedMessageBox.StandardButton.Yes | FixedMessageBox.StandardButton.No,
                 FixedMessageBox.StandardButton.No,
             )
             if answer != FixedMessageBox.StandardButton.Yes:
                 return
-        parent_node.children = [child for child in parent_node.children if child is not node]
-        self.rebuild(parent_node)
+        parent = items[0].parent().data(0, Qt.ItemDataRole.UserRole)
+        grouped = {}
+        for item, node in zip(items, nodes):
+            owner = item.parent().data(0, Qt.ItemDataRole.UserRole)
+            grouped.setdefault(id(owner), (owner, set()))[1].add(id(node))
+        for owner, removed in grouped.values():
+            owner.children = [child for child in owner.children if id(child) not in removed]
+        self.rebuild(parent)
 
     def import_data(self):
         node = self.selected_node()
@@ -509,16 +823,35 @@ class PlistEditor(FixedDialog):
     def save_document(self):
         if self._busy or not self._available:
             return False
-        if not self.document.dirty:
+        if self.pages.currentIndex() == 1 and not self.sync_xml():
+            return False
+        if not self.dirty:
             return True
         try:
             data = self.document.serialize()
+            if (
+                self.document.format == plistlib.FMT_XML
+                and self._xml_initialized
+                and same_value(self.document.root.to_value(), self._xml_snapshot)
+            ):
+                data = self.xml.code.toPlainText().encode("utf-8")
             if self.save_callback(data) is False:
                 return False
         except Exception as exc:
             self.show_error(exc)
             return False
         self.document.mark_saved()
+        if self._xml_initialized:
+            if not same_value(self.document.root.to_value(), self._xml_snapshot):
+                self.refresh_xml_support()
+                if not self.xml_reason:
+                    self.set_xml_text(self._xml_cache, saved=True)
+                    self._xml_snapshot = copy.deepcopy(self.document.root.to_value())
+                    self._xml_parsed_text = self._xml_cache
+                else:
+                    self._xml_initialized = False
+            self._xml_saved_text = self.xml.code.toPlainText()
+            self.xml.code.document().setModified(False)
         self.update_actions()
         self.contents_changed.emit()
         return True
@@ -526,7 +859,7 @@ class PlistEditor(FixedDialog):
     def reject(self):
         if self._busy and not self._skip_prompt:
             return
-        if self.document.dirty and not self._skip_prompt:
+        if self.dirty and not self._skip_prompt:
             answer = FixedMessageBox.question(
                 self,
                 "未保存的 plist 修改",

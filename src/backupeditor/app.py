@@ -854,7 +854,7 @@ class MainWindow(QMainWindow):
                 session
                 and (
                     session.dirty
-                    or any(record.editor.document.dirty for record in self.plist_editors.values())
+                    or any(record.editor.dirty for record in self.plist_editors.values())
                 )
             )
         )
@@ -1568,7 +1568,7 @@ class MainWindow(QMainWindow):
                     return
                 rec.editor.set_source_state(conflict=True)
                 text = "这份 plist 的内容已更改，是否重新加载更新版本？"
-                if rec.editor.document.dirty:
+                if rec.editor.dirty:
                     text += "\n重新加载将丢弃编辑器中未保存的修改。"
                 answer = QMessageBox.question(
                     rec.editor,
@@ -1683,7 +1683,7 @@ class MainWindow(QMainWindow):
         if not self.session or self.task:
             return
         for record in list(self.plist_editors.values()):
-            if record.editor.document.dirty and not record.editor.save_document():
+            if record.editor.dirty and not record.editor.save_document():
                 return
         if not self.session.dirty:
             return
