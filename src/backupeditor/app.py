@@ -26,6 +26,7 @@ from PySide6.QtCore import (
     QModelIndex,
     QPoint,
     QSettings,
+    QSignalBlocker,
     QSize,
     Qt,
     QThread,
@@ -207,6 +208,17 @@ class BrowserModel(QAbstractTableModel):
             return self.headers[section]
         return None
 
+    @staticmethod
+    def type_label(row):
+        return {
+            "domain": "文件夹",
+            "group": "文件夹",
+            "parent": "上层文件夹",
+            "directory": "文件夹",
+            "file": Path(row.name).suffix.lstrip(".").upper() or "文件",
+            "special": "链接 / 特殊条目",
+        }.get(row.kind, row.kind)
+
     def data(self, index, role=Qt.ItemDataRole.DisplayRole):
         if not index.isValid() or index.row() >= self.visible_count:
             return None
@@ -216,14 +228,7 @@ class BrowserModel(QAbstractTableModel):
             if index.column() == 0:
                 return row.name
             if index.column() == 1:
-                return {
-                    "domain": "文件夹",
-                    "group": "文件夹",
-                    "parent": "上层文件夹",
-                    "directory": "文件夹",
-                    "file": Path(row.name).suffix.lstrip(".").upper() or "文件",
-                    "special": "链接 / 特殊条目",
-                }.get(row.kind, row.kind)
+                return self.type_label(row)
             if index.column() == 2:
                 return human_size(entry.size) if entry and entry.kind == "file" else ""
             if index.column() == 3:
@@ -652,7 +657,7 @@ class MainWindow(QMainWindow):
         self.grid_action.triggered.connect(lambda: self.set_view(True))
         toolbar.addActions([self.list_action, self.grid_action])
         self.sort_combo = QComboBox()
-        self.sort_combo.addItems(["名称", "类型", "大小", "修改时间"])
+        self.sort_combo.addItems(BrowserModel.headers)
         self.sort_combo.setToolTip("排序方式")
         self.sort_combo.setCurrentIndex(self.settings.value("sort", 0, type=int))
         self.sort_combo.currentIndexChanged.connect(self.refresh)
@@ -665,6 +670,10 @@ class MainWindow(QMainWindow):
         self.directories_first.setChecked(self.settings.value("directories_first", True, type=bool))
         self.directories_first.toggled.connect(self.refresh)
         toolbar.addAction(self.directories_first)
+        header = self.table.horizontalHeader()
+        header.setSectionsClickable(True)
+        header.setSortIndicatorShown(True)
+        header.sectionClicked.connect(self.sort_by_column)
         toolbar.addWidget(QLabel(" 图标 "))
         self.icon_slider = QSlider(Qt.Orientation.Horizontal)
         self.icon_slider.setRange(24, 128)
@@ -908,6 +917,17 @@ class MainWindow(QMainWindow):
         if hasattr(self, "changes_dock"):
             self.changes_dock.setEnabled(not busy)
 
+    def sort_by_column(self, column):
+        if self.task or not 0 <= column < self.sort_combo.count():
+            return
+        descending = (
+            not self.descending.isChecked() if column == self.sort_combo.currentIndex() else False
+        )
+        with QSignalBlocker(self.sort_combo), QSignalBlocker(self.descending):
+            self.sort_combo.setCurrentIndex(column)
+            self.descending.setChecked(descending)
+        self.refresh()
+
     def refresh(self, *_, focus_browser=True):
         if self.task or not hasattr(self, "sort_combo"):
             return
@@ -943,14 +963,23 @@ class MainWindow(QMainWindow):
                 ]
                 location = self.current_location()
         sort = self.sort_combo.currentIndex()
+        pending_tokens = self.session.pending_tokens if self.session else set()
+        self.table.horizontalHeader().setSortIndicator(
+            sort,
+            Qt.SortOrder.DescendingOrder
+            if self.descending.isChecked()
+            else Qt.SortOrder.AscendingOrder,
+        )
 
         def key(row):
             if sort == 1:
-                return (row.kind, Path(row.name).suffix.casefold(), row.name.casefold())
+                return (BrowserModel.type_label(row).casefold(), row.name.casefold())
             if sort == 2:
                 return (row.entry.size if row.entry else 0, row.name.casefold())
             if sort == 3:
                 return (row.entry.mtime if row.entry else 0, row.name.casefold())
+            if sort == 4:
+                return (bool(row.entry and row.entry.token in pending_tokens), row.name.casefold())
             return row.name.casefold()
 
         rows.sort(key=key, reverse=self.descending.isChecked())
@@ -959,7 +988,7 @@ class MainWindow(QMainWindow):
         if not location.is_root:
             parent = location.parent
             rows.insert(0, BrowserRow("..", parent.domain or "", parent.path, "parent"))
-        self.model.set_rows(rows, self.session.pending_tokens if self.session else ())
+        self.model.set_rows(rows, pending_tokens)
         self._rendered_sort = (
             sort,
             self.descending.isChecked(),
