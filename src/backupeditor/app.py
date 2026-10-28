@@ -63,6 +63,7 @@ from PySide6.QtWidgets import (
 from . import __version__
 from .backup import BackupSession, Entry, detect_backups, digest, load_plist, stale_workspaces
 from .codec import BackupError, Cancelled
+from .navigation import Location, split_domain
 
 INTERNAL_MIME = "application/x-backupeditor-entries"
 
@@ -192,6 +193,7 @@ class BrowserModel(QAbstractTableModel):
             if index.column() == 1:
                 return {
                     "domain": "备份 Domain",
+                    "group": "Domain 类别",
                     "parent": "上层目录",
                     "directory": "文件夹",
                     "file": Path(row.name).suffix.lstrip(".").upper() or "文件",
@@ -211,7 +213,11 @@ class BrowserModel(QAbstractTableModel):
             if index.column() == 4:
                 return "已暂挂" if entry and entry.token in self.pending_tokens else ""
         if role == Qt.ItemDataRole.DecorationRole and index.column() == 0:
-            icon = "folder" if row.kind in ("domain", "parent", "directory") else "text-x-generic"
+            icon = (
+                "folder"
+                if row.kind in ("group", "domain", "parent", "directory")
+                else "text-x-generic"
+            )
             if row.kind == "parent":
                 icon = "go-up"
             return QIcon.fromTheme(
@@ -223,6 +229,8 @@ class BrowserModel(QAbstractTableModel):
                 ),
             )
         if role == Qt.ItemDataRole.ToolTipRole:
+            if row.kind == "group":
+                return f"{row.name} 类别（虚拟目录）"
             return f"{row.domain}/{row.path}" + (
                 "\n修改在保存前只暂挂于当前会话"
                 if entry and entry.token in self.pending_tokens
@@ -264,6 +272,11 @@ class BrowserInteraction:
             event.ignore()
 
     def dragMoveEvent(self, event):
+        if self.controller.session:
+            domain, _ = self.controller.drop_location(self.indexAt(event.position().toPoint()))
+            if domain is None:
+                event.ignore()
+                return
         self.dragEnterEvent(event)
 
     def dropEvent(self, event):
@@ -334,6 +347,7 @@ class MainWindow(QMainWindow):
         self.session = None
         self.domain = None
         self.path = ""
+        self.domain_group = None
         self.task = None
         self.progress_dialog = None
         self.opened: dict[str, OpenedFile] = {}
@@ -533,6 +547,17 @@ class MainWindow(QMainWindow):
     def active_view(self):
         return self.stack.currentWidget()
 
+    def current_location(self):
+        if self.domain is not None:
+            return Location(self.domain, self.path)
+        return Location(group=self.domain_group)
+
+    def navigate(self, location):
+        if self.task:
+            return
+        self.domain, self.path, self.domain_group = location.domain, location.path, location.group
+        self.refresh()
+
     def selected_rows(self):
         selection = self.active_view().selectionModel()
         indices = (
@@ -568,7 +593,7 @@ class MainWindow(QMainWindow):
         self.discard_action.setEnabled(not busy and bool(session and session.dirty))
         self.undo_action.setEnabled(not busy and bool(session and session.undo_stack))
         self.redo_action.setEnabled(not busy and bool(session and session.redo_stack))
-        self.up_action.setEnabled(not busy and self.domain is not None)
+        self.up_action.setEnabled(not busy and not self.current_location().is_root)
         self.stack.setEnabled(not busy)
         self.sort_combo.setEnabled(not busy) if hasattr(self, "sort_combo") else None
         if hasattr(self, "descending"):
@@ -580,10 +605,21 @@ class MainWindow(QMainWindow):
     def refresh(self, *_):
         if self.task or not hasattr(self, "sort_combo"):
             return
+        location = self.current_location()
         rows = []
         if self.session:
             if self.domain is None:
-                rows = [BrowserRow(d, d, "", "domain") for d in self.session.domains()]
+                groups = set()
+                for domain in self.session.domains():
+                    group, identifier = split_domain(domain)
+                    if location.group:
+                        if group == location.group:
+                            rows.append(BrowserRow(identifier, domain, "", "domain"))
+                    elif group:
+                        groups.add(group)
+                    else:
+                        rows.append(BrowserRow(domain, domain, "", "domain"))
+                rows.extend(BrowserRow(group, "", "", "group") for group in groups)
             else:
                 if not self.session.at(self.domain, self.path):
                     self.path = ""
@@ -591,6 +627,7 @@ class MainWindow(QMainWindow):
                     BrowserRow(e.name, e.domain, e.path, e.kind, e)
                     for e in self.session.children(self.domain, self.path)
                 ]
+                location = self.current_location()
         sort = self.sort_combo.currentIndex()
 
         def key(row):
@@ -604,14 +641,12 @@ class MainWindow(QMainWindow):
 
         rows.sort(key=key, reverse=self.descending.isChecked())
         if self.directories_first.isChecked():
-            rows.sort(key=lambda row: row.kind not in ("domain", "directory"))
-        if self.domain is not None:
-            parent = self.path.rpartition("/")[0]
-            rows.insert(0, BrowserRow("..", self.domain if self.path else "", parent, "parent"))
+            rows.sort(key=lambda row: row.kind not in ("group", "domain", "directory"))
+        if not location.is_root:
+            parent = location.parent
+            rows.insert(0, BrowserRow("..", parent.domain or "", parent.path, "parent"))
         self.model.set_rows(rows, self.session.pending_tokens if self.session else ())
-        self.location.setText(
-            "/" + (self.domain + ("/" + self.path if self.path else "") if self.domain else "")
-        )
+        self.location.setText(location.address)
         self.changes_list.clear()
         if self.session:
             for title, details in self.session.change_details:
@@ -623,7 +658,7 @@ class MainWindow(QMainWindow):
             self.setWindowTitle(f"{'* ' if dirty else ''}{device} — BackupEditor")
             self.statusBar().showMessage(
                 f"{device} · {'加密' if self.session.encrypted else '未加密'} · "
-                f"{len(rows) - (1 if self.domain else 0)} 个项目 · "
+                f"{len(rows) - (0 if location.is_root else 1)} 个项目 · "
                 f"{len(self.session.changes)} 项暂挂操作"
             )
             if dirty:
@@ -653,9 +688,10 @@ class MainWindow(QMainWindow):
         row = self.model.rows[index.row()]
         if row.kind == "parent":
             self.up()
+        elif row.kind == "group":
+            self.navigate(Location(group=row.name))
         elif row.kind in ("domain", "directory"):
-            self.domain, self.path = row.domain, row.path
-            self.refresh()
+            self.navigate(Location(row.domain, row.path))
         elif row.kind == "file":
             self.open_file()
 
@@ -665,30 +701,23 @@ class MainWindow(QMainWindow):
             self.activate(self.model.index(self.model.rows.index(rows[0]), 0))
 
     def up(self):
-        if self.domain is None:
+        if self.current_location().is_root:
             return
-        if self.path:
-            self.path = self.path.rpartition("/")[0]
-        else:
-            self.domain = None
-        self.refresh()
+        self.navigate(self.current_location().parent)
 
     def go_location(self):
         if not self.session:
             return
-        text = self.location.text().strip("/")
-        if not text:
-            self.domain, self.path = None, ""
-        else:
-            domain, _, path = text.partition("/")
-            entry = self.session.at(domain, path)
-            if not entry or entry.kind != "directory":
-                message(
-                    self, "目录不存在", "请输入有效的 /Domain/目录 路径", QMessageBox.Icon.Warning
-                )
-                return
-            self.domain, self.path = domain, path
-        self.refresh()
+        try:
+            location = Location.from_address(self.location.text(), self.session.domains())
+            if location.domain:
+                entry = self.session.at(location.domain, location.path)
+                if not entry or entry.kind != "directory":
+                    raise BackupError("目录不存在")
+        except BackupError as exc:
+            message(self, "目录不存在", str(exc), QMessageBox.Icon.Warning)
+            return
+        self.navigate(location)
 
     def run_task(
         self, title, function, callback=None, *, silent=False, on_error=None, on_done=None
@@ -812,8 +841,7 @@ class MainWindow(QMainWindow):
             if self.session:
                 self.session.close()
             self.session = session
-            self.domain, self.path = None, ""
-            self.refresh()
+            self.navigate(Location())
 
         self.run_task(
             "读取备份",
@@ -1130,6 +1158,7 @@ class MainWindow(QMainWindow):
         self.update_actions()
         menu = QMenu(self)
         if index.isValid() and self.model.rows[index.row()].kind in (
+            "group",
             "domain",
             "directory",
             "parent",
@@ -1150,7 +1179,10 @@ class MainWindow(QMainWindow):
             if row.kind in ("domain", "directory"):
                 domain, parent = row.domain, row.path
             elif row.kind == "parent":
-                domain, parent = (row.domain or None), row.path
+                parent_location = self.current_location().parent
+                domain, parent = parent_location.domain, parent_location.path
+            elif row.kind == "group":
+                domain, parent = None, ""
         return domain, parent
 
     def handle_drop(self, mime, index):
