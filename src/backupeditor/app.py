@@ -10,6 +10,7 @@ import sys
 import threading
 import time
 import uuid
+import weakref
 from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
@@ -59,7 +60,7 @@ from PySide6.QtWidgets import (
 
 from . import __version__
 from .backup import BackupSession, Entry, detect_backups, digest, load_plist, stale_workspaces
-from .codec import BackupError, Cancelled
+from .codec import CHUNK, BackupError, Cancelled, check_cancel
 from .dialogs import FixedDialog as QDialog
 from .dialogs import FixedFileDialog as QFileDialog
 from .dialogs import FixedInputDialog as QInputDialog
@@ -394,6 +395,7 @@ class OpenedHex:
     source_digest: bytes
     observed_digest: bytes
     revision: tuple
+    detached: bool = False
 
 
 class MainWindow(QMainWindow):
@@ -1670,6 +1672,8 @@ class MainWindow(QMainWindow):
         self.run_task("读取十六进制快照", prepare, opened, on_done=cleanup)
 
     def reload_hex(self, record, *, automatic=False):
+        if record.detached:
+            return
         if self.task or not self.session or record.viewer.task or record.viewer._closing:
             return
         session = self.session
@@ -1726,7 +1730,7 @@ class MainWindow(QMainWindow):
 
     def check_hex_viewers(self):
         for record in list(self.hex_viewers.values()):
-            if record.viewer.task or record.viewer._closing:
+            if record.detached or record.viewer.task or record.viewer._closing:
                 continue
             try:
                 entry = self.session.get(record.token)
@@ -1743,6 +1747,85 @@ class MainWindow(QMainWindow):
                 self.reload_hex(record, automatic=True)
                 return True
         return False
+
+    def open_data_hex(self, data, identity, label, *, owner=None):
+        if self.task or not self.session:
+            self.statusBar().showMessage("备份操作进行中，请稍后再查看 Data。")
+            return
+        session = self.session
+        path = session.workspace / "hex-viewer" / uuid.uuid4().hex / "data.bin"
+        retained = False
+        owner_ref = weakref.ref(owner) if owner is not None else lambda: None
+
+        def prepare(progress, cancel):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            fingerprint = hashlib.sha256()
+            with path.open("wb") as stream:
+                view = memoryview(data)
+                for offset in range(0, len(view), CHUNK):
+                    check_cancel(cancel)
+                    block = view[offset : offset + CHUNK]
+                    fingerprint.update(block)
+                    stream.write(block)
+            check_cancel(cancel)
+            return fingerprint.digest()
+
+        def opened(fingerprint):
+            nonlocal retained
+            token = f"plist-data:{identity}:{fingerprint.hex()}"
+            if token in self.hex_viewers:
+                viewer = self.hex_viewers[token].viewer
+                viewer.name = label
+                viewer.setWindowTitle(f"{label} — 十六进制查看器（只读）")
+                viewer.showNormal()
+                viewer.raise_()
+                viewer.activateWindow()
+                viewer.table.setFocus()
+                return
+            viewer = HexViewer(path, label, self)
+            viewer.reload_button.hide()
+            viewer.status.setText("plist Data 的只读快照；重新从 plist 打开可查看更新后的内容。")
+            record = OpenedHex(token, viewer, path, fingerprint, fingerprint, (), detached=True)
+            self.hex_viewers[token] = record
+            retained = True
+
+            def closed(_):
+                self.hex_viewers.pop(token, None)
+                shutil.rmtree(path.parent, ignore_errors=True)
+                if not viewer._skip_prompt:
+                    target = owner_ref()
+                    if target is not None and any(
+                        r.editor is target for r in self.plist_editors.values()
+                    ):
+
+                        def restore():
+                            if (
+                                any(r.editor is target for r in self.plist_editors.values())
+                                and target.isVisible()
+                                and not target.isMinimized()
+                                and not QApplication.activeModalWidget()
+                                and QApplication.activeWindow() in (None, self, viewer, target)
+                            ):
+                                target.activateWindow()
+                                (
+                                    target.tree
+                                    if target.pages.currentIndex() == 0
+                                    else target.xml.code
+                                ).setFocus()
+
+                        QTimer.singleShot(0, restore)
+                    else:
+                        self.restore_browser_after_editor(session, viewer)
+                viewer.deleteLater()
+
+            viewer.finished.connect(closed)
+            viewer.show()
+
+        def cleanup():
+            if not retained:
+                shutil.rmtree(path.parent, ignore_errors=True)
+
+        self.run_task("读取 Data 十六进制快照", prepare, opened, on_done=cleanup)
 
     def reload_database(self, record, *, automatic=False):
         if self.task or not self.session or record.viewer.task or record.viewer._closing:
@@ -1880,6 +1963,11 @@ class MainWindow(QMainWindow):
                 return True
 
             editor = PlistEditor(document, name, stage, self)
+            editor.data_hex_requested.connect(
+                lambda data, identity, label: self.open_data_hex(
+                    data, identity, label, owner=editor
+                )
+            )
             record = OpenedPlist(
                 token, editor, directory, fingerprint, fingerprint, self.plist_revision(token)
             )

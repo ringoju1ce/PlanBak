@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import math
 import plistlib
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -375,11 +376,13 @@ class ValueDialog(FixedDialog):
 
 class PlistEditor(FixedDialog):
     contents_changed = Signal()
+    data_hex_requested = Signal(object, str, str)
 
     def __init__(self, document, name, save_callback, parent=None):
         super().__init__(parent)
         self.document, self.name, self.save_callback = document, name, save_callback
         self._skip_prompt = False
+        self._data_identity = uuid.uuid4().hex
         self._busy = False
         self._available = True
         self._conflict = False
@@ -395,6 +398,7 @@ class PlistEditor(FixedDialog):
             ("添加", self.add_node, "add_button"),
             ("编辑", self.edit_node, "edit_button"),
             ("删除", self.delete_node, "delete_button"),
+            ("以十六进制查看", self.view_data_hex, "hex_button"),
             ("导入 Data…", self.import_data, "import_button"),
             ("导出 Data…", self.export_data, "export_button"),
             ("XML 编辑器", lambda: self.switch_mode(1), "xml_button"),
@@ -599,11 +603,17 @@ class PlistEditor(FixedDialog):
         delete = menu.addAction("删除")
         edit.setEnabled(len(self.tree.selectedItems()) == 1)
         delete.setEnabled(bool(self.deletion_roots()))
+        view_hex = None
+        node = self.selected_node()
+        if node and node.kind == "Data":
+            view_hex = menu.addAction("以十六进制查看")
         chosen = menu.exec(self.tree.viewport().mapToGlobal(point))
         if chosen == edit and edit.isEnabled():
             self.edit_node()
         elif chosen == delete and delete.isEnabled():
             self.delete_node()
+        elif view_hex is not None and chosen == view_hex:
+            self.view_data_hex()
 
     def make_item(self, node, label, parent=None):
         item = QTreeWidgetItem([label, node.kind, node.preview[:160].replace("\n", " ↵ ")])
@@ -665,6 +675,7 @@ class PlistEditor(FixedDialog):
         self.delete_button.setEnabled(bool(self.deletion_roots()))
         self.import_button.setEnabled(bool(node and node.kind == "Data"))
         self.export_button.setEnabled(bool(node and node.kind == "Data"))
+        self.hex_button.setEnabled(bool(node and node.kind == "Data" and not self._busy))
         self.save_button.setEnabled(self.dirty and not self._busy and self._available)
         self.setWindowTitle(
             f"{'* ' if self.dirty else ''}{self.name} — plist 编辑器 ({'二进制' if self.document.format == plistlib.FMT_BINARY else 'XML'})"
@@ -797,6 +808,14 @@ class PlistEditor(FixedDialog):
                 Path(path).write_bytes(node.value)
             except OSError as exc:
                 self.show_error(exc)
+
+    def view_data_hex(self):
+        node = self.selected_node()
+        if node and node.kind == "Data" and not self._busy:
+            label = self.tree.currentItem().text(0)
+            self.data_hex_requested.emit(
+                node.value, f"{self._data_identity}:{id(node)}", f"{self.name} — Data {label}"
+            )
 
     def show_error(self, exc):
         box = FixedMessageBox(
