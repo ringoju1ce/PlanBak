@@ -71,6 +71,8 @@ from .pane_focus import BrowserPaneFocus
 from .pending_view import PendingChangesModel
 from .plist_editor import PlistDocument, PlistEditor
 from .sidebar import DirectoryTree
+from .sqlite_database import DatabaseSnapshot, companions, is_sqlite, prepare_snapshot
+from .sqlite_viewer import SQLiteViewer
 
 INTERNAL_MIME = "application/x-backupeditor-entries"
 
@@ -375,6 +377,14 @@ class OpenedPlist:
     revision: tuple
 
 
+@dataclass
+class OpenedDatabase:
+    token: str
+    viewer: SQLiteViewer
+    snapshot: DatabaseSnapshot
+    revision: tuple
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -393,6 +403,8 @@ class MainWindow(QMainWindow):
         self.progress_dialog = None
         self.opened: dict[str, OpenedFile] = {}
         self.plist_editors = {}
+        self.database_viewers = {}
+        self._database_closing = False
         self.force_close = False
         self._exit_requested = False
         self.setWindowTitle("BackupEditor")
@@ -1105,6 +1117,9 @@ class MainWindow(QMainWindow):
     def confirm_leave(self, continuation, *, exiting=False):
         if self.task:
             return
+        if self.database_viewers:
+            self.close_database_viewers(lambda: self.confirm_leave(continuation, exiting=exiting))
+            return
         for record in list(self.plist_editors.values()):
             if not record.editor.close():
                 return
@@ -1486,6 +1501,13 @@ class MainWindow(QMainWindow):
         if len(rows) != 1 or rows[0].kind != "file":
             return
         token = rows[0].entry.token
+        if token in self.database_viewers:
+            viewer = self.database_viewers[token].viewer
+            viewer.showNormal()
+            viewer.raise_()
+            viewer.activateWindow()
+            viewer.table.setFocus()
+            return
         if token in self.plist_editors:
             editor = self.plist_editors[token].editor
             editor.showNormal()
@@ -1504,10 +1526,39 @@ class MainWindow(QMainWindow):
         target = self.session.workspace / "opened" / uuid.uuid4().hex / rows[0].name
 
         def prepare(progress, cancel):
-            self.session.extract_file(token, target, cancel=cancel)
-            return digest(target, cancel=cancel)
+            try:
+                self.session.extract_file(token, target, cancel=cancel)
+                if not external and is_sqlite(target):
+                    directory = self.session.workspace / "sqlite-viewer" / uuid.uuid4().hex
+                    return prepare_snapshot(
+                        self.session, token, directory, cancel=cancel, source=target
+                    )
+                if not external and target.name.endswith(("-wal", "-shm", "-journal")):
+                    raise BackupError("这是数据库的配套文件，请打开对应的主文件。")
+                if not external and target.suffix.lower() in {
+                    ".db",
+                    ".sqlite",
+                    ".sqlite3",
+                    ".sqlitedb",
+                    ".db3",
+                    ".realm",
+                    ".mdb",
+                    ".ldb",
+                }:
+                    raise BackupError(
+                        "内置查看器只支持标准 SQLite；此文件可能使用其他格式或应用自身的加密。"
+                        "可通过右键菜单选择“使用系统应用打开”，或导出项目。"
+                    )
+                return digest(target, cancel=cancel)
+            except Exception:
+                shutil.rmtree(target.parent, ignore_errors=True)
+                raise
 
         def opened(fingerprint):
+            if isinstance(fingerprint, DatabaseSnapshot):
+                shutil.rmtree(target.parent, ignore_errors=True)
+                self.show_database(token, fingerprint)
+                return
             self.opened[token] = OpenedFile(token, target, fingerprint, self.file_stamp(target))
             self.watcher.addPath(str(target))
             self.watcher.addPath(str(target.parent))
@@ -1520,6 +1571,120 @@ class MainWindow(QMainWindow):
                 )
 
         self.run_task("导出并打开文件", prepare, opened)
+
+    def database_revision(self, token):
+        return tuple(
+            (entry.token, self.plist_revision(entry.token))
+            for entry in companions(self.session, token)
+        )
+
+    def show_database(self, token, snapshot):
+        session = self.session
+        viewer = SQLiteViewer(snapshot, session.get(token).name, self)
+        record = OpenedDatabase(token, viewer, snapshot, self.database_revision(token))
+        self.database_viewers[token] = record
+        viewer.reload_requested.connect(lambda: self.reload_database(record))
+
+        def closed(_):
+            self.database_viewers.pop(token, None)
+            shutil.rmtree(record.snapshot.directory, ignore_errors=True)
+            if not viewer._skip_prompt:
+                self.restore_browser_after_editor(session, viewer)
+            viewer.deleteLater()
+
+        viewer.finished.connect(closed)
+        self.panes.activate(self.active_view(), focus=True)
+        viewer.show()
+
+    def close_database_viewers(self, after):
+        if self._database_closing:
+            return
+        self._database_closing = True
+
+        def closed(_):
+            if not self.database_viewers:
+                self._database_closing = False
+                QTimer.singleShot(0, after)
+
+        for record in list(self.database_viewers.values()):
+            record.viewer._skip_prompt = True
+            record.viewer.finished.connect(closed)
+            record.viewer.reject()
+
+    def reload_database(self, record, *, automatic=False):
+        if self.task or not self.session or record.viewer.task or record.viewer._closing:
+            return
+        session = self.session
+        try:
+            revision = self.database_revision(record.token)
+        except BackupError:
+            record.viewer.set_source_state(available=False)
+            return
+        directory = session.workspace / "sqlite-viewer" / uuid.uuid4().hex
+
+        def loaded(snapshot):
+            if record.token not in self.database_viewers:
+                shutil.rmtree(snapshot.directory, ignore_errors=True)
+                return
+            record.revision = revision
+            changed = snapshot.fingerprint != record.snapshot.fingerprint
+            record.viewer.set_source_state(stale=changed)
+            accept = not automatic
+            if automatic and changed:
+                accept = (
+                    QMessageBox.question(
+                        record.viewer,
+                        "数据库已更改",
+                        "源数据库的内容已更改，是否重新加载更新版本？",
+                        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                        QMessageBox.StandardButton.No,
+                    )
+                    == QMessageBox.StandardButton.Yes
+                )
+            if not accept or record.viewer.task or record.viewer._closing:
+                shutil.rmtree(snapshot.directory, ignore_errors=True)
+                return
+            previous = record.snapshot
+            record.snapshot = snapshot
+            record.viewer.replace_snapshot(snapshot, session.get(record.token).name)
+            shutil.rmtree(previous.directory, ignore_errors=True)
+
+        def failed(exc):
+            record.revision = revision
+            if record.token in self.database_viewers:
+                record.viewer.set_source_state(stale=True)
+                record.viewer.status.setText(f"无法重新加载数据库：{exc}")
+
+        self.run_task(
+            "读取数据库快照",
+            lambda progress, cancel: prepare_snapshot(
+                session, record.token, directory, cancel=cancel
+            ),
+            loaded,
+            silent=automatic,
+            on_error=failed,
+        )
+
+    def check_database_viewers(self):
+        for record in list(self.database_viewers.values()):
+            if record.viewer.task or record.viewer._closing:
+                continue
+            try:
+                entry = self.session.get(record.token)
+                revision = self.database_revision(record.token)
+            except BackupError:
+                record.viewer.set_source_state(available=False)
+                continue
+            if record.viewer.name != entry.name:
+                record.viewer.name = entry.name
+                record.viewer.setWindowTitle(f"{entry.name} — SQLite 查看器（只读）")
+            if not record.viewer.available:
+                record.viewer.set_source_state(stale=record.viewer.stale)
+                record.viewer.status.setText("源文件已恢复可用。")
+            if revision != record.revision:
+                self.reload_database(record, automatic=True)
+                return True
+        return False
 
     def plist_revision(self, token):
         entry = self.session.get(token)
@@ -1736,6 +1901,8 @@ class MainWindow(QMainWindow):
             return
         if self.check_plist_editors():
             return
+        if self.check_database_viewers():
+            return
         for record in list(self.opened.values()):
             stamp = self.file_stamp(record.path)
             if stamp == record.stamp:
@@ -1864,11 +2031,7 @@ class MainWindow(QMainWindow):
             action.triggered.connect(lambda: self.activate(index))
         menu.addActions([self.open_action, self.extract_action])
         rows = self.selected_rows()
-        if (
-            len(rows) == 1
-            and rows[0].kind == "file"
-            and Path(rows[0].name).suffix.lower() == ".plist"
-        ):
+        if len(rows) == 1 and rows[0].kind == "file":
             external = menu.addAction("使用系统应用打开")
             external.setEnabled(not self.task)
             external.triggered.connect(lambda: self.open_file(external=True))
@@ -1966,6 +2129,10 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         if self.force_close:
+            if self.database_viewers:
+                event.ignore()
+                self.close_database_viewers(self.close)
+                return
             self.panes.stopped = True
             for record in list(self.plist_editors.values()):
                 record.editor.discard_and_close()
