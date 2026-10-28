@@ -2,43 +2,101 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QEvent, QSize, Qt, QTimer
+from PySide6.QtCore import QEvent, QSize, Qt, Signal
+from PySide6.QtGui import QPainter, QPalette
 from PySide6.QtWidgets import (
     QDialog,
     QFileDialog,
+    QHBoxLayout,
     QInputDialog,
     QLabel,
     QLayout,
     QLineEdit,
     QMessageBox,
-    QProgressDialog,
+    QProgressBar,
+    QPushButton,
+    QSizePolicy,
+    QToolButton,
+    QVBoxLayout,
+    QWidget,
 )
 
 
+class DialogTitleBar(QWidget):
+    """Dialog-only chrome: one close button and native window dragging."""
+
+    def __init__(self, dialog):
+        super().__init__(dialog)
+        self.setObjectName("dialogTitleBar")
+        self.setAutoFillBackground(True)
+        palette = self.palette()
+        palette.setColor(QPalette.ColorRole.Window, palette.color(QPalette.ColorRole.Base))
+        self.setPalette(palette)
+        self.setFixedHeight(max(36, self.fontMetrics().height() + 14))
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(6, 3, 6, 3)
+        layout.addSpacing(28)
+        self.title = QLabel(dialog.windowTitle(), self)
+        self.title.setTextFormat(Qt.TextFormat.PlainText)
+        self.title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.title.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.title.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        font = self.title.font()
+        font.setBold(True)
+        self.title.setFont(font)
+        layout.addWidget(self.title, 1)
+        self.close_button = QToolButton(self)
+        self.close_button.setObjectName("dialogCloseButton")
+        self.close_button.setAccessibleName("关闭")
+        self.close_button.setToolTip("关闭")
+        self.close_button.setAutoRaise(True)
+        self.close_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.close_button.setFixedSize(28, 28)
+        self.close_button.setText("×")
+        close_font = self.close_button.font()
+        close_font.setPointSizeF(close_font.pointSizeF() + 4)
+        self.close_button.setFont(close_font)
+        self.close_button.setStyleSheet(
+            "QToolButton { border: none; border-radius: 12px; background: transparent; }"
+            "QToolButton:hover { background: palette(midlight); }"
+            "QToolButton:pressed { background: palette(mid); }"
+        )
+        self.close_button.clicked.connect(dialog.close)
+        layout.addWidget(self.close_button)
+        dialog.windowTitleChanged.connect(self.title.setText)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            handle = self.window().windowHandle()
+            if handle:
+                handle.startSystemMove()
+            event.accept()
+        else:
+            super().mousePressEvent(event)
+
+    def mouseDoubleClickEvent(self, event):
+        # A title double-click must not request maximize from the compositor.
+        event.accept()
+
+
 class FixedDialogMixin:
-    """Keep normal dialog geometry and exclude resize/maximize/fullscreen controls."""
+    """Own the dialog title bar; do not bounce native window-state changes."""
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._locked_size = None
-        self._normalizing_state = False
-        self._geometry_timer = QTimer(self)
-        self._geometry_timer.setSingleShot(True)
-        self._geometry_timer.timeout.connect(self._restore_geometry)
         unwanted = (
             Qt.WindowType.WindowMinMaxButtonsHint
             | Qt.WindowType.WindowFullscreenButtonHint
             | Qt.WindowType.WindowContextHelpButtonHint
         )
-        self.setWindowFlags(
-            (self.windowFlags() & ~unwanted)
-            | Qt.WindowType.CustomizeWindowHint
-            | Qt.WindowType.WindowTitleHint
-            | Qt.WindowType.WindowSystemMenuHint
-            | Qt.WindowType.WindowCloseButtonHint
-            | Qt.WindowType.MSWindowsFixedSizeDialogHint
-        )
+        self.setWindowFlags((self.windowFlags() & ~unwanted) | Qt.WindowType.FramelessWindowHint)
         self.setSizeGripEnabled(False)
+        # Qt's Adwaita Wayland decoration ignores per-window button hints.
+        # Reserve application-owned chrome only for dialogs, leaving the main
+        # window and desktop decoration settings alone.
+        self._title_bar = DialogTitleBar(self)
+        self.setContentsMargins(1, self._title_bar.height() + 1, 1, 1)
 
     def lock_size(self, size):
         screen = self.screen()
@@ -47,6 +105,12 @@ class FixedDialogMixin:
             size = size.boundedTo(available.expandedTo(QSize(240, 100)))
         self._locked_size = size
         self.setFixedSize(size)
+
+    def _position_title_bar(self):
+        bar = getattr(self, "_title_bar", None)
+        if bar:
+            bar.setGeometry(1, 1, max(0, self.width() - 2), bar.height())
+            bar.raise_()
 
     def showEvent(self, event):
         if self.layout():
@@ -60,6 +124,7 @@ class FixedDialogMixin:
             self.lock_size(size)
         super().showEvent(event)
         self.setFixedSize(self._locked_size)
+        self._position_title_bar()
 
     def event(self, event):
         result = super().event(event)
@@ -71,33 +136,22 @@ class FixedDialogMixin:
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        size = getattr(self, "_locked_size", None)
-        if size is not None and self.size() != size:
-            self._geometry_timer.start(0)
+        self._position_title_bar()
 
-    def _restore_geometry(self):
-        if self._locked_size is not None and self.isVisible():
-            self.setFixedSize(self._locked_size)
-            # Wayland can report a smaller client area after a window-state
-            # transition even when the min/max hints did not change.
-            if self.size() != self._locked_size:
-                self.resize(self._locked_size)
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        painter = QPainter(self)
+        painter.setPen(self.palette().color(QPalette.ColorRole.Mid))
+        painter.drawRect(self.rect().adjusted(0, 0, -1, -1))
 
-    def changeEvent(self, event):
-        if event.type() == QEvent.Type.WindowStateChange and not getattr(
-            self, "_normalizing_state", False
-        ):
-            forbidden = Qt.WindowState.WindowMaximized | Qt.WindowState.WindowFullScreen
-            if self.windowState() & forbidden:
-                self._normalizing_state = True
-                try:
-                    self.setWindowState(self.windowState() & ~forbidden)
-                    if self._locked_size is not None:
-                        self.setFixedSize(self._locked_size)
-                finally:
-                    self._normalizing_state = False
-                self._geometry_timer.start(0)
-        super().changeEvent(event)
+    def showMaximized(self):
+        # Decline application requests before any native state transition.
+        if not self.isVisible():
+            self.show()
+
+    def showFullScreen(self):
+        if not self.isVisible():
+            self.show()
 
 
 class FixedDialog(FixedDialogMixin, QDialog):
@@ -228,28 +282,57 @@ class FixedFileDialog(FixedDialogMixin, QFileDialog):
         return result
 
 
-class FixedProgressDialog(FixedDialogMixin, QProgressDialog):
-    """A stable horizontal progress window; long status text cannot resize it."""
+class FixedProgressDialog(FixedDialog):
+    """A compact progress dialog with a normal layout below its close-only title."""
+
+    canceled = Signal()
 
     def __init__(self, text, cancel_text, minimum, maximum, parent=None):
-        super().__init__("", cancel_text, minimum, maximum, parent)
+        super().__init__(parent)
         self.lock_size(QSize(640, 160))
-        self._full_label_text = text
+        self._cancel_requested = False
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 4, 10, 10)
+        layout.setSpacing(8)
         self._status_label = QLabel(self)
         self._status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._status_label.setTextFormat(Qt.TextFormat.PlainText)
         self._status_label.setWordWrap(False)
-        self._status_label.setMaximumWidth(self.width() - 40)
-        self.setLabel(self._status_label)
+        self._status_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        layout.addWidget(self._status_label, 1)
+        self._progress = QProgressBar(self)
+        self._progress.setRange(minimum, maximum)
+        layout.addWidget(self._progress)
+        buttons = QHBoxLayout()
+        buttons.addStretch(1)
+        self._cancel_button = QPushButton(cancel_text, self)
+        self._cancel_button.clicked.connect(self.close)
+        buttons.addWidget(self._cancel_button)
+        layout.addLayout(buttons)
         self.setLabelText(text)
 
+    def setRange(self, minimum, maximum):
+        self._progress.setRange(minimum, maximum)
+
+    def setValue(self, value):
+        self._progress.setValue(value)
+
+    def value(self):
+        return self._progress.value()
+
     def setLabelText(self, text):
-        self._full_label_text = text
-        if not hasattr(self, "_status_label"):
-            return super().setLabelText(text)
         single_line = " ".join(text.splitlines())
         elided = self._status_label.fontMetrics().elidedText(
             single_line, Qt.TextElideMode.ElideMiddle, max(1, self.width() - 48)
         )
         self._status_label.setToolTip(text)
-        super().setLabelText(elided)
+        self._status_label.setText(elided)
+
+    def reject(self):
+        self.close()
+
+    def closeEvent(self, event):
+        if not self._cancel_requested:
+            self._cancel_requested = True
+            self.canceled.emit()
+        event.accept()

@@ -64,7 +64,7 @@ from .dialogs import FixedDialog as QDialog
 from .dialogs import FixedFileDialog as QFileDialog
 from .dialogs import FixedInputDialog as QInputDialog
 from .dialogs import FixedMessageBox as QMessageBox
-from .dialogs import FixedProgressDialog as QProgressDialog
+from .dialogs import FixedProgressDialog
 from .navigation import Location, ViewState, split_domain
 
 INTERNAL_MIME = "application/x-backupeditor-entries"
@@ -916,12 +916,9 @@ class MainWindow(QMainWindow):
         self.task = job
         dialog = None
         if not silent:
-            dialog = QProgressDialog(title, "取消", 0, 0, self)
+            dialog = FixedProgressDialog(title, "取消", 0, 0, self)
             dialog.setWindowTitle("BackupEditor")
             dialog.setWindowModality(Qt.WindowModality.ApplicationModal)
-            dialog.setMinimumDuration(0)
-            dialog.setAutoClose(False)
-            dialog.setAutoReset(False)
             dialog.canceled.connect(job.cancelled.set)
 
             def progress(text, done, total):
