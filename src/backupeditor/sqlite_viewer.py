@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from html import escape
 
-from PySide6.QtCore import QAbstractTableModel, QModelIndex, QSize, Qt, Signal
+from PySide6.QtCore import QAbstractTableModel, QModelIndex, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QDialogButtonBox,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QPlainTextEdit,
     QPushButton,
@@ -23,6 +25,7 @@ from PySide6.QtWidgets import (
 )
 
 from .dialogs import FixedDialog
+from .pane_focus import BrowserPaneFocus
 from .sqlite_database import PAGE_SIZE, QueryResult, query, quote_identifier, schema
 from .viewer_tasks import ViewerTask
 
@@ -99,6 +102,7 @@ class SQLiteViewer(FixedDialog):
         self.sql = ""
         self.mode = "table"
         self.objects = []
+        self._pending_object = None
         self.setWindowTitle(f"{name} — SQLite 查看器（只读）")
         self.setModal(False)
         layout = QVBoxLayout(self)
@@ -116,6 +120,11 @@ class SQLiteViewer(FixedDialog):
         self.tree = QTreeWidget()
         self.tree.setHeaderLabels(["表与视图", "类型"])
         self.tree.setMinimumWidth(190)
+        self.tree.setRootIsDecorated(False)
+        self.tree.setTabKeyNavigation(False)
+        self.tree.header().setStretchLastSection(False)
+        self.tree.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.tree.header().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         self.tree.currentItemChanged.connect(self.choose_object)
         splitter.addWidget(self.tree)
         self.tabs = QTabWidget()
@@ -126,6 +135,7 @@ class SQLiteViewer(FixedDialog):
         self.table.setModel(self.model)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.table.setTabKeyNavigation(False)
         self.table.setAlternatingRowColors(True)
         self.table.setSortingEnabled(True)
         self.model.sort_requested.connect(self.sort_table)
@@ -172,12 +182,12 @@ class SQLiteViewer(FixedDialog):
         action.setShortcut(QKeySequence("Ctrl+Return"))
         action.triggered.connect(self.execute_sql)
         self.addAction(action)
+        self.panes = BrowserPaneFocus(self.tree, (self.table, self.structure, self.code), self)
         self.lock_size(QSize(1080, 720))
         self.load_schema()
 
     def update_controls(self):
         busy = self.task is not None
-        self.tree.setEnabled(not busy)
         self.execute_button.setEnabled(not busy)
         self.reload_button.setEnabled(not busy and self.available)
         self.cancel_button.setEnabled(busy)
@@ -199,6 +209,12 @@ class SQLiteViewer(FixedDialog):
                 task.deleteLater()
                 super(SQLiteViewer, self).reject()
                 return
+            if self._pending_object is not None:
+                self._pending_object = None
+                task.deleteLater()
+                self.choose_object(self.tree.currentItem())
+                self.update_controls()
+                return
             if task.cancelled.is_set():
                 self.status.setText("查询已取消")
             elif task.error:
@@ -212,6 +228,9 @@ class SQLiteViewer(FixedDialog):
         task.start()
 
     def load_schema(self):
+        self._pending_object = None
+        self.tree.clear()
+
         def loaded(objects):
             self.objects = objects
             self.tree.clear()
@@ -219,6 +238,7 @@ class SQLiteViewer(FixedDialog):
                 if kind in ("table", "view"):
                     item = QTreeWidgetItem([name, "表" if kind == "table" else "视图"])
                     item.setData(0, Qt.ItemDataRole.UserRole, name)
+                    item.setToolTip(0, "<qt><pre>" + escape(name) + "</pre></qt>")
                     self.tree.addTopLevelItem(item)
             self.status.setText(
                 self.snapshot.warning or "请选择表或视图；也可以执行只读 SQL 查询。"
@@ -229,7 +249,13 @@ class SQLiteViewer(FixedDialog):
         self.start(lambda cancel: schema(self.snapshot.path, cancel), loaded)
 
     def choose_object(self, item, previous=None):
-        if not item or self.task:
+        if not item:
+            return
+        if self.task:
+            # Keep the sidebar focused and responsive during rapid arrow-key
+            # navigation; only the latest selection needs a result page.
+            self._pending_object = item.data(0, Qt.ItemDataRole.UserRole)
+            self.task.cancelled.set()
             return
         self.object_name = item.data(0, Qt.ItemDataRole.UserRole)
         self.mode, self.offset, self.sort_column = "table", 0, None
@@ -306,6 +332,7 @@ class SQLiteViewer(FixedDialog):
             self.run_query()
 
     def cancel_query(self):
+        self._pending_object = None
         if self.task:
             self.task.cancelled.set()
 
@@ -324,7 +351,21 @@ class SQLiteViewer(FixedDialog):
         buttons.rejected.connect(dialog.reject)
         layout.addWidget(buttons)
         dialog.lock_size(QSize(760, 460))
+        self.panes.activate(self.table, focus=True)
         dialog.exec()
+
+        def restore():
+            if (
+                not self._closing
+                and self.isVisible()
+                and not QApplication.activeModalWidget()
+                and QApplication.activeWindow() in (None, self, dialog)
+            ):
+                self.activateWindow()
+                self.panes.activate(self.panes.preferred_view, focus=True, explicit=False)
+
+        QTimer.singleShot(0, restore)
+        dialog.deleteLater()
 
     def set_source_state(self, *, available=True, stale=False):
         self.available, self.stale = available, stale
@@ -343,6 +384,7 @@ class SQLiteViewer(FixedDialog):
         self.load_schema()
 
     def reject(self):
+        self.panes.stopped = True
         if self.task:
             self._closing = True
             self.cancel_query()
