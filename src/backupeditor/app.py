@@ -1581,10 +1581,13 @@ class MainWindow(QMainWindow):
             def closed(_):
                 self.plist_editors.pop(token, None)
                 shutil.rmtree(directory, ignore_errors=True)
+                if not editor._skip_prompt:
+                    self.restore_browser_after_editor(session, editor)
                 editor.deleteLater()
                 self.update_actions()
 
             editor.finished.connect(closed)
+            self.panes.activate(self.active_view(), focus=True)
             editor.show()
 
         def cleanup():
@@ -1592,6 +1595,40 @@ class MainWindow(QMainWindow):
                 shutil.rmtree(directory, ignore_errors=True)
 
         self.run_task("读取 plist", prepare, opened, on_done=cleanup)
+
+    def restore_browser_after_editor(self, session, editor):
+        def restore():
+            if (
+                self.force_close
+                or self._exit_requested
+                or self.task
+                or self.session is not session
+                or not self.isVisible()
+                or self.isMinimized()
+                or QApplication.activeModalWidget()
+                or QApplication.activePopupWidget()
+                or QApplication.activeWindow() not in (None, self, editor)
+            ):
+                return
+            focused = QApplication.focusWidget()
+            if (
+                focused
+                and self.isAncestorOf(focused)
+                and self.panes.view_for_widget(focused) is None
+            ):
+                return
+            tree = self.panes.preferred_view is self.directory_tree
+            view = (
+                self.directory_tree
+                if tree and not self.directory_tree.isHidden()
+                else self.active_view()
+            )
+            self.activateWindow()
+            self.panes.activate(view, focus=True, explicit=False)
+
+        # Let QDialog finish its native focus restoration before choosing the
+        # last intentional pane, rather than the parent's first tab-stop widget.
+        QTimer.singleShot(0, restore)
 
     def reload_plist(self, record, data):
         try:

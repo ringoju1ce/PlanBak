@@ -11,6 +11,7 @@ class BrowserPaneFocus(QObject):
         super().__init__(parent)
         self.tree, self.files = tree, tuple(files)
         self.owner = "files"
+        self.preferred_view = self.files[0]
         self.generation = 0
         self.stopped = False
         self.watched = {}
@@ -44,9 +45,11 @@ class BrowserPaneFocus(QObject):
             view.style().polish(view)
             view.viewport().update()
 
-    def activate(self, view, *, focus=False):
+    def activate(self, view, *, focus=False, explicit=True):
         if self.stopped:
             return
+        if explicit:
+            self.preferred_view = view
         owner = "tree" if view is self.tree else "files"
         if self.owner != owner:
             self.owner = owner
@@ -54,18 +57,24 @@ class BrowserPaneFocus(QObject):
             self.update_visuals()
             self.changed.emit()
         if focus:
-            view.setFocus(Qt.FocusReason.MouseFocusReason)
+            view.setFocus(
+                Qt.FocusReason.MouseFocusReason if explicit else Qt.FocusReason.OtherFocusReason
+            )
 
     def focus_changed(self, old, new):
         self.generation += 1
         if self.stopped:
             return
-        widget = new
+        view = self.view_for_widget(new)
+        if view is not None:
+            self.activate(view, explicit=False)
+
+    def view_for_widget(self, widget):
         while widget is not None:
             if widget is self.tree or widget in self.files:
-                self.activate(widget)
-                break
+                return widget
             widget = widget.parentWidget()
+        return None
 
     def eventFilter(self, watched, event):
         if not self.stopped and watched in self.watched:
@@ -75,5 +84,11 @@ class BrowserPaneFocus(QObject):
                 # giving its view keyboard focus. A click must choose both.
                 self.activate(self.watched[watched], focus=True)
             elif event.type() == QEvent.Type.FocusIn:
-                self.activate(self.watched[watched])
+                explicit = event.reason() in (
+                    Qt.FocusReason.MouseFocusReason,
+                    Qt.FocusReason.TabFocusReason,
+                    Qt.FocusReason.BacktabFocusReason,
+                    Qt.FocusReason.ShortcutFocusReason,
+                )
+                self.activate(self.watched[watched], explicit=explicit)
         return super().eventFilter(watched, event)
