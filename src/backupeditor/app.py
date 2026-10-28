@@ -66,6 +66,7 @@ from .dialogs import FixedFileDialog as QFileDialog
 from .dialogs import FixedInputDialog as QInputDialog
 from .dialogs import FixedMessageBox as QMessageBox
 from .dialogs import FixedProgressDialog
+from .icons import ApplicationIcons
 from .navigation import Location, ViewState, split_domain
 from .sidebar import DirectoryTree
 
@@ -169,6 +170,7 @@ class BrowserModel(QAbstractTableModel):
         self.rows = []
         self.visible_count = 0
         self.pending_tokens = set()
+        self.application_icons = ApplicationIcons()
 
     def set_rows(self, rows, pending_tokens=()):
         self.beginResetModel()
@@ -229,6 +231,10 @@ class BrowserModel(QAbstractTableModel):
             if index.column() == 4:
                 return "已暂挂" if entry and entry.token in self.pending_tokens else ""
         if role == Qt.ItemDataRole.DecorationRole and index.column() == 0:
+            if row.kind == "domain":
+                application_icon = self.application_icons.for_directory(row.domain, row.path)
+                if application_icon is not None:
+                    return application_icon
             icon = (
                 "folder"
                 if row.kind in ("group", "domain", "parent", "directory")
@@ -420,6 +426,7 @@ class MainWindow(QMainWindow):
 
     def _create_sidebar(self):
         self.directory_tree = DirectoryTree(self)
+        self.directory_tree.directory_model.application_icons = self.model.application_icons
         self._sidebar_width = max(
             140, min(480, self.settings.value("sidebar_width", 240, type=int))
         )
@@ -665,6 +672,7 @@ class MainWindow(QMainWindow):
         self.refresh(focus_browser=focus_browser)
 
     def clear_navigation_state(self):
+        self.model.application_icons.set_session(None)
         self._view_states.clear()
         self._latest_view_states.clear()
         self._displayed_location = None
@@ -847,6 +855,7 @@ class MainWindow(QMainWindow):
             self._navigation_session = session_id
         else:
             self.remember_view_state()
+        self.model.application_icons.set_session(self.session)
         location = self.current_location()
         navigating = location != self._displayed_location
         rows = []

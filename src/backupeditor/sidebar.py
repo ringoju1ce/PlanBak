@@ -10,6 +10,7 @@ from PySide6.QtWidgets import QAbstractItemView, QApplication, QStyle, QTreeView
 
 from .backup import Entry
 from .codec import BackupError
+from .icons import ApplicationIcons
 from .navigation import Location, split_domain
 
 
@@ -33,10 +34,12 @@ class DirectoryTreeModel(QAbstractItemModel):
         self.root = None
         self.domains = []
         self.suspended = False
+        self.application_icons = ApplicationIcons()
 
     def set_session(self, session):
         self.beginResetModel()
         self.session = session
+        self.application_icons.set_session(session)
         self.signature = session.signature if session else None
         self.domains = session.domains() if session else []
         self.root = DirectoryNode("备份", Location(), ("root",)) if session else None
@@ -79,6 +82,11 @@ class DirectoryTreeModel(QAbstractItemModel):
         if role == Qt.ItemDataRole.ToolTipRole:
             return node.location.address
         if role == Qt.ItemDataRole.DecorationRole:
+            application_icon = self.application_icons.for_directory(
+                node.location.domain, node.location.path
+            )
+            if application_icon is not None:
+                return application_icon
             return QIcon.fromTheme(
                 "folder", QApplication.style().standardIcon(QStyle.StandardPixmap.SP_DirIcon)
             )
