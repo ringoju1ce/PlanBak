@@ -1125,7 +1125,7 @@ class MainWindow(QMainWindow):
             QMessageBox.Icon.Question,
             "未保存更改",
             (
-                "退出前是否应用未保存的改动？\n应用会保存为新的备份副本；不应用则丢弃改动并清理临时文件。"
+                "是否应用未保存的改动？\n应用更改会保存为新的备份副本并留在应用中；不应用则丢弃改动、清理临时文件并退出。"
                 if exiting
                 else "是否应用当前改动并保存为新的备份副本？"
             ),
@@ -1134,14 +1134,15 @@ class MainWindow(QMainWindow):
             | QMessageBox.StandardButton.Cancel,
             self,
         )
-        box.button(QMessageBox.StandardButton.Save).setText("应用")
+        box.button(QMessageBox.StandardButton.Save).setText("应用更改")
         box.button(QMessageBox.StandardButton.Discard).setText("不应用")
         box.button(QMessageBox.StandardButton.Cancel).setText("取消")
         box.setDefaultButton(QMessageBox.StandardButton.Cancel)
         result = box.exec()
         if result == QMessageBox.StandardButton.Save:
+            after_save = None if exiting else continuation
             if not external:
-                self.save(after=continuation, quiet=exiting)
+                self.save(after=after_save, quiet=exiting)
                 return
 
             def stage_external(progress, cancel):
@@ -1168,7 +1169,7 @@ class MainWindow(QMainWindow):
                         QMessageBox.Icon.Warning,
                     )
                     return
-                self.save(after=continuation, quiet=exiting)
+                self.save(after=after_save, quiet=exiting)
 
             self.run_task("应用外部编辑", stage_external, staged)
         elif result == QMessageBox.StandardButton.Discard:
