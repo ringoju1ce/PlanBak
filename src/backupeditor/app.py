@@ -9,7 +9,7 @@ import sys
 import threading
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 
@@ -18,6 +18,8 @@ from PySide6.QtCore import (
     QByteArray,
     QEventLoop,
     QFileSystemWatcher,
+    QItemSelection,
+    QItemSelectionModel,
     QMimeData,
     QModelIndex,
     QPoint,
@@ -63,7 +65,7 @@ from PySide6.QtWidgets import (
 from . import __version__
 from .backup import BackupSession, Entry, detect_backups, digest, load_plist, stale_workspaces
 from .codec import BackupError, Cancelled
-from .navigation import Location, split_domain
+from .navigation import Location, ViewState, split_domain
 
 INTERNAL_MIME = "application/x-backupeditor-entries"
 
@@ -143,6 +145,18 @@ class BrowserRow:
     path: str
     kind: str
     entry: Entry | None = None
+
+    @property
+    def identity(self):
+        if self.entry:
+            return ("entry", self.entry.token)
+        if self.kind == "group":
+            return ("group", self.name)
+        if self.kind == "domain":
+            return ("domain", self.domain)
+        if self.kind == "parent":
+            return ("parent",)
+        return ("path", self.domain, self.path)
 
 
 class BrowserModel(QAbstractTableModel):
@@ -348,6 +362,12 @@ class MainWindow(QMainWindow):
         self.domain = None
         self.path = ""
         self.domain_group = None
+        self._navigation_session = None
+        self._displayed_location = None
+        self._view_states = {}
+        self._latest_view_states = {}
+        self._restore_generation = 0
+        self._rendered_sort = ()
         self.task = None
         self.progress_dialog = None
         self.opened: dict[str, OpenedFile] = {}
@@ -370,6 +390,9 @@ class MainWindow(QMainWindow):
         self.grid.setResizeMode(QListView.ResizeMode.Adjust)
         self.grid.setMovement(QListView.Movement.Static)
         self.grid.setWordWrap(True)
+        for view in (self.table, self.grid):
+            view.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+            view.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         self.table.setup_interaction(self)
         self.grid.setup_interaction(self)
         self.stack = QStackedWidget()
@@ -558,6 +581,128 @@ class MainWindow(QMainWindow):
         self.domain, self.path, self.domain_group = location.domain, location.path, location.group
         self.refresh()
 
+    def clear_navigation_state(self):
+        self._view_states.clear()
+        self._latest_view_states.clear()
+        self._displayed_location = None
+        self._navigation_session = None
+        self._restore_generation += 1
+
+    def view_layout(self):
+        view = self.active_view()
+        return (
+            self.stack.currentIndex(),
+            self._rendered_sort,
+            view.iconSize().width(),
+            view.iconSize().height(),
+            view.viewport().width(),
+            view.viewport().height(),
+        )
+
+    def remember_view_state(self):
+        if self._displayed_location is None or not self.model.rows:
+            return None
+        view = self.active_view()
+        selection = view.selectionModel()
+        current = selection.currentIndex()
+        anchor = QModelIndex()
+        # Grid cell margins do not necessarily hit an item at (0, 0).
+        for y in range(0, view.viewport().height(), 8):
+            for x in range(0, view.viewport().width(), 16):
+                anchor = view.indexAt(QPoint(x, y))
+                if anchor.isValid():
+                    break
+            if anchor.isValid():
+                break
+        state = ViewState(
+            selected=tuple(row.identity for row in self.selected_rows()),
+            current=self.model.rows[current.row()].identity if current.isValid() else None,
+            current_row=current.row(),
+            anchor=self.model.rows[anchor.row()].identity if anchor.isValid() else None,
+            anchor_row=anchor.row(),
+            anchor_offset=view.visualRect(anchor).top() if anchor.isValid() else 0,
+            vertical=view.verticalScrollBar().value(),
+            horizontal=view.horizontalScrollBar().value(),
+            loaded=self.model.rowCount(),
+            layout=self.view_layout(),
+            had_focus=view.hasFocus() or view.viewport().hasFocus(),
+        )
+        self._view_states[self._displayed_location, self.stack.currentIndex()] = state
+        self._latest_view_states[self._displayed_location] = state
+        return state
+
+    def restore_view_state(self, state, *, focus=False, ensure_current=False):
+        self._restore_generation += 1
+        generation = self._restore_generation
+        location = self._displayed_location
+        view = self.active_view()
+        if state is None:
+            view.clearSelection()
+            view.selectionModel().setCurrentIndex(
+                QModelIndex(), QItemSelectionModel.SelectionFlag.NoUpdate
+            )
+            view.verticalScrollBar().setValue(0)
+            view.horizontalScrollBar().setValue(0)
+            if focus:
+                view.setFocus(Qt.FocusReason.OtherFocusReason)
+            return
+        positions = {row.identity: i for i, row in enumerate(self.model.rows)}
+        count = len(self.model.rows)
+        current_row = positions.get(state.current, -1)
+        if current_row < 0 and state.current is not None and count:
+            current_row = min(max(state.current_row, 0), count - 1)
+            if self.model.rows[current_row].kind == "parent" and count > 1:
+                current_row = 1
+        anchor_row = positions.get(state.anchor, -1)
+        if anchor_row < 0 and count:
+            anchor_row = min(max(state.anchor_row, 0), count - 1)
+        selected = [positions[key] for key in state.selected if key in positions]
+        required = min(
+            count, max([state.loaded, current_row + 1, anchor_row + 1] + [i + 1 for i in selected])
+        )
+        while self.model.rowCount() < required and self.model.canFetchMore(QModelIndex()):
+            self.model.fetchMore(QModelIndex())
+        selection = QItemSelection()
+        for row in selected:
+            selection.select(
+                self.model.index(row, 0), self.model.index(row, self.model.columnCount() - 1)
+            )
+        view.selectionModel().select(
+            selection,
+            QItemSelectionModel.SelectionFlag.ClearAndSelect
+            | QItemSelectionModel.SelectionFlag.Rows,
+        )
+        current = self.model.index(current_row, 0) if current_row >= 0 else QModelIndex()
+        view.selectionModel().setCurrentIndex(current, QItemSelectionModel.SelectionFlag.NoUpdate)
+
+        def apply_scroll():
+            if (
+                generation != self._restore_generation
+                or location != self._displayed_location
+                or view is not self.active_view()
+            ):
+                return
+            view.doItemsLayout()
+            same_layout = state.layout == self.view_layout()
+            if same_layout and positions.get(state.anchor) == state.anchor_row:
+                view.verticalScrollBar().setValue(state.vertical)
+            elif anchor_row >= 0:
+                anchor = self.model.index(anchor_row, 0)
+                view.scrollTo(anchor, QAbstractItemView.ScrollHint.PositionAtTop)
+                view.verticalScrollBar().setValue(
+                    view.verticalScrollBar().value() - state.anchor_offset
+                )
+            if current.isValid() and (focus or ensure_current or not same_layout):
+                if not view.viewport().rect().intersects(view.visualRect(current)):
+                    view.scrollTo(current, QAbstractItemView.ScrollHint.EnsureVisible)
+            view.horizontalScrollBar().setValue(state.horizontal)
+            if focus or state.had_focus:
+                view.setFocus(Qt.FocusReason.OtherFocusReason)
+
+        apply_scroll()
+        # Qt may schedule another icon-grid layout after a model reset or resize.
+        QTimer.singleShot(0, apply_scroll)
+
     def selected_rows(self):
         selection = self.active_view().selectionModel()
         indices = (
@@ -605,7 +750,14 @@ class MainWindow(QMainWindow):
     def refresh(self, *_):
         if self.task or not hasattr(self, "sort_combo"):
             return
+        session_id = self.session.session_id if self.session else None
+        if session_id != self._navigation_session:
+            self.clear_navigation_state()
+            self._navigation_session = session_id
+        else:
+            self.remember_view_state()
         location = self.current_location()
+        navigating = location != self._displayed_location
         rows = []
         if self.session:
             if self.domain is None:
@@ -646,7 +798,25 @@ class MainWindow(QMainWindow):
             parent = location.parent
             rows.insert(0, BrowserRow("..", parent.domain or "", parent.path, "parent"))
         self.model.set_rows(rows, self.session.pending_tokens if self.session else ())
+        self._rendered_sort = (
+            sort,
+            self.descending.isChecked(),
+            self.directories_first.isChecked(),
+        )
+        self._displayed_location = location
         self.location.setText(location.address)
+        cached = self._view_states.get((location, self.stack.currentIndex()))
+        latest = self._latest_view_states.get(location)
+        state = cached or latest
+        if latest:
+            state = replace(
+                state,
+                selected=latest.selected,
+                current=latest.current,
+                current_row=latest.current_row,
+                had_focus=latest.had_focus,
+            )
+        self.restore_view_state(state, focus=navigating)
         self.changes_list.clear()
         if self.session:
             for title, details in self.session.change_details:
@@ -670,22 +840,39 @@ class MainWindow(QMainWindow):
         self.update_actions()
 
     def set_view(self, grid):
+        outgoing = self.remember_view_state()
         self.stack.setCurrentIndex(1 if grid else 0)
         self.grid_action.setChecked(grid)
         self.list_action.setChecked(not grid)
         self.settings.setValue("grid", grid)
+        if outgoing:
+            cached = self._view_states.get((self._displayed_location, self.stack.currentIndex()))
+            state = replace(
+                cached or outgoing,
+                selected=outgoing.selected,
+                current=outgoing.current,
+                current_row=outgoing.current_row,
+                had_focus=outgoing.had_focus,
+            )
+            self.restore_view_state(state, ensure_current=True)
         self.update_actions()
 
     def set_icon_size(self, size):
+        state = self.remember_view_state()
         self.grid.setIconSize(QSize(size, size))
         self.grid.setGridSize(QSize(max(110, size + 44), size + 56))
         self.table.setIconSize(QSize(min(size, 48), min(size, 48)))
         self.table.verticalHeader().setDefaultSectionSize(min(size, 48) + 12)
+        if state:
+            self.restore_view_state(state, ensure_current=True)
 
     def activate(self, index):
         if not index.isValid() or self.task:
             return
         row = self.model.rows[index.row()]
+        self.active_view().selectionModel().setCurrentIndex(
+            self.model.index(index.row(), 0), QItemSelectionModel.SelectionFlag.NoUpdate
+        )
         if row.kind == "parent":
             self.up()
         elif row.kind == "group":
@@ -1265,6 +1452,7 @@ class MainWindow(QMainWindow):
             self.settings.setValue("descending", self.descending.isChecked())
             self.settings.setValue("directories_first", self.directories_first.isChecked())
             self.clear_opened_files()
+            self.clear_navigation_state()
             if self.session:
                 self.session.close()
                 self.session = None

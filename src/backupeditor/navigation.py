@@ -1,4 +1,4 @@
-"""Virtual domain locations, independent of backup persistence."""
+"""Virtual backup locations and per-view navigation state, independent of persistence."""
 
 from __future__ import annotations
 
@@ -70,3 +70,21 @@ class Location:
                 safe_path(path)
                 return cls(domain, path)
         raise BackupError("请输入有效的 /Domain/目录 或 /Domain类别/标识/目录 路径")
+
+
+RowIdentity = tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ViewState:
+    selected: tuple[RowIdentity, ...]
+    current: RowIdentity | None
+    current_row: int
+    anchor: RowIdentity | None
+    anchor_row: int
+    anchor_offset: int
+    vertical: int
+    horizontal: int
+    loaded: int
+    layout: tuple
+    had_focus: bool
