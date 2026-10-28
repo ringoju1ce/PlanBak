@@ -47,7 +47,7 @@ def safe_path(path: str, *, root: bool = True) -> str:
     if not root and not path:
         raise BackupError("名称不能为空")
     if path and any(not p for p in path.split("/")):
-        raise BackupError("路径包含空的目录名称")
+        raise BackupError("路径包含空的文件夹名称")
     return path
 
 

@@ -70,10 +70,10 @@ def detect_backups(root: Path) -> list[Path]:
     if valid(root):
         return [root]
     if not root.is_dir():
-        raise BackupError("请选择存在的备份目录")
+        raise BackupError("请选择存在的备份文件夹")
     result = sorted(p for p in root.iterdir() if p.is_dir() and not p.is_symlink() and valid(p))
     if not result:
-        raise BackupError("目录内没有 iOS 备份（需要 Info.plist 和 Manifest.plist）")
+        raise BackupError("文件夹内没有 iOS 备份（需要 Info.plist 和 Manifest.plist）")
     return result
 
 
@@ -197,7 +197,7 @@ class BackupSession(SessionOverlay):
         for count, row in enumerate(cursor, 1):
             if count % 500 == 0:
                 check_cancel(cancel)
-                self._progress("建立目录索引…", count, total)
+                self._progress("建立文件夹索引…", count, total)
             fid, domain, path, flags, blob = row
             safe_path(path)
             if not domain or "/" in domain or "\\" in domain or "\x00" in domain:
@@ -308,7 +308,7 @@ class BackupSession(SessionOverlay):
         result = []
         for entry in entries:
             if not entry.path:
-                raise BackupError("不能修改 domain 根目录")
+                raise BackupError("不能修改此备份的顶层文件夹")
             if not any(
                 e.domain == entry.domain and entry.path.startswith(e.path + "/") for e in result
             ):
@@ -322,7 +322,7 @@ class BackupSession(SessionOverlay):
         if path.is_symlink() or not path.is_file():
             raise BackupError(f"缺少或无效的备份数据文件：{fid}")
         if path.resolve().parent not in (self.root, self.root / fid[:2]):
-            raise BackupError("备份数据路径包含目录链接")
+            raise BackupError("备份数据路径包含文件夹链接")
         return path
 
     def metadata(self, entry):
@@ -340,9 +340,9 @@ class BackupSession(SessionOverlay):
 
     def _extract_entry(self, entry, target: Path, *, cancel=None, use_cache=True):
         if entry.kind != "file":
-            raise BackupError("只能提取普通文件；链接和特殊条目仅供浏览")
+            raise BackupError("只能导出普通文件；链接和特殊条目仅供浏览")
         if target.is_symlink():
-            raise BackupError("提取目标不能是链接")
+            raise BackupError("导出目标不能是链接")
         cached = Path(entry.staged) if entry.staged else self.cache_path(entry.token)
         if use_cache and cached.is_file():
             if cached.resolve() != target.resolve():
@@ -369,7 +369,7 @@ class BackupSession(SessionOverlay):
         with self.lock:
             target = Path(target).resolve()
             if target == self.root or self.root in target.parents:
-                raise BackupError("不能提取到原备份目录内部")
+                raise BackupError("不能导出到原备份文件夹内部")
             target.mkdir(parents=True, exist_ok=True)
             roots = self.roots(tokens)
             exported = []
@@ -389,20 +389,20 @@ class BackupSession(SessionOverlay):
                 entries = self.subtree(root)
                 for i, entry in enumerate(sorted(entries, key=lambda e: len(e.path)), 1):
                     check_cancel(cancel)
-                    progress(f"提取：{entry.name}", i, len(entries))
+                    progress(f"导出：{entry.name}", i, len(entries))
                     suffix = entry.path[len(root.path) :].lstrip("/")
                     dest = output / suffix if suffix else output
                     if dest.is_symlink() or any(
                         p.is_symlink() for p in dest.parents if p != target
                     ):
-                        raise BackupError("提取目标路径包含链接")
+                        raise BackupError("导出目标路径包含链接")
                     if entry.kind == "directory":
                         if dest.exists() and not dest.is_dir():
-                            raise BackupError(f"目标不是目录：{dest.name}")
+                            raise BackupError(f"目标不是文件夹：{dest.name}")
                         dest.mkdir(parents=True, exist_ok=True)
                     elif entry.kind == "file":
                         if dest.exists() and not dest.is_file():
-                            raise BackupError(f"不能用文件替换目录：{dest.name}")
+                            raise BackupError(f"不能用文件替换文件夹：{dest.name}")
                         dest.parent.mkdir(parents=True, exist_ok=True)
                         temporary = dest.parent / (".backupeditor-extract-" + uuid.uuid4().hex)
                         try:
@@ -411,7 +411,7 @@ class BackupSession(SessionOverlay):
                         finally:
                             temporary.unlink(missing_ok=True)
                     else:
-                        raise BackupError(f"不能提取链接或特殊条目：{entry.name}")
+                        raise BackupError(f"不能导出链接或特殊条目：{entry.name}")
                 exported.append(output)
             return exported
 
@@ -441,7 +441,7 @@ class BackupSession(SessionOverlay):
             progress = progress or (lambda *a: None)
             destination = destination.expanduser().absolute()
             if destination.exists():
-                raise BackupError("保存目标已存在，请选择一个新的目录名称")
+                raise BackupError("保存目标已存在，请选择一个新的文件夹名称")
             destination = destination.parent.resolve() / destination.name
             if (
                 destination == self.root
@@ -464,7 +464,7 @@ class BackupSession(SessionOverlay):
                 files = [p for p in self.root.rglob("*") if p.is_file() or p.is_symlink()]
                 for n, source in enumerate(files, 1):
                     check_cancel(cancel)
-                    progress("复制备份到独立输出目录…", n, len(files))
+                    progress("复制备份到独立输出文件夹…", n, len(files))
                     copy_file(source, work / source.relative_to(self.root), cancel)
                 with contextlib.closing(sqlite3.connect(out_db_path)) as out_db, out_db:
                     self.db.backup(out_db)

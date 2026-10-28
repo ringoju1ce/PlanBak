@@ -212,9 +212,9 @@ class BrowserModel(QAbstractTableModel):
                 return row.name
             if index.column() == 1:
                 return {
-                    "domain": "备份 Domain",
-                    "group": "Domain 类别",
-                    "parent": "上层目录",
+                    "domain": "文件夹",
+                    "group": "文件夹",
+                    "parent": "上层文件夹",
                     "directory": "文件夹",
                     "file": Path(row.name).suffix.lstrip(".").upper() or "文件",
                     "special": "链接 / 特殊条目",
@@ -254,7 +254,7 @@ class BrowserModel(QAbstractTableModel):
             )
         if role == Qt.ItemDataRole.ToolTipRole:
             if row.kind == "group":
-                return f"{row.name} 类别（虚拟目录）"
+                return f"/{row.name}"
             return f"{row.domain}/{row.path}" + (
                 "\n修改在保存前只暂挂于当前会话"
                 if entry and entry.token in self.pending_tokens
@@ -527,18 +527,20 @@ class MainWindow(QMainWindow):
 
     def _create_actions(self):
         self.open_backup_action = self.action(
-            "选择备份目录…", self.open_backup, "Ctrl+O", "document-open"
+            "选择备份文件夹…", self.open_backup, "Ctrl+O", "document-open"
         )
         self.add_action = self.action("添加文件…", self.add_files, icon="list-add")
         self.add_folder_action = self.action("添加文件夹…", self.add_folder)
         self.new_folder_action = self.action("新建文件夹…", self.new_folder, "Ctrl+Shift+N")
         self.open_action = self.action("打开", self.open_file, icon="document-open")
-        self.extract_action = self.action("提取…", self.extract_selected, icon="document-save-as")
+        self.extract_action = self.action(
+            "导出项目…", self.extract_selected, icon="document-save-as"
+        )
         self.rename_action = self.action("重命名…", self.rename_selected, "F2")
         self.delete_action = self.action("删除", self.delete_selected, "Delete", "edit-delete")
-        self.save_action = self.action("保存更改…", self.save, "Ctrl+S", "document-save")
-        self.discard_action = self.action("放弃未保存更改", self.discard)
-        self.up_action = self.action("上层目录", self.up, "Backspace", "go-up")
+        self.save_action = self.action("保存备份副本…", self.save, "Ctrl+S", "document-save")
+        self.discard_action = self.action("放弃所有更改", self.discard)
+        self.up_action = self.action("上层文件夹", self.up, "Backspace", "go-up")
         select_all = self.action("全选", self.select_all, "Ctrl+A")
         self.select_all_action = select_all
         enter = self.action("打开 / 进入", self.activate_selection, "Return")
@@ -580,7 +582,7 @@ class MainWindow(QMainWindow):
             ]
         )
         view_menu = self.menuBar().addMenu("视图")
-        self.sidebar_action = QAction("目录树", self, checkable=True)
+        self.sidebar_action = QAction("文件夹树", self, checkable=True)
         self.sidebar_action.setShortcut(QKeySequence("F9"))
         self.sidebar_action.toggled.connect(self.toggle_sidebar)
         self.sidebar_action.setChecked(self.settings.value("sidebar_visible", True, type=bool))
@@ -653,16 +655,16 @@ class MainWindow(QMainWindow):
         self.addToolBar(navigation)
         navigation.addAction(self.up_action)
         self.location = QLineEdit("/")
-        self.location.setAccessibleName("Domain 与目录路径")
+        self.location.setAccessibleName("文件夹路径")
         self.location.returnPressed.connect(self.go_location)
         navigation.addWidget(self.location)
 
     def _create_changes(self):
-        self.changes_dock = QDockWidget("暂挂更改", self)
+        self.changes_dock = QDockWidget("更改列表", self)
         container = QWidget()
         layout = QVBoxLayout(container)
         self.changes_list = QListView()
-        self.changes_list.setAccessibleName("暂挂文件列表")
+        self.changes_list.setAccessibleName("更改列表")
         self.changes_list.setUniformItemSizes(True)
         self.changes_list.setTextElideMode(Qt.TextElideMode.ElideMiddle)
         self.changes_model = PendingChangesModel(self)
@@ -670,7 +672,7 @@ class MainWindow(QMainWindow):
         self.changes_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.changes_list.customContextMenuRequested.connect(self.pending_context_menu)
         layout.addWidget(self.changes_list)
-        discard = QPushButton("放弃未保存更改")
+        discard = QPushButton("放弃所有更改")
         discard.clicked.connect(self.discard)
         layout.addWidget(discard)
         self.changes_dock.setWidget(container)
@@ -962,14 +964,14 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(
                 f"{device} · {'加密' if self.session.encrypted else '未加密'} · "
                 f"{len(rows) - (0 if location.is_root else 1)} 个项目 · "
-                f"{len(self.session.changes)} 个暂挂文件/目录"
+                f"{len(self.session.changes)} 个已更改项目"
             )
             if dirty:
                 self.changes_dock.show()
             else:
                 self.changes_dock.hide()
         else:
-            self.statusBar().showMessage("从“文件 → 选择备份目录”打开 iOS 备份")
+            self.statusBar().showMessage("从“文件 → 选择备份文件夹”打开 iOS 备份")
         self.update_actions()
 
         QTimer.singleShot(0, self.check_plist_editors)
@@ -1037,9 +1039,9 @@ class MainWindow(QMainWindow):
             if location.domain:
                 entry = self.session.at(location.domain, location.path)
                 if not entry or entry.kind != "directory":
-                    raise BackupError("目录不存在")
+                    raise BackupError("文件夹不存在")
         except BackupError as exc:
-            message(self, "目录不存在", str(exc), QMessageBox.Icon.Warning)
+            message(self, "文件夹不存在", str(exc), QMessageBox.Icon.Warning)
             return
         self.navigate(location)
 
@@ -1125,17 +1127,17 @@ class MainWindow(QMainWindow):
             QMessageBox.Icon.Question,
             "未保存更改",
             (
-                "是否应用未保存的改动？\n应用更改会保存为新的备份副本并留在应用中；不应用则丢弃改动、清理临时文件并退出。"
+                "当前有未保存的更改。\n选择“保存备份副本”会创建新副本并留在应用中；选择“放弃更改”会清理临时文件并退出。"
                 if exiting
-                else "是否应用当前改动并保存为新的备份副本？"
+                else "是否将当前更改保存为新的备份副本？"
             ),
             QMessageBox.StandardButton.Save
             | QMessageBox.StandardButton.Discard
             | QMessageBox.StandardButton.Cancel,
             self,
         )
-        box.button(QMessageBox.StandardButton.Save).setText("应用更改")
-        box.button(QMessageBox.StandardButton.Discard).setText("不应用")
+        box.button(QMessageBox.StandardButton.Save).setText("保存备份副本")
+        box.button(QMessageBox.StandardButton.Discard).setText("放弃更改")
         box.button(QMessageBox.StandardButton.Cancel).setText("取消")
         box.setDefaultButton(QMessageBox.StandardButton.Cancel)
         result = box.exec()
@@ -1178,7 +1180,7 @@ class MainWindow(QMainWindow):
     def open_backup(self, *_):
         if self.task:
             return
-        path = QFileDialog.getExistingDirectory(self, "选择 iOS 备份目录")
+        path = QFileDialog.getExistingDirectory(self, "选择 iOS 备份文件夹")
         if path:
             self.confirm_leave(lambda: self.open_path(Path(path)))
 
@@ -1189,7 +1191,12 @@ class MainWindow(QMainWindow):
             candidates = detect_backups(Path(path))
             if len(candidates) > 1:
                 selected, ok = QInputDialog.getItem(
-                    self, "选择备份", "此目录包含多个备份：", [p.name for p in candidates], 0, False
+                    self,
+                    "选择备份",
+                    "此文件夹包含多个备份：",
+                    [p.name for p in candidates],
+                    0,
+                    False,
                 )
                 if not ok:
                     return
@@ -1231,12 +1238,12 @@ class MainWindow(QMainWindow):
         self.opened.clear()
 
     def add_files(self):
-        paths, _ = QFileDialog.getOpenFileNames(self, "添加文件到当前备份目录")
+        paths, _ = QFileDialog.getOpenFileNames(self, "添加文件到当前备份文件夹")
         if paths:
             self.import_paths(paths, self.domain, self.path)
 
     def add_folder(self):
-        path = QFileDialog.getExistingDirectory(self, "添加整个文件夹到当前备份目录")
+        path = QFileDialog.getExistingDirectory(self, "添加整个文件夹到当前备份文件夹")
         if path:
             self.import_paths([path], self.domain, self.path)
 
@@ -1258,7 +1265,7 @@ class MainWindow(QMainWindow):
 
     def import_paths(self, paths, domain, parent):
         if not self.session or domain is None:
-            message(self, "选择目标目录", "请先进入一个 domain 目录")
+            message(self, "选择目标文件夹", "请先进入可添加项目的文件夹")
             return
         conflict = any(
             self.session.at(domain, f"{parent}/{Path(p).name}".lstrip("/")) for p in paths
@@ -1348,17 +1355,19 @@ class MainWindow(QMainWindow):
         count = sum(len(self.session.subtree(e)) for e in self.session.roots(tokens))
         box = QMessageBox(
             QMessageBox.Icon.Question,
-            "暂挂删除",
+            "删除项目",
             "",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             self,
         )
         box.setTextFormat(Qt.TextFormat.PlainText)
-        box.setText(f"删除 {names[:250]}？\n共影响 {count} 个文件和目录。保存前可以撤销。")
+        box.setText(
+            f"删除 {names[:250]}？\n共影响 {count} 个文件和文件夹。保存备份副本前可以在更改列表中放弃此更改。"
+        )
         box.setDefaultButton(QMessageBox.StandardButton.No)
         if box.exec() == QMessageBox.StandardButton.Yes:
             self.run_task(
-                "暂挂删除",
+                "删除项目",
                 lambda progress, cancel: self.session.delete(tokens),
                 lambda _: self.refresh(focus_browser=focus_browser),
             )
@@ -1372,7 +1381,7 @@ class MainWindow(QMainWindow):
         self.changes_list.setCurrentIndex(index)
         token = index.data(Qt.ItemDataRole.UserRole)
         menu = QMenu(self)
-        revert = menu.addAction("撤销此暂挂")
+        revert = menu.addAction("放弃此更改")
         if menu.exec(self.changes_list.viewport().mapToGlobal(point)) == revert:
             self.revert_pending(token)
 
@@ -1402,8 +1411,8 @@ class MainWindow(QMainWindow):
             if dirty:
                 box = QMessageBox(
                     QMessageBox.Icon.Question,
-                    "撤销暂挂",
-                    "相关编辑副本中有未保存的修改。丢弃这些编辑并还原所选暂挂？",
+                    "放弃此更改",
+                    "相关编辑副本中有未保存的修改。丢弃这些编辑并放弃所选更改？",
                     QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel,
                     self,
                 )
@@ -1422,13 +1431,13 @@ class MainWindow(QMainWindow):
                     if str(record.path.parent) in self.watcher.directories():
                         self.watcher.removePath(str(record.path.parent))
             self.run_task(
-                "还原暂挂",
+                "放弃更改",
                 lambda progress, cancel: session.revert(plan, progress=progress, cancel=cancel),
                 lambda _: self.refresh_after_revert(directory.token if directory else None),
             )
 
         self.run_task(
-            "准备还原暂挂",
+            "准备放弃更改",
             lambda progress, cancel: session.plan_revert(token, cancel=cancel),
             prepared,
         )
@@ -1441,7 +1450,7 @@ class MainWindow(QMainWindow):
             and self.session.dirty
             and QMessageBox.question(
                 self,
-                "放弃未保存更改",
+                "放弃所有更改",
                 "恢复到最近一次保存后的会话状态？",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No,
@@ -1456,18 +1465,18 @@ class MainWindow(QMainWindow):
         tokens = self.selected_tokens()
         if not tokens:
             return
-        target = QFileDialog.getExistingDirectory(self, "提取到目录")
+        target = QFileDialog.getExistingDirectory(self, "导出到文件夹")
         if not target:
             return
         conflict = any((Path(target) / self.session.get(t).name).exists() for t in tokens)
         policy = self.collision_policy(exporting=True) if conflict else "error"
         if policy:
             self.run_task(
-                "提取文件",
+                "导出项目",
                 lambda progress, cancel: self.session.export(
                     tokens, Path(target), collision=policy, progress=progress, cancel=cancel
                 ),
-                lambda _: self.statusBar().showMessage(f"已提取到 {target}"),
+                lambda _: self.statusBar().showMessage(f"已导出到 {target}"),
             )
 
     def open_file(self, *, external=False):
@@ -1510,7 +1519,7 @@ class MainWindow(QMainWindow):
                     QMessageBox.Icon.Warning,
                 )
 
-        self.run_task("提取并打开文件", prepare, opened)
+        self.run_task("导出并打开文件", prepare, opened)
 
     def plist_revision(self, token):
         entry = self.session.get(token)
@@ -1804,7 +1813,7 @@ class MainWindow(QMainWindow):
             return
         suggested = str(self.session.root.parent / (self.session.root.name + "-edited"))
         target, _ = QFileDialog.getSaveFileName(
-            self, "保存为新的备份目录", suggested, "备份目录 (*)"
+            self, "保存为新的备份文件夹", suggested, "备份文件夹 (*)"
         )
         if not target:
             return
@@ -1851,7 +1860,7 @@ class MainWindow(QMainWindow):
             "directory",
             "parent",
         ):
-            action = menu.addAction("进入目录")
+            action = menu.addAction("进入文件夹")
             action.triggered.connect(lambda: self.activate(index))
         menu.addActions([self.open_action, self.extract_action])
         rows = self.selected_rows()
@@ -1892,13 +1901,13 @@ class MainWindow(QMainWindow):
                 return True
             return False
         if domain is None:
-            message(self, "选择目标目录", "请将项目拖入某个 domain 或其目录")
+            message(self, "选择目标文件夹", "请将项目拖入可添加项目的文件夹")
             return False
         if mime.hasFormat(INTERNAL_MIME):
             try:
                 content = json.loads(bytes(mime.data(INTERNAL_MIME)))
                 if content["session"] != self.session.session_id:
-                    raise BackupError("不支持从其他会话直接移动；请先提取文件再添加")
+                    raise BackupError("不支持从其他会话直接移动；请先导出文件再添加")
                 tokens = content["tokens"]
                 entries = self.session.roots(tokens)
                 conflict = any(
@@ -1997,7 +2006,7 @@ class MainWindow(QMainWindow):
         answer = QMessageBox.question(
             self,
             "旧的会话临时文件",
-            f"发现 {len(paths)} 个已结束会话的临时目录，可能包含尚未保存的编辑副本。\n"
+            f"发现 {len(paths)} 个已结束会话的临时文件夹，可能包含尚未保存的编辑副本。\n"
             "是否删除？选择“否”可保留它们以便手动恢复。",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
@@ -2019,7 +2028,7 @@ class MainWindow(QMainWindow):
 
 def main():
     parser = argparse.ArgumentParser(description="离线浏览与编辑 iOS 备份")
-    parser.add_argument("backup", nargs="?", type=Path, help="备份目录（可选）")
+    parser.add_argument("backup", nargs="?", type=Path, help="备份文件夹（可选）")
     args = parser.parse_args()
     app = QApplication(sys.argv[:1])
     app.setApplicationName("BackupEditor")

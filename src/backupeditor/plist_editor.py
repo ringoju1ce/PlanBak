@@ -429,7 +429,7 @@ class PlistEditor(FixedDialog):
         self.xml.tree_requested.connect(lambda: self.switch_mode(0))
         self.xml.save_requested.connect(self.save_document)
         layout.addWidget(self.pages, 1)
-        note = "保存会将修改暂挂到会话；主窗口“保存更改”才会生成备份副本。"
+        note = "保存会将修改暂挂到会话；主窗口“保存备份副本”才会生成备份副本。"
         if (
             isinstance(document.root.to_value(), dict)
             and document.root.to_value().get("$archiver") == "NSKeyedArchiver"
@@ -854,7 +854,7 @@ class PlistEditor(FixedDialog):
             answer = FixedMessageBox.question(
                 self,
                 "未保存的 plist 修改",
-                "是否将修改保存到暂挂会话？",
+                "是否保存修改并暂挂到当前会话？",
                 FixedMessageBox.StandardButton.Save
                 | FixedMessageBox.StandardButton.Discard
                 | FixedMessageBox.StandardButton.Cancel,

@@ -190,12 +190,12 @@ class Mutation:
                 self.install(token, None)
             labels = []
             if base is None and current:
-                labels = ["建立目录" if current.kind == "directory" else "添加"]
+                labels = ["建立文件夹" if current.kind == "directory" else "添加"]
             elif base and current is None:
-                labels = ["删除目录" if base.kind == "directory" else "删除"]
+                labels = ["删除文件夹" if base.kind == "directory" else "删除"]
             elif base and current:
                 if (base.domain, base.path) != (current.domain, current.path):
-                    labels.append("重命名目录" if current.kind == "directory" else "重命名")
+                    labels.append("重命名文件夹" if current.kind == "directory" else "重命名")
                 if current.staged:
                     labels.append("修改")
             if current:
@@ -225,7 +225,7 @@ class Mutation:
                 pending[token] = PendingChange(token, base, current, tuple(labels), location)
             else:
                 pending.pop(token, None)
-            session._change_progress("更新暂挂状态…", number, total)
+            session._change_progress("更新更改列表…", number, total)
         check_cancel(self.cancel)
         return pending
 
@@ -379,12 +379,12 @@ class SessionOverlay:
 
         safe_path(name, root=False)
         if "/" in name:
-            raise BackupError("名称不能包含目录分隔符")
+            raise BackupError("名称不能包含文件夹分隔符")
         with self.mutation() as work:
             directory = self.at(domain, parent)
             path = f"{parent}/{name}".lstrip("/")
             if not directory or directory.kind != "directory":
-                raise BackupError("目标目录不存在")
+                raise BackupError("目标文件夹不存在")
             if self.at(domain, path):
                 raise BackupError("该名称已存在")
             token = uuid.uuid4().hex
@@ -419,19 +419,19 @@ class SessionOverlay:
         with self.mutation() as work:
             destination = self.at(domain, parent)
             if not destination or destination.kind != "directory":
-                raise BackupError("目标目录不存在")
+                raise BackupError("目标文件夹不存在")
             roots = self.roots(tokens)
             if name is not None and len(roots) != 1:
                 raise BackupError("重命名只能选中一个项目")
             plans = []
             for root in roots:
                 if root.domain != domain:
-                    raise BackupError("目前只支持同一 domain 内移动")
+                    raise BackupError("目前只支持在同一个备份顶层文件夹内移动")
                 if root.kind == "directory" and beneath(parent, root.path):
-                    raise BackupError("不能移动到自身或子目录")
+                    raise BackupError("不能移动到自身或子文件夹")
                 basename = safe_path(name, root=False) if name is not None else root.name
                 if "/" in basename:
-                    raise BackupError("名称不能包含目录分隔符")
+                    raise BackupError("名称不能包含文件夹分隔符")
                 target = f"{parent}/{basename}".lstrip("/")
                 if target == root.path:
                     continue
@@ -447,7 +447,7 @@ class SessionOverlay:
                             number += 1
                     elif collision == "replace":
                         if root.path.startswith(target + "/"):
-                            raise BackupError("不能覆盖包含源项目的上层目录")
+                            raise BackupError("不能覆盖包含源项目的上层文件夹")
                         for entry in self.subtree(existing):
                             work.remove(entry.token)
                     else:
@@ -481,7 +481,7 @@ class SessionOverlay:
         with self.mutation(progress=progress, cancel=cancel) as work:
             target = self.at(domain, parent)
             if not target or target.kind != "directory":
-                raise BackupError("请先进入一个 domain 目录")
+                raise BackupError("请先进入可添加项目的文件夹")
             for source in map(Path, paths):
                 check_cancel(cancel)
                 if source.is_symlink() or not (source.is_file() or source.is_dir()):
@@ -648,11 +648,11 @@ class SessionOverlay:
                 existing = self.at(entry.domain, entry.parent)
                 if parent or (existing and existing.token not in updates):
                     if (parent or existing).kind != "directory":
-                        raise BackupError("还原目标的父路径不是目录")
+                        raise BackupError("还原目标的父路径不是文件夹")
                     continue
                 base_parent = self.baseline_at(entry.domain, entry.parent)
                 if not base_parent or self.find(base_parent.token):
-                    raise BackupError(f"无法还原父目录：{entry.parent}")
+                    raise BackupError(f"无法还原父文件夹：{entry.parent}")
                 updates[base_parent.token] = base_parent
                 planned_paths[(base_parent.domain, base_parent.path)] = base_parent
                 queue.append(base_parent)
@@ -661,14 +661,14 @@ class SessionOverlay:
                     occupant = self.at(entry.domain, entry.path)
                     if occupant and occupant.token != key and occupant.token not in updates:
                         raise BackupError(
-                            f"还原路径已被占用：{full_path(entry)}；请先处理该路径上的暂挂"
+                            f"还原路径已被占用：{full_path(entry)}；请先处理该路径上的更改"
                         )
             return RevertPlan(self.signature, updates, reset, locations)
 
     def revert(self, plan, *, progress=None, cancel=None):
         with self.mutation(progress=progress, cancel=cancel) as work:
             if plan.revision != self.signature:
-                raise BackupError("暂挂状态已变化，请重新选择要撤销的项目")
+                raise BackupError("更改列表已变化，请重新选择要放弃更改的项目")
             for key in plan.updates:
                 check_cancel(cancel)
                 work.remove(key)

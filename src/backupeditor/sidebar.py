@@ -42,7 +42,15 @@ class DirectoryTreeModel(QAbstractItemModel):
         self.application_icons.set_session(session)
         self.signature = session.signature if session else None
         self.domains = session.domains() if session else []
-        self.root = DirectoryNode("备份", Location(), ("root",)) if session else None
+        name = None
+        if session:
+            for key in ("Device Name", "Display Name"):
+                value = session.info.get(key)
+                if isinstance(value, str) and value.strip():
+                    name = value.strip()
+                    break
+        title = f"“{name}”的备份" if name else "备份"
+        self.root = DirectoryNode(title, Location(), ("root",)) if session else None
         self.endResetModel()
 
     def node(self, index):
@@ -214,7 +222,7 @@ class DirectoryTree(QTreeView):
         self.directory_model = DirectoryTreeModel(self)
         self.setModel(self.directory_model)
         self.setHeaderHidden(True)
-        self.setAccessibleName("备份目录树")
+        self.setAccessibleName("备份文件夹树")
         self.setUniformRowHeights(True)
         self.setIndentation(18)
         self.setIconSize(QSize(18, 18))
