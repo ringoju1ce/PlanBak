@@ -44,8 +44,6 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QListView,
-    QListWidget,
-    QListWidgetItem,
     QMainWindow,
     QMenu,
     QPushButton,
@@ -69,6 +67,7 @@ from .dialogs import FixedMessageBox as QMessageBox
 from .dialogs import FixedProgressDialog
 from .icons import ApplicationIcons
 from .navigation import Location, ViewState, split_domain
+from .pending_view import PendingChangesModel
 from .plist_editor import PlistDocument, PlistEditor
 from .sidebar import DirectoryTree
 
@@ -529,10 +528,6 @@ class MainWindow(QMainWindow):
         self.delete_action = self.action("删除", self.delete_selected, "Delete", "edit-delete")
         self.save_action = self.action("保存更改…", self.save, "Ctrl+S", "document-save")
         self.discard_action = self.action("放弃未保存更改", self.discard)
-        self.undo_action = self.action("撤销", lambda: self.history(False), "Ctrl+Z", "edit-undo")
-        self.redo_action = self.action(
-            "重做", lambda: self.history(True), "Ctrl+Shift+Z", "edit-redo"
-        )
         self.up_action = self.action("上层目录", self.up, "Backspace", "go-up")
         select_all = self.action("全选", self.select_all, "Ctrl+A")
         enter = self.action("打开 / 进入", self.activate_selection, "Return")
@@ -544,14 +539,12 @@ class MainWindow(QMainWindow):
             self.delete_action,
             self.rename_action,
             self.up_action,
-            self.undo_action,
-            self.redo_action,
         ):
             self.removeAction(action)
             action.setShortcutContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
             self.table.addAction(action)
             self.grid.addAction(action)
-        for action in (self.rename_action, self.delete_action, self.undo_action, self.redo_action):
+        for action in (self.rename_action, self.delete_action):
             self.directory_tree.addAction(action)
         file_menu = self.menuBar().addMenu("文件")
         file_menu.addActions(
@@ -569,8 +562,6 @@ class MainWindow(QMainWindow):
         edit_menu = self.menuBar().addMenu("编辑")
         edit_menu.addActions(
             [
-                self.undo_action,
-                self.redo_action,
                 select_all,
                 self.rename_action,
                 self.delete_action,
@@ -643,9 +634,7 @@ class MainWindow(QMainWindow):
         self.icon_slider.valueChanged.connect(self.set_icon_size)
         toolbar.addWidget(self.icon_slider)
         toolbar.addSeparator()
-        toolbar.addActions(
-            [self.extract_action, self.undo_action, self.redo_action, self.save_action]
-        )
+        toolbar.addActions([self.extract_action, self.save_action])
         self.set_icon_size(self.icon_slider.value())
         navigation = QToolBar("导航", self)
         navigation.setMovable(False)
@@ -661,7 +650,14 @@ class MainWindow(QMainWindow):
         self.changes_dock = QDockWidget("暂挂更改", self)
         container = QWidget()
         layout = QVBoxLayout(container)
-        self.changes_list = QListWidget()
+        self.changes_list = QListView()
+        self.changes_list.setAccessibleName("暂挂文件列表")
+        self.changes_list.setUniformItemSizes(True)
+        self.changes_list.setTextElideMode(Qt.TextElideMode.ElideMiddle)
+        self.changes_model = PendingChangesModel(self)
+        self.changes_list.setModel(self.changes_model)
+        self.changes_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.changes_list.customContextMenuRequested.connect(self.pending_context_menu)
         layout.addWidget(self.changes_list)
         discard = QPushButton("放弃未保存更改")
         discard.clicked.connect(self.discard)
@@ -859,8 +855,6 @@ class MainWindow(QMainWindow):
             )
         )
         self.discard_action.setEnabled(not busy and bool(session and session.dirty))
-        self.undo_action.setEnabled(not busy and bool(session and session.undo_stack))
-        self.redo_action.setEnabled(not busy and bool(session and session.redo_stack))
         self.up_action.setEnabled(not busy and not self.current_location().is_root)
         self.stack.setEnabled(not busy)
         self.sort_combo.setEnabled(not busy) if hasattr(self, "sort_combo") else None
@@ -945,19 +939,15 @@ class MainWindow(QMainWindow):
             state = replace(state, had_focus=False)
         self.restore_view_state(state, focus=navigating and focus_browser)
         self.directory_tree.sync(self.session, location)
-        self.changes_list.clear()
+        self.changes_model.set_changes(self.session.changes if self.session else ())
         if self.session:
-            for title, details in self.session.change_details:
-                item = QListWidgetItem(title)
-                item.setToolTip(details)
-                self.changes_list.addItem(item)
             device = self.session.info.get("Device Name", self.session.root.name)
             dirty = self.session.dirty
             self.setWindowTitle(f"{'* ' if dirty else ''}{device} — BackupEditor")
             self.statusBar().showMessage(
                 f"{device} · {'加密' if self.session.encrypted else '未加密'} · "
                 f"{len(rows) - (0 if location.is_root else 1)} 个项目 · "
-                f"{len(self.session.changes)} 项暂挂操作"
+                f"{len(self.session.changes)} 个暂挂文件/目录"
             )
             if dirty:
                 self.changes_dock.show()
@@ -1356,10 +1346,75 @@ class MainWindow(QMainWindow):
                 lambda _: self.refresh(focus_browser=focus_browser),
             )
 
-    def history(self, redo):
-        if self.session:
-            self.session.redo() if redo else self.session.undo()
-            self.refresh()
+    def pending_context_menu(self, point):
+        if self.task or not self.session:
+            return
+        index = self.changes_list.indexAt(point)
+        if not index.isValid():
+            return
+        self.changes_list.setCurrentIndex(index)
+        token = index.data(Qt.ItemDataRole.UserRole)
+        menu = QMenu(self)
+        revert = menu.addAction("撤销此暂挂")
+        if menu.exec(self.changes_list.viewport().mapToGlobal(point)) == revert:
+            self.revert_pending(token)
+
+    def refresh_after_revert(self, directory_token):
+        entry = self.session.find(directory_token) if directory_token else None
+        if entry:
+            self.domain, self.path, self.domain_group = entry.domain, entry.path, None
+        self.refresh()
+
+    def revert_pending(self, token=None):
+        if self.task or not self.session:
+            return
+        session = self.session
+        directory = session.at(self.domain, self.path) if self.domain else None
+
+        def prepared(plan):
+            if not plan.updates:
+                return
+            editors = [
+                record for key, record in self.plist_editors.items() if key in plan.reset_contents
+            ]
+            external = [record for key, record in self.opened.items() if key in plan.reset_contents]
+            dirty = any(record.editor.dirty for record in editors) or any(
+                record.unreviewed or self.file_stamp(record.path) != record.stamp
+                for record in external
+            )
+            if dirty:
+                box = QMessageBox(
+                    QMessageBox.Icon.Question,
+                    "撤销暂挂",
+                    "相关编辑副本中有未保存的修改。丢弃这些编辑并还原所选暂挂？",
+                    QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel,
+                    self,
+                )
+                box.button(QMessageBox.StandardButton.Discard).setText("丢弃编辑并还原")
+                box.button(QMessageBox.StandardButton.Cancel).setText("取消")
+                box.setDefaultButton(QMessageBox.StandardButton.Cancel)
+                if box.exec() != QMessageBox.StandardButton.Discard:
+                    return
+            for record in editors:
+                record.editor.discard_and_close()
+            for record in external:
+                self.opened.pop(record.token, None)
+                if str(record.path) in self.watcher.files():
+                    self.watcher.removePath(str(record.path))
+                if not any(r.path.parent == record.path.parent for r in self.opened.values()):
+                    if str(record.path.parent) in self.watcher.directories():
+                        self.watcher.removePath(str(record.path.parent))
+            self.run_task(
+                "还原暂挂",
+                lambda progress, cancel: session.revert(plan, progress=progress, cancel=cancel),
+                lambda _: self.refresh_after_revert(directory.token if directory else None),
+            )
+
+        self.run_task(
+            "准备还原暂挂",
+            lambda progress, cancel: session.plan_revert(token, cancel=cancel),
+            prepared,
+        )
 
     def discard(self):
         if self.task:
@@ -1376,12 +1431,7 @@ class MainWindow(QMainWindow):
             )
             == QMessageBox.StandardButton.Yes
         ):
-            session = self.session
-            self.run_task(
-                "放弃暂挂更改",
-                lambda progress, cancel: session.discard(progress=progress, cancel=cancel),
-                lambda _: self.refresh(),
-            )
+            self.revert_pending()
 
     def extract_selected(self):
         tokens = self.selected_tokens()
@@ -1453,10 +1503,10 @@ class MainWindow(QMainWindow):
     def open_plist(self, token, name):
         session = self.session
         directory = session.workspace / "plist-editor" / uuid.uuid4().hex
-        target = directory / name
 
         def prepare(progress, cancel):
-            session.extract_file(token, target, cancel=cancel)
+            directory.mkdir(parents=True, exist_ok=True)
+            target = session.cached_file(token, cancel=cancel)
             data = target.read_bytes()
             return PlistDocument(data), hashlib.sha256(data).digest()
 
@@ -1467,8 +1517,11 @@ class MainWindow(QMainWindow):
                 if self.task or self.session is not session:
                     raise BackupError("备份操作进行中，请稍后再保存")
                 latest = directory / "before-save.plist"
-                session.extract_file(token, latest)
-                current = latest.read_bytes()
+                try:
+                    session.extract_file(token, latest)
+                    current = latest.read_bytes()
+                finally:
+                    latest.unlink(missing_ok=True)
                 current_digest = hashlib.sha256(current).digest()
                 if current_digest != record.source_digest and current != data:
                     box = QMessageBox(
@@ -1493,8 +1546,7 @@ class MainWindow(QMainWindow):
                     if box.clickedButton() != overwrite:
                         return False
                 if current != data:
-                    target.write_bytes(data)
-                    session.stage_edit(token, target)
+                    session.stage_bytes(token, data)
                 record.source_digest = record.observed_digest = hashlib.sha256(data).digest()
                 record.revision = self.plist_revision(token)
                 editor.set_source_state()
@@ -1551,8 +1603,11 @@ class MainWindow(QMainWindow):
             session = self.session
 
             def read(progress, cancel, rec=record, path=target):
-                session.extract_file(rec.token, path, cancel=cancel)
-                return path.read_bytes()
+                try:
+                    session.extract_file(rec.token, path, cancel=cancel)
+                    return path.read_bytes()
+                finally:
+                    path.unlink(missing_ok=True)
 
             def checked(data, rec=record, version=revision):
                 if rec.token not in self.plist_editors:
@@ -1698,13 +1753,15 @@ class MainWindow(QMainWindow):
         if not target:
             return
 
+        source_root = self.session.root
+
         def saved(destination):
             self.refresh()
             if not quiet:
                 message(
                     self,
                     "保存完成",
-                    f"修改版备份已保存：\n{destination}\n\n原备份保留在：\n{self.session.root}",
+                    f"修改版备份已保存：\n{destination}\n\n原备份保留在：\n{source_root}",
                 )
             if after:
                 after()

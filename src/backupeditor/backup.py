@@ -14,7 +14,6 @@ import tempfile
 import threading
 import time
 import uuid
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
@@ -28,22 +27,9 @@ from .codec import (
     file_id,
     safe_path,
 )
+from .staging import Entry, SessionOverlay
 
 Progress = Callable[[str, int, int], None]
-COLUMNS = (
-    "token",
-    "original_id",
-    "domain",
-    "path",
-    "parent",
-    "name",
-    "kind",
-    "size",
-    "mtime",
-    "staged",
-    "changed",
-    "explicit",
-)
 
 
 def stale_workspaces():
@@ -135,27 +121,7 @@ def digest(path: Path, algorithm="sha256", cancel=None):
     return h.digest()
 
 
-@dataclass(frozen=True)
-class Entry:
-    token: str
-    original_id: str | None
-    domain: str
-    path: str
-    parent: str
-    name: str
-    kind: str
-    size: int
-    mtime: int
-    staged: str | None
-    changed: int
-    explicit: int
-
-    @classmethod
-    def row(cls, row):
-        return cls(*(row[c] for c in COLUMNS))
-
-
-class BackupSession:
+class BackupSession(SessionOverlay):
     def __init__(
         self, root: Path, password: str = "", *, progress: Progress | None = None, cancel=None
     ):
@@ -174,9 +140,7 @@ class BackupSession:
         self.db = None
         self.keybag = None
         self.manifest_key = None
-        self.undo_stack = []
-        self.redo_stack = []
-        self.saved_signature = ()
+        self._init_overlay()
         self.session_id = uuid.uuid4().hex
         self._progress = progress or (lambda *a: None)
         try:
@@ -225,17 +189,7 @@ class BackupSession:
         )
 
     def _index(self, cancel):
-        self.db.execute("""CREATE TABLE EditorEntries(
-            token TEXT PRIMARY KEY, original_id TEXT, domain TEXT NOT NULL,
-            path TEXT NOT NULL, parent TEXT NOT NULL, name TEXT NOT NULL,
-            kind TEXT NOT NULL, size INTEGER NOT NULL, mtime INTEGER NOT NULL,
-            staged TEXT, changed INTEGER NOT NULL, explicit INTEGER NOT NULL,
-            UNIQUE(domain,path))""")
-        self.db.execute("CREATE INDEX EditorParent ON EditorEntries(domain,parent)")
-        self.db.execute(
-            "CREATE INDEX EditorDirectories ON EditorEntries(domain,parent) WHERE kind='directory'"
-        )
-        self.db.execute("CREATE INDEX EditorOriginal ON EditorEntries(original_id)")
+        self.create_entry_table(self.db)
         total = self.db.execute("SELECT COUNT(*) FROM Files").fetchone()[0]
         parents = set()
         batch = []
@@ -285,45 +239,9 @@ class BackupSession:
                 (uuid.uuid4().hex, None, domain, path, parent, name, "directory", 0, 0, None, 0, 0),
             )
         self.db.commit()
-        self.db.execute("CREATE TABLE EditorBaseline AS SELECT * FROM EditorEntries")
+        self.create_baseline(self.db)
         self.db.commit()
         self._progress("清单已就绪", total, total)
-
-    @property
-    def dirty(self):
-        return self.signature != self.saved_signature
-
-    @property
-    def signature(self):
-        return tuple(c[0] for c in self.undo_stack)
-
-    @property
-    def changes(self):
-        return [c[1] for c in self.undo_stack]
-
-    @property
-    def pending_tokens(self):
-        return {row["token"] for command in self.undo_stack for row in command[2] + command[3]}
-
-    @property
-    def change_details(self):
-        result = []
-        for _, title, before, after in self.undo_stack:
-            old = {row["token"]: row for row in before}
-            new = {row["token"]: row for row in after}
-            details = []
-            for token in list(dict.fromkeys(list(old) + list(new)))[:50]:
-                a, b = old.get(token), new.get(token)
-                if a is None:
-                    details.append(f"添加 {b['domain']}/{b['path']}")
-                elif b is None:
-                    details.append(f"删除 {a['domain']}/{a['path']}")
-                elif a["path"] != b["path"]:
-                    details.append(f"{a['domain']}/{a['path']} → {b['path']}")
-                elif a["staged"] != b["staged"]:
-                    details.append(f"编辑 {b['domain']}/{b['path']}")
-            result.append((title, "\n".join(details)))
-        return result
 
     def domains(self):
         with self.lock:
@@ -397,278 +315,6 @@ class BackupSession:
                 result.append(entry)
         return result
 
-    def _record(self, title, before, after):
-        self.undo_stack.append((uuid.uuid4().hex, title, before, after))
-        self.redo_stack.clear()
-
-    def _restore(self, command, index):
-        tokens = {r["token"] for r in command[2] + command[3]}
-        with self.db:
-            self.db.executemany("DELETE FROM EditorEntries WHERE token=?", ((t,) for t in tokens))
-            self.db.executemany(
-                "INSERT INTO EditorEntries VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-                (tuple(r[c] for c in COLUMNS) for r in command[index]),
-            )
-
-    def undo(self):
-        with self.lock:
-            if self.undo_stack:
-                command = self.undo_stack.pop()
-                self._restore(command, 2)
-                self.redo_stack.append(command)
-
-    def redo(self):
-        with self.lock:
-            if self.redo_stack:
-                command = self.redo_stack.pop()
-                self._restore(command, 3)
-                self.undo_stack.append(command)
-
-    def discard(self, *, progress=None, cancel=None):
-        progress = progress or (lambda *args: None)
-        with self.lock:
-            # The earliest before-image is the saved state for each affected token.
-            # An after-only token was added since the baseline and must disappear.
-            original = {}
-            progress("收集需要还原的条目…", 0, 0)
-            for command in self.undo_stack:
-                check_cancel(cancel)
-                for row in command[2]:
-                    original.setdefault(row["token"], row)
-                for row in command[3]:
-                    original.setdefault(row["token"], None)
-            tokens = list(original)
-            rows = [row for row in original.values() if row is not None]
-            total = len(tokens) + len(rows)
-            check_cancel(cancel)
-            # One transaction makes cancellation/failure leave both the index and
-            # history intact. Delete all affected paths before restoring originals
-            # so moves, replacements and swaps cannot cause transient collisions.
-            with self.db:
-                for start in range(0, len(tokens), 1000):
-                    check_cancel(cancel)
-                    batch = tokens[start : start + 1000]
-                    self.db.executemany(
-                        "DELETE FROM EditorEntries WHERE token=?", ((token,) for token in batch)
-                    )
-                    progress("还原暂挂更改…", start + len(batch), total)
-                for start in range(0, len(rows), 1000):
-                    check_cancel(cancel)
-                    batch = rows[start : start + 1000]
-                    self.db.executemany(
-                        "INSERT INTO EditorEntries VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-                        (tuple(row[column] for column in COLUMNS) for row in batch),
-                    )
-                    progress("还原暂挂更改…", len(tokens) + start + len(batch), total)
-                check_cancel(cancel)
-            self.undo_stack.clear()
-            self.redo_stack.clear()
-            self.saved_signature = ()
-            progress("已放弃暂挂更改", total, total)
-
-    def new_directory(self, domain, parent, name):
-        safe_path(name, root=False)
-        if "/" in name:
-            raise BackupError("名称不能包含目录分隔符")
-        with self.lock, self.db:
-            directory = self.at(domain, parent)
-            path = f"{parent}/{name}".lstrip("/")
-            if not directory or directory.kind != "directory":
-                raise BackupError("目标目录不存在")
-            if self.at(domain, path):
-                raise BackupError("该名称已存在")
-            token = uuid.uuid4().hex
-            self.db.execute(
-                "INSERT INTO EditorEntries VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-                (
-                    token,
-                    None,
-                    domain,
-                    path,
-                    parent,
-                    name,
-                    "directory",
-                    0,
-                    int(time.time()),
-                    None,
-                    1,
-                    1,
-                ),
-            )
-            self._record(f"新建目录 {name}", [], [self.get(token).__dict__])
-
-    def delete(self, tokens):
-        with self.lock:
-            entries = self.roots(tokens)
-            affected = [e for root in entries for e in self.subtree(root)]
-            before = [e.__dict__ for e in affected]
-            with self.db:
-                self.db.executemany(
-                    "DELETE FROM EditorEntries WHERE token=?", ((e.token,) for e in affected)
-                )
-            self._record(f"删除 {len(entries)} 个项目", before, [])
-
-    def move(self, tokens, domain, parent, *, name=None, collision="error"):
-        safe_path(parent)
-        with self.lock:
-            destination = self.at(domain, parent)
-            if not destination or destination.kind != "directory":
-                raise BackupError("目标目录不存在")
-            roots = self.roots(tokens)
-            if name is not None and len(roots) != 1:
-                raise BackupError("重命名只能选中一个项目")
-            plans, all_entries, replaced = [], [], []
-            for root in roots:
-                if root.domain != domain:
-                    raise BackupError("目前只支持同一 domain 内移动")
-                if root.kind == "directory" and (
-                    parent == root.path or parent.startswith(root.path + "/")
-                ):
-                    raise BackupError("不能移动到自身或子目录")
-                basename = safe_path(name, root=False) if name is not None else root.name
-                if "/" in basename:
-                    raise BackupError("名称不能包含目录分隔符")
-                target = f"{parent}/{basename}".lstrip("/")
-                if target == root.path:
-                    continue
-                existing = self.at(domain, target)
-                if existing:
-                    if collision == "skip":
-                        continue
-                    if collision == "keep_both":
-                        base, n = target, 2
-                        while self.at(domain, target):
-                            stem, ext = os.path.splitext(base)
-                            target = f"{stem} ({n}){ext}"
-                            n += 1
-                    elif collision == "replace":
-                        if root.path.startswith(target + "/"):
-                            raise BackupError("不能覆盖包含源项目的上层目录")
-                        replaced.extend(self.subtree(existing))
-                    else:
-                        raise BackupError(f"目标已存在：{basename}")
-                for entry in self.subtree(root):
-                    new = target + entry.path[len(root.path) :]
-                    plans.append((entry.token, new))
-                    all_entries.append(entry)
-            before = [e.__dict__ for e in all_entries + replaced]
-            with self.db:
-                self.db.executemany(
-                    "DELETE FROM EditorEntries WHERE token=?", ((e.token,) for e in replaced)
-                )
-                for token, path in plans:
-                    par, _, base = path.rpartition("/")
-                    self.db.execute(
-                        "UPDATE EditorEntries SET path=?,parent=?,name=?,changed=1 WHERE token=?",
-                        (path, par, base, token),
-                    )
-            if plans:
-                self._record(
-                    f"重命名 {roots[0].name} → {name}"
-                    if name is not None
-                    else f"移动 {len(roots)} 个项目 → {domain}/{parent}",
-                    before,
-                    [self.get(t).__dict__ for t, _ in plans],
-                )
-
-    def _stage_copy(self, path, cancel=None):
-        target = self.workspace / "pending" / uuid.uuid4().hex
-        copy_file(path, target, cancel)
-        return target
-
-    def stage_edit(self, token, path: Path, cancel=None):
-        with self.lock:
-            entry = self.get(token)
-            if entry.kind != "file":
-                raise BackupError("只能编辑普通文件")
-            staged = self._stage_copy(path, cancel)
-            with self.db:
-                self.db.execute(
-                    "UPDATE EditorEntries SET staged=?,size=?,mtime=?,changed=1 WHERE token=?",
-                    (str(staged), staged.stat().st_size, int(time.time()), token),
-                )
-            self._record(f"编辑 {entry.name}", [entry.__dict__], [self.get(token).__dict__])
-
-    def import_paths(self, paths, domain, parent, *, collision="error", cancel=None, progress=None):
-        """Stage an atomic recursive import. External links/special files are rejected."""
-        with self.lock:
-            target = self.at(domain, parent)
-            if not target or target.kind != "directory":
-                raise BackupError("请先进入一个 domain 目录")
-            before, added = [], []
-            progress = progress or (lambda *a: None)
-            with self.db:
-                for source in map(Path, paths):
-                    check_cancel(cancel)
-                    if source.is_symlink() or not (source.is_file() or source.is_dir()):
-                        raise BackupError(f"不支持导入此文件类型：{source.name}")
-                    safe_path(source.name, root=False)
-                    dest = f"{parent}/{source.name}".lstrip("/")
-                    existing = self.at(domain, dest)
-                    replacement = None
-                    if existing:
-                        if collision == "skip":
-                            continue
-                        if collision == "keep_both":
-                            n, base = 2, dest
-                            while self.at(domain, dest):
-                                stem, ext = os.path.splitext(base)
-                                dest = f"{stem} ({n}){ext}"
-                                n += 1
-                        elif collision == "replace":
-                            if existing.kind == "file" and source.is_file():
-                                replacement = existing
-                            removed = self.subtree(existing)
-                            before.extend(e.__dict__ for e in removed if e.token not in added)
-                            removed_tokens = {e.token for e in removed}
-                            added = [token for token in added if token not in removed_tokens]
-                            self.db.executemany(
-                                "DELETE FROM EditorEntries WHERE token=?",
-                                ((e.token,) for e in removed),
-                            )
-                        else:
-                            raise BackupError(f"目标已存在：{source.name}")
-                    todo = [(source, dest)]
-                    while todo:
-                        check_cancel(cancel)
-                        src, virtual = todo.pop()
-                        if src.is_symlink() or not (src.is_dir() or src.is_file()):
-                            raise BackupError(f"不支持链接或特殊文件：{src.name}")
-                        progress(f"暂挂添加：{src.name}", 0, 0)
-                        is_dir = src.is_dir()
-                        staged = None if is_dir else str(self._stage_copy(src, cancel))
-                        par, _, basename = virtual.rpartition("/")
-                        token = (
-                            replacement.token if replacement and src == source else uuid.uuid4().hex
-                        )
-                        self.db.execute(
-                            "INSERT INTO EditorEntries VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-                            (
-                                token,
-                                replacement.original_id if replacement and src == source else None,
-                                domain,
-                                safe_path(virtual),
-                                par,
-                                basename,
-                                "directory" if is_dir else "file",
-                                0 if is_dir else src.stat().st_size,
-                                int(src.stat().st_mtime),
-                                staged,
-                                1,
-                                1,
-                            ),
-                        )
-                        added.append(token)
-                        if is_dir:
-                            todo.extend(
-                                (p, virtual + "/" + p.name)
-                                for p in sorted(src.iterdir(), reverse=True)
-                            )
-            if added or before:
-                self._record(
-                    f"添加 {len(added)} 个文件/目录", before, [self.get(t).__dict__ for t in added]
-                )
-
     def payload_path(self, fid):
         path = self.root / fid[:2] / fid
         if not path.is_file():
@@ -690,30 +336,34 @@ class BackupSession:
 
     def extract_file(self, token, target: Path, *, cancel=None):
         with self.lock:
-            entry = self.get(token)
-            if entry.kind != "file":
-                raise BackupError("只能提取普通文件；链接和特殊条目仅供浏览")
-            if target.is_symlink():
-                raise BackupError("提取目标不能是链接")
-            if entry.staged:
-                copy_file(Path(entry.staged), target, cancel)
+            return self._extract_entry(self.get(token), target, cancel=cancel)
+
+    def _extract_entry(self, entry, target: Path, *, cancel=None, use_cache=True):
+        if entry.kind != "file":
+            raise BackupError("只能提取普通文件；链接和特殊条目仅供浏览")
+        if target.is_symlink():
+            raise BackupError("提取目标不能是链接")
+        cached = Path(entry.staged) if entry.staged else self.cache_path(entry.token)
+        if use_cache and cached.is_file():
+            if cached.resolve() != target.resolve():
+                copy_file(cached, target, cancel)
+        else:
+            src = self.payload_path(entry.original_id)
+            if self.encrypted:
+                metadata = self.metadata(entry)
+                wrapped = metadata.get("EncryptionKey")
+                if not wrapped:
+                    if entry.size == 0 and src.stat().st_size == 0:
+                        copy_file(src, target, cancel)
+                        return target
+                    raise BackupError("文件缺少加密密钥")
+                _, key = self.keybag.unwrap(wrapped)
+                crypto_file(src, target, key, encrypt=False, cancel=cancel)
             else:
-                src = self.payload_path(entry.original_id)
-                if self.encrypted:
-                    metadata = self.metadata(entry)
-                    wrapped = metadata.get("EncryptionKey")
-                    if not wrapped:
-                        if entry.size == 0 and src.stat().st_size == 0:
-                            copy_file(src, target, cancel)
-                            return target
-                        raise BackupError("文件缺少加密密钥")
-                    _, key = self.keybag.unwrap(wrapped)
-                    crypto_file(src, target, key, encrypt=False, cancel=cancel)
-                else:
-                    copy_file(src, target, cancel)
-            if entry.mtime:
-                os.utime(target, (entry.mtime, entry.mtime))
-            return target
+                copy_file(src, target, cancel)
+        if entry.mtime:
+            os.utime(target, (entry.mtime, entry.mtime))
+        return target
 
     def export(self, tokens, target: Path, *, collision="error", progress=None, cancel=None):
         with self.lock:
@@ -809,13 +459,14 @@ class BackupSession:
                 raise BackupError("目标磁盘空间不足以创建独立备份副本")
             work = Path(tempfile.mkdtemp(prefix=".backupeditor-save-", dir=destination.parent))
             out_db_path = self.workspace / (uuid.uuid4().hex + ".db")
+            saved_db = None
             try:
                 files = [p for p in self.root.rglob("*") if p.is_file() or p.is_symlink()]
                 for n, source in enumerate(files, 1):
                     check_cancel(cancel)
                     progress("复制备份到独立输出目录…", n, len(files))
                     copy_file(source, work / source.relative_to(self.root), cancel)
-                with sqlite3.connect(out_db_path) as out_db:
+                with contextlib.closing(sqlite3.connect(out_db_path)) as out_db, out_db:
                     self.db.backup(out_db)
                     # Delete original rows that are removed or replaced/moved in the overlay.
                     obsolete = [
@@ -940,18 +591,36 @@ class BackupSession:
                     raise BackupError("保存期间原备份发生变化，输出未发布")
                 if destination.exists():
                     raise BackupError("保存目标被其他程序创建，输出未覆盖")
+                progress("建立新的保存基线…", 0, 0)
+                saved_db = self.prepare_saved_index(out_db_path, cancel)
+                check_cancel(cancel)
+                if self._stamp() != self.source_stamp:
+                    raise BackupError("保存期间原备份发生变化，输出未发布")
+                if destination.exists():
+                    raise BackupError("保存目标被其他程序创建，输出未覆盖")
+                new_stamp = tuple(
+                    (name, (work / name).stat().st_size, (work / name).stat().st_mtime_ns)
+                    for name in ("Manifest.db", "Manifest.plist", "Info.plist")
+                )
                 work.rename(destination)
-                with self.db:
-                    self.db.execute("DELETE FROM EditorBaseline")
-                    self.db.execute("INSERT INTO EditorBaseline SELECT * FROM EditorEntries")
-                self.undo_stack.clear()
-                self.redo_stack.clear()
-                self.saved_signature = ()
+                old_db, old_path = self.db, self.manifest_path
+                self.db, saved_db = saved_db, None
+                self.manifest_path = out_db_path
+                self.root = destination
+                self.source_stamp = new_stamp
+                self._pending.clear()
+                self._baseline_hashes.clear()
+                self._revision += 1
+                old_db.close()
+                old_path.unlink(missing_ok=True)
                 return destination
             finally:
                 if work.exists():
                     shutil.rmtree(work)
-                out_db_path.unlink(missing_ok=True)
+                if saved_db is not None:
+                    saved_db.close()
+                if self.manifest_path != out_db_path:
+                    out_db_path.unlink(missing_ok=True)
 
     def close(self):
         with contextlib.suppress(Exception):
