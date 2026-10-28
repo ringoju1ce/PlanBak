@@ -65,6 +65,7 @@ from .dialogs import FixedFileDialog as QFileDialog
 from .dialogs import FixedInputDialog as QInputDialog
 from .dialogs import FixedMessageBox as QMessageBox
 from .dialogs import FixedProgressDialog
+from .hex_viewer import HexViewer
 from .icons import ApplicationIcons
 from .navigation import Location, ViewState, split_domain
 from .pane_focus import BrowserPaneFocus
@@ -385,6 +386,16 @@ class OpenedDatabase:
     revision: tuple
 
 
+@dataclass
+class OpenedHex:
+    token: str
+    viewer: HexViewer
+    path: Path
+    source_digest: bytes
+    observed_digest: bytes
+    revision: tuple
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -404,7 +415,8 @@ class MainWindow(QMainWindow):
         self.opened: dict[str, OpenedFile] = {}
         self.plist_editors = {}
         self.database_viewers = {}
-        self._database_closing = False
+        self.hex_viewers = {}
+        self._readonly_closing = False
         self.force_close = False
         self._exit_requested = False
         self.setWindowTitle("BackupEditor")
@@ -1117,8 +1129,8 @@ class MainWindow(QMainWindow):
     def confirm_leave(self, continuation, *, exiting=False):
         if self.task:
             return
-        if self.database_viewers:
-            self.close_database_viewers(lambda: self.confirm_leave(continuation, exiting=exiting))
+        if self.database_viewers or self.hex_viewers:
+            self.close_readonly_viewers(lambda: self.confirm_leave(continuation, exiting=exiting))
             return
         for record in list(self.plist_editors.values()):
             if not record.editor.close():
@@ -1547,7 +1559,7 @@ class MainWindow(QMainWindow):
                 }:
                     raise BackupError(
                         "内置查看器只支持标准 SQLite；此文件可能使用其他格式或应用自身的加密。"
-                        "可通过右键菜单选择“使用系统应用打开”，或导出项目。"
+                        "可通过右键菜单选择“以十六进制查看”“使用系统应用打开”，或导出项目。"
                     )
                 return digest(target, cancel=cancel)
             except Exception:
@@ -1596,20 +1608,141 @@ class MainWindow(QMainWindow):
         self.panes.activate(self.active_view(), focus=True)
         viewer.show()
 
-    def close_database_viewers(self, after):
-        if self._database_closing:
+    def close_readonly_viewers(self, after):
+        if self._readonly_closing:
             return
-        self._database_closing = True
+        self._readonly_closing = True
 
         def closed(_):
-            if not self.database_viewers:
-                self._database_closing = False
+            if not self.database_viewers and not self.hex_viewers:
+                self._readonly_closing = False
                 QTimer.singleShot(0, after)
 
-        for record in list(self.database_viewers.values()):
+        for record in list(self.database_viewers.values()) + list(self.hex_viewers.values()):
             record.viewer._skip_prompt = True
             record.viewer.finished.connect(closed)
             record.viewer.reject()
+
+    def open_hex(self):
+        if self.task or not self.session or self.sidebar_active():
+            return
+        rows = self.selected_rows()
+        if len(rows) != 1 or rows[0].kind != "file":
+            return
+        token = rows[0].entry.token
+        if token in self.hex_viewers:
+            viewer = self.hex_viewers[token].viewer
+            viewer.showNormal()
+            viewer.raise_()
+            viewer.activateWindow()
+            viewer.table.setFocus()
+            return
+        session = self.session
+        path = session.workspace / "hex-viewer" / uuid.uuid4().hex / "snapshot.bin"
+
+        def prepare(progress, cancel):
+            session.extract_file(token, path, cancel=cancel)
+            return digest(path, cancel=cancel)
+
+        def opened(fingerprint):
+            viewer = HexViewer(path, session.get(token).name, self)
+            record = OpenedHex(
+                token, viewer, path, fingerprint, fingerprint, self.plist_revision(token)
+            )
+            self.hex_viewers[token] = record
+            viewer.reload_requested.connect(lambda: self.reload_hex(record))
+
+            def closed(_):
+                self.hex_viewers.pop(token, None)
+                shutil.rmtree(record.path.parent, ignore_errors=True)
+                if not viewer._skip_prompt:
+                    self.restore_browser_after_editor(session, viewer)
+                viewer.deleteLater()
+
+            viewer.finished.connect(closed)
+            self.panes.activate(self.active_view(), focus=True)
+            viewer.show()
+
+        def cleanup():
+            if token not in self.hex_viewers:
+                shutil.rmtree(path.parent, ignore_errors=True)
+
+        self.run_task("读取十六进制快照", prepare, opened, on_done=cleanup)
+
+    def reload_hex(self, record, *, automatic=False):
+        if self.task or not self.session or record.viewer.task or record.viewer._closing:
+            return
+        session = self.session
+        try:
+            revision = self.plist_revision(record.token)
+        except BackupError:
+            record.viewer.set_source_state(available=False)
+            return
+        path = session.workspace / "hex-viewer" / uuid.uuid4().hex / "snapshot.bin"
+
+        def prepare(progress, cancel):
+            session.extract_file(record.token, path, cancel=cancel)
+            return digest(path, cancel=cancel)
+
+        def loaded(fingerprint):
+            if self.hex_viewers.get(record.token) is not record:
+                return
+            record.revision = revision
+            changed = fingerprint != record.source_digest
+            prompt = changed and fingerprint != record.observed_digest
+            record.observed_digest = fingerprint
+            record.viewer.set_source_state(stale=changed)
+            accept = not automatic
+            if automatic and prompt:
+                accept = (
+                    QMessageBox.question(
+                        record.viewer,
+                        "文件已更改",
+                        "源文件的内容已更改，是否重新加载更新版本？",
+                        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                        QMessageBox.StandardButton.No,
+                    )
+                    == QMessageBox.StandardButton.Yes
+                )
+            if accept and not record.viewer.task and not record.viewer._closing:
+                previous = record.path
+                record.path, record.source_digest = path, fingerprint
+                record.viewer.replace_snapshot(path, session.get(record.token).name)
+                shutil.rmtree(previous.parent, ignore_errors=True)
+
+        def failed(exc):
+            record.revision = revision
+            if self.hex_viewers.get(record.token) is record:
+                record.viewer.set_source_state(stale=True)
+                record.viewer.status.setText(f"无法重新加载文件：{exc}")
+
+        def cleanup():
+            if self.hex_viewers.get(record.token) is not record or record.path != path:
+                shutil.rmtree(path.parent, ignore_errors=True)
+
+        self.run_task(
+            "读取十六进制快照", prepare, loaded, silent=automatic, on_error=failed, on_done=cleanup
+        )
+
+    def check_hex_viewers(self):
+        for record in list(self.hex_viewers.values()):
+            if record.viewer.task or record.viewer._closing:
+                continue
+            try:
+                entry = self.session.get(record.token)
+                revision = self.plist_revision(record.token)
+            except BackupError:
+                record.viewer.set_source_state(available=False)
+                continue
+            if record.viewer.name != entry.name:
+                record.viewer.name = entry.name
+                record.viewer.setWindowTitle(f"{entry.name} — 十六进制查看器（只读）")
+            if not record.viewer.available:
+                record.viewer.set_source_state(stale=record.viewer.stale)
+            if revision != record.revision:
+                self.reload_hex(record, automatic=True)
+                return True
+        return False
 
     def reload_database(self, record, *, automatic=False):
         if self.task or not self.session or record.viewer.task or record.viewer._closing:
@@ -1903,6 +2036,8 @@ class MainWindow(QMainWindow):
             return
         if self.check_database_viewers():
             return
+        if self.check_hex_viewers():
+            return
         for record in list(self.opened.values()):
             stamp = self.file_stamp(record.path)
             if stamp == record.stamp:
@@ -2032,6 +2167,9 @@ class MainWindow(QMainWindow):
         menu.addActions([self.open_action, self.extract_action])
         rows = self.selected_rows()
         if len(rows) == 1 and rows[0].kind == "file":
+            hex_action = menu.addAction("以十六进制查看")
+            hex_action.setEnabled(not self.task)
+            hex_action.triggered.connect(self.open_hex)
             external = menu.addAction("使用系统应用打开")
             external.setEnabled(not self.task)
             external.triggered.connect(lambda: self.open_file(external=True))
@@ -2129,9 +2267,9 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         if self.force_close:
-            if self.database_viewers:
+            if self.database_viewers or self.hex_viewers:
                 event.ignore()
-                self.close_database_viewers(self.close)
+                self.close_readonly_viewers(self.close)
                 return
             self.panes.stopped = True
             for record in list(self.plist_editors.values()):

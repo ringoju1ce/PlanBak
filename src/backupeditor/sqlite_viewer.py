@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-import threading
 from html import escape
 
-from PySide6.QtCore import QAbstractTableModel, QModelIndex, QSize, Qt, QThread, Signal
+from PySide6.QtCore import QAbstractTableModel, QModelIndex, QSize, Qt, Signal
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -25,6 +24,7 @@ from PySide6.QtWidgets import (
 
 from .dialogs import FixedDialog
 from .sqlite_database import PAGE_SIZE, QueryResult, query, quote_identifier, schema
+from .viewer_tasks import ViewerTask
 
 
 def cell_text(value, limit=512):
@@ -78,23 +78,6 @@ class ResultModel(QAbstractTableModel):
 
     def sort(self, column, order=Qt.SortOrder.AscendingOrder):
         self.sort_requested.emit(column, order)
-
-
-class QueryTask(QThread):
-    def __init__(self, function, parent=None):
-        super().__init__(parent)
-        self.function = function
-        self.cancelled = threading.Event()
-        self.result = None
-        self.error = None
-
-    def run(self):
-        try:
-            self.result = self.function(self.cancelled.is_set)
-        except Exception as exc:
-            self.error = exc
-        finally:
-            self.function = None
 
 
 class SQLiteViewer(FixedDialog):
@@ -205,7 +188,7 @@ class SQLiteViewer(FixedDialog):
     def start(self, function, callback):
         if self.task or self._closing:
             return
-        task = QueryTask(function, self)
+        task = ViewerTask(function, self)
         self.task = task
         self.status.setText("正在读取…")
         self.update_controls()
