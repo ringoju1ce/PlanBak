@@ -49,6 +49,7 @@ from PySide6.QtWidgets import (
     QMenu,
     QPushButton,
     QSlider,
+    QSplitter,
     QStackedWidget,
     QTableView,
     QToolBar,
@@ -66,6 +67,7 @@ from .dialogs import FixedInputDialog as QInputDialog
 from .dialogs import FixedMessageBox as QMessageBox
 from .dialogs import FixedProgressDialog
 from .navigation import Location, ViewState, split_domain
+from .sidebar import DirectoryTree
 
 INTERNAL_MIME = "application/x-backupeditor-entries"
 
@@ -399,7 +401,7 @@ class MainWindow(QMainWindow):
         self.stack = QStackedWidget()
         self.stack.addWidget(self.table)
         self.stack.addWidget(self.grid)
-        self.setCentralWidget(self.stack)
+        self._create_sidebar()
         for view in (self.table, self.grid):
             view.selectionModel().selectionChanged.connect(self.update_actions)
         self._create_actions()
@@ -415,6 +417,76 @@ class MainWindow(QMainWindow):
         self.grid_action.setChecked(self.settings.value("grid", False, type=bool))
         self.set_view(self.grid_action.isChecked())
         self.refresh()
+
+    def _create_sidebar(self):
+        self.directory_tree = DirectoryTree(self)
+        self._sidebar_width = max(
+            140, min(480, self.settings.value("sidebar_width", 240, type=int))
+        )
+        self.splitter = QSplitter(Qt.Orientation.Horizontal, self)
+        self.splitter.addWidget(self.directory_tree)
+        self.splitter.addWidget(self.stack)
+        self.splitter.setChildrenCollapsible(False)
+        self.splitter.setStretchFactor(0, 0)
+        self.splitter.setStretchFactor(1, 1)
+        self.splitter.setSizes([self._sidebar_width, self.width() - self._sidebar_width])
+        self.splitter.splitterMoved.connect(self.remember_sidebar_width)
+        self.setCentralWidget(self.splitter)
+        self.directory_tree.navigate_requested.connect(self.navigate_from_tree)
+        self.directory_tree.open_requested.connect(self.open_from_tree)
+        self.directory_tree.focus_changed.connect(self.update_actions)
+        self.directory_tree.selectionModel().currentChanged.connect(self.update_actions)
+        self.directory_tree.customContextMenuRequested.connect(self.sidebar_context_menu)
+
+    def remember_sidebar_width(self, *_):
+        width = self.splitter.sizes()[0]
+        if not self.directory_tree.isHidden() and width > 0:
+            self._sidebar_width = width
+
+    def toggle_sidebar(self, visible):
+        self.directory_tree.setVisible(visible)
+        if visible:
+            self.splitter.setSizes(
+                [self._sidebar_width, max(320, self.width() - self._sidebar_width)]
+            )
+
+    def sidebar_focused(self):
+        return self.directory_tree.hasFocus() or self.directory_tree.viewport().hasFocus()
+
+    def navigate_from_tree(self, index):
+        node = self.directory_tree.directory_model.node(index)
+        if node and self.session and not self.task and node.location != self.current_location():
+            self.navigate(node.location, focus_browser=False)
+
+    def open_from_tree(self, index):
+        node = self.directory_tree.directory_model.node(index)
+        if node and self.session and not self.task:
+            self.navigate(node.location, focus_browser=False)
+            self.active_view().setFocus(Qt.FocusReason.OtherFocusReason)
+
+    def sidebar_context_menu(self, point):
+        if self.task or not self.session:
+            return
+        tree = self.directory_tree
+        index = tree.indexAt(point)
+        node = tree.directory_model.node(index)
+        if not node:
+            return
+        tree.setCurrentIndex(index)
+        menu = QMenu(self)
+        open_action = menu.addAction("打开")
+        delete_action = menu.addAction("删除")
+        rename_action = menu.addAction("重命名")
+        mutable = bool(node.entry and node.entry.path)
+        delete_action.setEnabled(mutable)
+        rename_action.setEnabled(mutable)
+        chosen = menu.exec(tree.viewport().mapToGlobal(point))
+        if chosen == open_action:
+            self.open_from_tree(index)
+        elif chosen == delete_action and mutable:
+            self.delete_entries([node.entry.token], node.name, focus_browser=False)
+        elif chosen == rename_action and mutable:
+            self.rename_entry(node.entry, focus_browser=False)
 
     def action(self, text, function, shortcut=None, icon=None):
         action = QAction(QIcon.fromTheme(icon) if icon else QIcon(), text, self)
@@ -459,6 +531,8 @@ class MainWindow(QMainWindow):
             action.setShortcutContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
             self.table.addAction(action)
             self.grid.addAction(action)
+        for action in (self.rename_action, self.delete_action, self.undo_action, self.redo_action):
+            self.directory_tree.addAction(action)
         file_menu = self.menuBar().addMenu("文件")
         file_menu.addActions(
             [
@@ -483,6 +557,14 @@ class MainWindow(QMainWindow):
                 self.discard_action,
             ]
         )
+        view_menu = self.menuBar().addMenu("视图")
+        self.sidebar_action = QAction("目录树", self, checkable=True)
+        self.sidebar_action.setShortcut(QKeySequence("F9"))
+        self.sidebar_action.toggled.connect(self.toggle_sidebar)
+        self.sidebar_action.setChecked(self.settings.value("sidebar_visible", True, type=bool))
+        self.directory_tree.setVisible(self.sidebar_action.isChecked())
+        self.addAction(self.sidebar_action)
+        view_menu.addAction(self.sidebar_action)
         help_menu = self.menuBar().addMenu("帮助")
         help_menu.addAction(
             self.action(
@@ -576,11 +658,11 @@ class MainWindow(QMainWindow):
             return Location(self.domain, self.path)
         return Location(group=self.domain_group)
 
-    def navigate(self, location):
+    def navigate(self, location, *, focus_browser=True):
         if self.task:
             return
         self.domain, self.path, self.domain_group = location.domain, location.path, location.group
-        self.refresh()
+        self.refresh(focus_browser=focus_browser)
 
     def clear_navigation_state(self):
         self._view_states.clear()
@@ -724,6 +806,8 @@ class MainWindow(QMainWindow):
 
     def update_actions(self, *_):
         busy = self.task is not None
+        self.directory_tree.directory_model.suspended = busy
+        self.directory_tree.setEnabled(not busy)
         rows = self.selected_rows()
         tokens = self.selected_tokens()
         session = self.session
@@ -733,6 +817,12 @@ class MainWindow(QMainWindow):
         self.extract_action.setEnabled(not busy and bool(tokens))
         self.rename_action.setEnabled(not busy and len(rows) == 1 and bool(tokens))
         self.delete_action.setEnabled(not busy and bool(tokens))
+        if self.sidebar_focused():
+            entry = self.directory_tree.current_entry()
+            self.open_action.setEnabled(False)
+            self.extract_action.setEnabled(False)
+            self.rename_action.setEnabled(not busy and entry is not None)
+            self.delete_action.setEnabled(not busy and entry is not None)
         for action in (self.add_action, self.add_folder_action, self.new_folder_action):
             action.setEnabled(not busy and session is not None and self.domain is not None)
         self.save_action.setEnabled(not busy and bool(session and session.dirty))
@@ -748,7 +838,7 @@ class MainWindow(QMainWindow):
         if hasattr(self, "changes_dock"):
             self.changes_dock.setEnabled(not busy)
 
-    def refresh(self, *_):
+    def refresh(self, *_, focus_browser=True):
         if self.task or not hasattr(self, "sort_combo"):
             return
         session_id = self.session.session_id if self.session else None
@@ -774,8 +864,8 @@ class MainWindow(QMainWindow):
                         rows.append(BrowserRow(domain, domain, "", "domain"))
                 rows.extend(BrowserRow(group, "", "", "group") for group in groups)
             else:
-                if not self.session.at(self.domain, self.path):
-                    self.path = ""
+                while self.path and not self.session.at(self.domain, self.path):
+                    self.path = self.path.rpartition("/")[0]
                 rows = [
                     BrowserRow(e.name, e.domain, e.path, e.kind, e)
                     for e in self.session.children(self.domain, self.path)
@@ -817,7 +907,11 @@ class MainWindow(QMainWindow):
                 current_row=latest.current_row,
                 had_focus=latest.had_focus,
             )
-        self.restore_view_state(state, focus=navigating)
+        focus_browser = focus_browser and not self.sidebar_focused()
+        if state and not focus_browser:
+            state = replace(state, had_focus=False)
+        self.restore_view_state(state, focus=navigating and focus_browser)
+        self.directory_tree.sync(self.session, location)
         self.changes_list.clear()
         if self.session:
             for title, details in self.session.change_details:
@@ -846,6 +940,7 @@ class MainWindow(QMainWindow):
         self.grid_action.setChecked(grid)
         self.list_action.setChecked(not grid)
         self.settings.setValue("grid", grid)
+        QWidget.setTabOrder(self.directory_tree, self.active_view())
         if outgoing:
             cached = self._view_states.get((self._displayed_location, self.stack.currentIndex()))
             state = replace(
@@ -1143,10 +1238,20 @@ class MainWindow(QMainWindow):
                 message(self, "无法新建文件夹", str(exc), QMessageBox.Icon.Warning)
 
     def rename_selected(self):
+        if self.sidebar_focused():
+            entry = self.directory_tree.current_entry()
+            if entry:
+                self.rename_entry(entry, focus_browser=False)
+            return
         rows = self.selected_rows()
         if len(rows) != 1 or not rows[0].entry:
             return
         entry = rows[0].entry
+        self.rename_entry(entry)
+
+    def rename_entry(self, entry, *, focus_browser=True):
+        if self.task or not entry.path:
+            return
         name, ok = QInputDialog.getText(self, "重命名", "新名称：", text=entry.name)
         if ok and name:
             try:
@@ -1159,15 +1264,40 @@ class MainWindow(QMainWindow):
                 )
                 if not policy:
                     return
+                current = self.session.at(self.domain, self.path) if self.domain else None
+                state = self.remember_view_state()
                 self.session.move(
                     [entry.token], entry.domain, entry.parent, name=name, collision=policy
                 )
-                self.refresh()
+                if current:
+                    updated = self.session.get(current.token)
+                    location = Location(updated.domain, updated.path)
+                    if location != self.current_location():
+                        self.domain, self.path, self.domain_group = (
+                            location.domain,
+                            location.path,
+                            None,
+                        )
+                        if state:
+                            self._view_states[location, self.stack.currentIndex()] = state
+                            self._latest_view_states[location] = state
+                self.refresh(focus_browser=focus_browser)
             except BackupError as exc:
                 message(self, "无法重命名", str(exc), QMessageBox.Icon.Warning)
 
     def delete_selected(self):
+        if self.sidebar_focused():
+            entry = self.directory_tree.current_entry()
+            if entry:
+                self.delete_entries([entry.token], entry.name, focus_browser=False)
+            return
         tokens = self.selected_tokens()
+        names = ", ".join(row.name for row in self.selected_rows() if row.entry)
+        self.delete_entries(tokens, names)
+
+    def delete_entries(self, tokens, names, *, focus_browser=True):
+        if self.task:
+            return
         if not tokens:
             return
         count = sum(len(self.session.subtree(e)) for e in self.session.roots(tokens))
@@ -1179,14 +1309,13 @@ class MainWindow(QMainWindow):
             self,
         )
         box.setTextFormat(Qt.TextFormat.PlainText)
-        names = ", ".join(row.name for row in self.selected_rows() if row.entry)
         box.setText(f"删除 {names[:250]}？\n共影响 {count} 个文件和目录。保存前可以撤销。")
         box.setDefaultButton(QMessageBox.StandardButton.No)
         if box.exec() == QMessageBox.StandardButton.Yes:
             self.run_task(
                 "暂挂删除",
                 lambda progress, cancel: self.session.delete(tokens),
-                lambda _: self.refresh(),
+                lambda _: self.refresh(focus_browser=focus_browser),
             )
 
     def history(self, redo):
@@ -1494,6 +1623,9 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         if self.force_close:
+            self.remember_sidebar_width()
+            self.settings.setValue("sidebar_width", self._sidebar_width)
+            self.settings.setValue("sidebar_visible", self.sidebar_action.isChecked())
             self.settings.setValue("icons", self.icon_slider.value())
             self.settings.setValue("sort", self.sort_combo.currentIndex())
             self.settings.setValue("descending", self.descending.isChecked())
@@ -1501,6 +1633,7 @@ class MainWindow(QMainWindow):
             self.poll_timer.stop()
             self.clear_opened_files()
             self.clear_navigation_state()
+            self.directory_tree.sync(None, Location())
             if self.session:
                 self.session.close()
                 self.session = None

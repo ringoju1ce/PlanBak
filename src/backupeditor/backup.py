@@ -232,6 +232,9 @@ class BackupSession:
             staged TEXT, changed INTEGER NOT NULL, explicit INTEGER NOT NULL,
             UNIQUE(domain,path))""")
         self.db.execute("CREATE INDEX EditorParent ON EditorEntries(domain,parent)")
+        self.db.execute(
+            "CREATE INDEX EditorDirectories ON EditorEntries(domain,parent) WHERE kind='directory'"
+        )
         self.db.execute("CREATE INDEX EditorOriginal ON EditorEntries(original_id)")
         total = self.db.execute("SELECT COUNT(*) FROM Files").fetchone()[0]
         parents = set()
@@ -352,6 +355,26 @@ class BackupSession:
                     (domain, path, path),
                 )
             ]
+
+    def directory_children(self, domain, path):
+        with self.lock:
+            return [
+                Entry.row(row)
+                for row in self.db.execute(
+                    "SELECT * FROM EditorEntries WHERE domain=? AND parent=? AND path<>? AND kind='directory'",
+                    (domain, path, path),
+                )
+            ]
+
+    def has_directory_children(self, domain, path):
+        with self.lock:
+            return (
+                self.db.execute(
+                    "SELECT 1 FROM EditorEntries WHERE domain=? AND parent=? AND path<>? AND kind='directory' LIMIT 1",
+                    (domain, path, path),
+                ).fetchone()
+                is not None
+            )
 
     def subtree(self, entry):
         return [
