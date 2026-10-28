@@ -390,16 +390,6 @@ class PlistEditor(FixedDialog):
         self._xml_cache = ""
         self.xml_reason = ""
         layout = QVBoxLayout(self)
-        modes = QHBoxLayout()
-        self.mode = QComboBox()
-        self.mode.addItems(["树形", "XML"])
-        modes.addWidget(QLabel("编辑模式："))
-        modes.addWidget(self.mode)
-        self.mode_hint = QLabel()
-        self.mode_hint.setTextFormat(Qt.TextFormat.PlainText)
-        self.mode_hint.setWordWrap(True)
-        modes.addWidget(self.mode_hint, 1)
-        layout.addLayout(modes)
         actions = QHBoxLayout()
         for label, method, attribute in (
             ("添加", self.add_node, "add_button"),
@@ -407,6 +397,7 @@ class PlistEditor(FixedDialog):
             ("删除", self.delete_node, "delete_button"),
             ("导入 Data…", self.import_data, "import_button"),
             ("导出 Data…", self.export_data, "export_button"),
+            ("XML 编辑器", lambda: self.switch_mode(1), "xml_button"),
         ):
             button = QPushButton(label)
             button.clicked.connect(method)
@@ -435,7 +426,8 @@ class PlistEditor(FixedDialog):
         self.xml = XmlPane()
         self.pages.addWidget(self.xml)
         self.xml.code.textChanged.connect(self.xml_changed)
-        self.mode.currentIndexChanged.connect(self.switch_mode)
+        self.xml.tree_requested.connect(lambda: self.switch_mode(0))
+        self.xml.save_requested.connect(self.save_document)
         layout.addWidget(self.pages, 1)
         note = "保存会将修改暂挂到会话；主窗口“保存更改”才会生成备份副本。"
         if (
@@ -504,9 +496,8 @@ class PlistEditor(FixedDialog):
         except Exception as exc:
             self._xml_cache = ""
             self.xml_reason = f"无法使用 XML 模式：{exc}"
-        self.mode.model().item(1).setEnabled(not self.xml_reason)
-        self.mode_hint.setText(self.xml_reason)
-        self.mode_hint.setToolTip(self.xml_reason)
+        self.xml_button.setEnabled(not self.xml_reason)
+        self.xml_button.setToolTip(self.xml_reason or "使用 XML 编辑此 plist")
 
     def xml_changed(self):
         self.update_actions()
@@ -537,10 +528,7 @@ class PlistEditor(FixedDialog):
         if index == 1:
             self.refresh_xml_support()
             if self.xml_reason:
-                self.mode.blockSignals(True)
-                self.mode.setCurrentIndex(0)
-                self.mode.blockSignals(False)
-                return
+                return False
             value = self.document.root.to_value()
             if not self._xml_initialized or not same_value(value, self._xml_snapshot):
                 self.set_xml_text(self._xml_cache)
@@ -550,15 +538,14 @@ class PlistEditor(FixedDialog):
             self.xml.code.setFocus()
         else:
             if not self.sync_xml():
-                self.mode.blockSignals(True)
-                self.mode.setCurrentIndex(1)
-                self.mode.blockSignals(False)
-                return
+                return False
+            self.xml.hide_search()
             self.pages.setCurrentIndex(0)
             self.rebuild()
             self.tree.setFocus()
         self.tree_actions.setVisible(index == 0)
         self.update_actions()
+        return True
 
     def set_xml_text(self, text, *, saved=False):
         first = not self._xml_initialized
@@ -703,16 +690,15 @@ class PlistEditor(FixedDialog):
         self._xml_initialized = False
         self._xml_saved_text = self._xml_parsed_text = ""
         self._xml_snapshot = None
-        self.mode.blockSignals(True)
-        self.mode.setCurrentIndex(0)
-        self.mode.blockSignals(False)
         self.pages.setCurrentIndex(0)
         self.tree_actions.show()
         self.set_source_state()
         self.tree.clear()
         self.rebuild()
         if previous_mode == 1 and not self.xml_reason:
-            self.mode.setCurrentIndex(1)
+            self.switch_mode(1)
+        else:
+            self.xml.hide_search()
 
     def edit_node(self, *_):
         node = self.selected_node()
@@ -878,6 +864,7 @@ class PlistEditor(FixedDialog):
                 return
             if answer == FixedMessageBox.StandardButton.Save and not self.save_document():
                 return
+        self.xml.hide_search()
         super().reject()
 
     def discard_and_close(self):

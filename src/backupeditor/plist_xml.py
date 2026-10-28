@@ -6,7 +6,7 @@ import base64
 import plistlib
 from xml.parsers import expat
 
-from PySide6.QtCore import QRect, QSize, Qt
+from PySide6.QtCore import QRect, QSize, Qt, Signal
 from PySide6.QtGui import (
     QAction,
     QColor,
@@ -28,6 +28,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+from .dialogs import FixedDialog
 
 
 class PlistXmlError(ValueError):
@@ -222,6 +224,8 @@ class LineNumbers(QWidget):
 class XmlTextEdit(QPlainTextEdit):
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.error_selections = []
+        self.search_selections = []
         self.setFont(QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont))
         self.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
         self.setTabStopDistance(self.fontMetrics().horizontalAdvance(" ") * 4)
@@ -262,23 +266,37 @@ class XmlTextEdit(QPlainTextEdit):
         selection.cursor = QTextCursor(block)
         selection.format.setBackground(QColor(200, 60, 60, 55))
         selection.format.setProperty(QTextCharFormat.Property.FullWidthSelection, True)
-        self.setExtraSelections([selection])
+        self.error_selections = [selection]
+        self.update_selections()
         self.setFocus()
 
+    def update_selections(self):
+        self.setExtraSelections(self.error_selections + self.search_selections)
 
-class XmlPane(QWidget):
-    def __init__(self, parent=None):
-        super().__init__(parent)
+    def clear_error(self):
+        self.error_selections = []
+        self.update_selections()
+
+    def set_search_selections(self, selections):
+        self.search_selections = selections
+        self.update_selections()
+
+
+class XmlSearchDialog(FixedDialog):
+    def __init__(self, pane):
+        super().__init__(pane)
+        self.setWindowTitle("搜索与替换")
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
         self.find_field = QLineEdit()
         self.find_field.setPlaceholderText("查找（纯文本）")
         self.case_sensitive = QCheckBox("区分大小写")
         row = QHBoxLayout()
         row.addWidget(self.find_field, 1)
-        for label, reverse in [("上一个", True), ("下一个", False)]:
-            button = QPushButton(label)
-            button.clicked.connect(lambda checked=False, backwards=reverse: self.find(backwards))
+        self.previous_button = QPushButton("上一个")
+        self.next_button = QPushButton("下一个")
+        for button, reverse in ((self.previous_button, True), (self.next_button, False)):
+            button.setAutoDefault(False)
+            button.clicked.connect(lambda checked=False, backwards=reverse: pane.find(backwards))
             row.addWidget(button)
         row.addWidget(self.case_sensitive)
         layout.addLayout(row)
@@ -286,33 +304,118 @@ class XmlPane(QWidget):
         self.replace_field = QLineEdit()
         self.replace_field.setPlaceholderText("替换为")
         row.addWidget(self.replace_field, 1)
-        for label, method in [("替换", self.replace_one), ("全部替换", self.replace_all)]:
+        for label, method in (("替换", pane.replace_one), ("全部替换", pane.replace_all)):
             button = QPushButton(label)
+            button.setAutoDefault(False)
             button.clicked.connect(method)
             row.addWidget(button)
-        self.result = QLabel()
-        row.addWidget(self.result)
         layout.addLayout(row)
+        self.result = QLabel()
+        layout.addWidget(self.result)
+        layout.addStretch()
+        self.find_field.returnPressed.connect(pane.find)
+        self.find_field.textChanged.connect(pane.refresh_matches)
+        self.case_sensitive.toggled.connect(pane.refresh_matches)
+        self.finished.connect(lambda _: pane.code.set_search_selections([]))
+        self.save_action = QAction(self)
+        self.save_action.setShortcut("Ctrl+S")
+        self.save_action.setShortcutContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        self.save_action.triggered.connect(pane.save_requested)
+        self.addAction(self.save_action)
+        self.lock_size(QSize(640, 190))
+
+
+class XmlPane(QWidget):
+    tree_requested = Signal()
+    save_requested = Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.search_dialog = None
+        self._replacing = False
+        self.search_actions = []
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
         self.code = XmlTextEdit()
+        toolbar = QHBoxLayout()
+        self.undo_button = QPushButton("撤销")
+        self.redo_button = QPushButton("重做")
+        self.search_button = QPushButton("搜索")
+        self.tree_button = QPushButton("树形编辑器")
+        for button in (self.undo_button, self.redo_button, self.search_button, self.tree_button):
+            toolbar.addWidget(button)
+        toolbar.addStretch()
+        layout.addLayout(toolbar)
+        self.undo_button.setEnabled(False)
+        self.redo_button.setEnabled(False)
+        self.undo_button.clicked.connect(self.code.undo)
+        self.redo_button.clicked.connect(self.code.redo)
+        self.code.undoAvailable.connect(self.undo_button.setEnabled)
+        self.code.redoAvailable.connect(self.redo_button.setEnabled)
+        self.search_button.clicked.connect(lambda: self.show_search())
+        self.tree_button.clicked.connect(self.tree_requested)
         layout.addWidget(self.code, 1)
         self.error = QLabel()
         self.error.setTextFormat(Qt.TextFormat.PlainText)
         self.error.setWordWrap(True)
         layout.addWidget(self.error)
-        self.find_field.returnPressed.connect(self.find)
         self.code.textChanged.connect(self.clear_error)
-        for sequence, field in [("Ctrl+F", self.find_field), ("Ctrl+H", self.replace_field)]:
+        for sequence, replacement in (("Ctrl+F", False), ("Ctrl+H", True)):
             action = QAction(self)
             action.setShortcut(sequence)
             action.setShortcutContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
             action.triggered.connect(
-                lambda checked=False, control=field: (control.setFocus(), control.selectAll())
+                lambda checked=False, replace=replacement: self.show_search(replace)
             )
             self.addAction(action)
+            self.search_actions.append(action)
+
+    def ensure_search(self):
+        if self.search_dialog is None:
+            self.search_dialog = XmlSearchDialog(self)
+            for action in self.search_actions:
+                self.search_dialog.addAction(action)
+        return self.search_dialog
+
+    @property
+    def find_field(self):
+        return self.ensure_search().find_field
+
+    @property
+    def replace_field(self):
+        return self.ensure_search().replace_field
+
+    @property
+    def case_sensitive(self):
+        return self.ensure_search().case_sensitive
+
+    @property
+    def result(self):
+        return self.ensure_search().result
+
+    def show_search(self, replacement=False):
+        dialog = self.ensure_search()
+        if not dialog.isVisible():
+            selected = self.code.textCursor().selectedText()
+            if selected and "\u2029" not in selected:
+                dialog.find_field.setText(selected)
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+        field = dialog.replace_field if replacement else dialog.find_field
+        field.setFocus()
+        field.selectAll()
+        self.refresh_matches()
+
+    def hide_search(self):
+        if self.search_dialog is not None:
+            self.search_dialog.reject()
 
     def clear_error(self):
         self.error.clear()
-        self.code.setExtraSelections([])
+        self.code.clear_error()
+        if not self._replacing:
+            self.refresh_matches()
 
     def flags(self, backwards=False):
         flags = QTextDocument.FindFlag(0)
@@ -322,21 +425,64 @@ class XmlPane(QWidget):
             flags |= QTextDocument.FindFlag.FindCaseSensitively
         return flags
 
+    def refresh_matches(self, *_):
+        dialog = self.search_dialog
+        if dialog is None or not dialog.isVisible():
+            self.code.set_search_selections([])
+            return
+        query = dialog.find_field.text()
+        selections = []
+        count = 0
+        if query:
+            cursor = QTextCursor(self.code.document())
+            # Bound extra selections for large Data fields; navigation still searches all text.
+            while count < 1000:
+                cursor = self.code.document().find(query, cursor, self.flags())
+                if cursor.isNull():
+                    break
+                selection = QTextEdit.ExtraSelection()
+                selection.cursor = QTextCursor(cursor)
+                selection.format.setBackground(QColor(240, 190, 30, 100))
+                selections.append(selection)
+                count += 1
+            current = self.code.textCursor()
+            text = current.selectedText()
+            matches = (
+                text == query
+                if dialog.case_sensitive.isChecked()
+                else text.casefold() == query.casefold()
+            )
+            if current.hasSelection() and matches:
+                selection = QTextEdit.ExtraSelection()
+                selection.cursor = current
+                selection.format.setBackground(
+                    self.code.palette().color(QPalette.ColorRole.Highlight)
+                )
+                selection.format.setForeground(
+                    self.code.palette().color(QPalette.ColorRole.HighlightedText)
+                )
+                selections.append(selection)
+        self.code.set_search_selections(selections)
+        dialog.result.setText(f"{count}{'+' if count == 1000 else ''} 处匹配" if query else "")
+
     def find(self, backwards=False):
         query = self.find_field.text()
         if not query:
             return False
-        if not self.code.find(query, self.flags(backwards)):
+        found = self.code.find(query, self.flags(backwards))
+        if not found:
             cursor = self.code.textCursor()
             cursor.movePosition(
                 QTextCursor.MoveOperation.End if backwards else QTextCursor.MoveOperation.Start
             )
             self.code.setTextCursor(cursor)
-            if not self.code.find(query, self.flags(backwards)):
-                self.result.setText("未找到")
-                return False
-        self.result.clear()
-        return True
+            found = self.code.find(query, self.flags(backwards))
+        self.refresh_matches()
+        if not found:
+            self.result.setText("未找到")
+        if self.search_dialog.isVisible():
+            self.find_field.setFocus()
+        return found
 
     def replace_one(self):
         query = self.find_field.text()
@@ -358,14 +504,19 @@ class XmlPane(QWidget):
         if not query:
             return
         cursor = QTextCursor(self.code.document())
-        cursor.beginEditBlock()
         count = 0
-        while True:
-            found = self.code.document().find(query, cursor, self.flags())
-            if found.isNull():
-                break
-            found.insertText(self.replace_field.text())
-            cursor.setPosition(found.position())
-            count += 1
-        cursor.endEditBlock()
+        self._replacing = True
+        cursor.beginEditBlock()
+        try:
+            while True:
+                found = self.code.document().find(query, cursor, self.flags())
+                if found.isNull():
+                    break
+                found.insertText(self.replace_field.text())
+                cursor.setPosition(found.position())
+                count += 1
+        finally:
+            cursor.endEditBlock()
+            self._replacing = False
+        self.refresh_matches()
         self.result.setText(f"已替换 {count} 处")
