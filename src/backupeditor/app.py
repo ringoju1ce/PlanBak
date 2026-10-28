@@ -2245,15 +2245,21 @@ class MainWindow(QMainWindow):
             )
         self.update_actions()
         menu = QMenu(self)
-        if index.isValid() and self.model.rows[index.row()].kind in (
+        if not index.isValid():
+            menu.addActions([self.add_action, self.add_folder_action, self.new_folder_action])
+            menu.exec(view.viewport().mapToGlobal(point))
+            return
+        if self.model.rows[index.row()].kind in (
             "group",
             "domain",
             "directory",
             "parent",
         ):
-            action = menu.addAction("进入文件夹")
+            action = menu.addAction("打开文件夹")
             action.triggered.connect(lambda: self.activate(index))
-        menu.addActions([self.open_action, self.extract_action])
+        else:
+            menu.addAction(self.open_action)
+        menu.addAction(self.extract_action)
         rows = self.selected_rows()
         if len(rows) == 1 and rows[0].kind == "file":
             hex_action = menu.addAction("以十六进制查看")
@@ -2264,8 +2270,6 @@ class MainWindow(QMainWindow):
             external.triggered.connect(lambda: self.open_file(external=True))
         menu.addSeparator()
         menu.addActions([self.rename_action, self.delete_action])
-        menu.addSeparator()
-        menu.addActions([self.add_action, self.add_folder_action, self.new_folder_action])
         menu.exec(view.viewport().mapToGlobal(point))
 
     def drop_location(self, index):
