@@ -153,6 +153,7 @@ class BackupSession(SessionOverlay):
         self, root: Path, password: str = "", *, progress: Progress | None = None, cancel=None
     ):
         self.root = Path(root).expanduser().resolve()
+        self._protected_roots = {self.root}
         self.workspace = Path(tempfile.mkdtemp(prefix="backupeditor-"))
         (self.workspace / ".backupeditor-session.json").write_text(
             json.dumps(
@@ -260,6 +261,7 @@ class BackupSession(SessionOverlay):
             if not read_marker(copied.path) or backup_stamp(copied.path) != copied.stamp:
                 raise BackupError("副本标记或清单已改变，未切换保存位置")
             self.root = copied.path
+            self._protected_roots.add(self.root)
             self.source_stamp = copied.stamp
             self._revision += 1
 
@@ -444,34 +446,54 @@ class BackupSession(SessionOverlay):
     def export(self, tokens, target: Path, *, collision="error", progress=None, cancel=None):
         with self.lock:
             target = Path(target).resolve()
-            if target == self.root or self.root in target.parents:
-                raise BackupError("不能导出到原备份文件夹内部")
-            target.mkdir(parents=True, exist_ok=True)
+
+            def protect(path):
+                resolved = path.resolve()
+                if any(resolved.is_relative_to(root) for root in self._protected_roots):
+                    raise BackupError("导出位置不能与来源备份或当前备份重叠")
+
+            def validate_destination(dest):
+                protect(dest)
+                if dest.is_symlink() or any(p.is_symlink() for p in dest.parents if p != target):
+                    raise BackupError("导出目标路径包含链接")
+
+            protect(target)
             roots = self.roots(tokens)
             exported = []
+            plans = []
+            reserved = set()
             progress = progress or (lambda *a: None)
             for root in roots:
                 output = target / root.name
-                if output.exists():
+                if output.exists() or output in reserved:
                     if collision == "skip":
                         continue
                     if collision == "keep_both":
                         n = 2
-                        while output.exists():
+                        while output.exists() or output in reserved:
                             output = target / f"{root.name} ({n})"
                             n += 1
                     elif collision != "replace":
                         raise BackupError(f"目标已存在：{output.name}（请选择保留两者或跳过）")
-                entries = self.subtree(root)
-                for i, entry in enumerate(sorted(entries, key=lambda e: len(e.path)), 1):
+                entries = sorted(self.subtree(root), key=lambda e: len(e.path))
+                destinations = []
+                # 先检查整个批次，再创建文件夹或替换文件，防止前半批已写入。
+                for entry in entries:
                     check_cancel(cancel)
-                    progress(f"导出：{entry.name}", i, len(entries))
                     suffix = entry.path[len(root.path) :].lstrip("/")
                     dest = output / suffix if suffix else output
-                    if dest.is_symlink() or any(
-                        p.is_symlink() for p in dest.parents if p != target
-                    ):
-                        raise BackupError("导出目标路径包含链接")
+                    validate_destination(dest)
+                    if entry.kind not in ("file", "directory"):
+                        raise BackupError(f"不能导出链接或特殊条目：{entry.name}")
+                    destinations.append((entry, dest))
+                reserved.add(output)
+                plans.append((output, destinations))
+            target.mkdir(parents=True, exist_ok=True)
+            for output, destinations in plans:
+                for i, (entry, dest) in enumerate(destinations, 1):
+                    check_cancel(cancel)
+                    progress(f"导出：{entry.name}", i, len(destinations))
+                    validate_destination(dest)
                     if entry.kind == "directory":
                         if dest.exists() and not dest.is_dir():
                             raise BackupError(f"目标不是文件夹：{dest.name}")
@@ -741,6 +763,7 @@ class BackupSession(SessionOverlay):
                 self.db, saved_db = saved_db, None
                 self.manifest_path = out_db_path
                 self.root = destination
+                self._protected_roots.add(self.root)
                 self.source_stamp = new_stamp
                 self._pending.clear()
                 self._baseline_hashes.clear()
