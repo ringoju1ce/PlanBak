@@ -70,6 +70,8 @@ from .dialogs import FixedMessageBox as QMessageBox
 from .dialogs import FixedProgressDialog
 from .hex_viewer import HexViewer
 from .icons import ApplicationIcons
+from .image_data import image_candidate, is_image
+from .image_session import ImageWindows
 from .navigation import Location, ViewState, split_domain
 from .pane_focus import BrowserPaneFocus
 from .pending_view import PendingChangesModel
@@ -424,6 +426,8 @@ class MainWindow(QMainWindow):
         self.plist_editors = {}
         self.database_viewers = {}
         self.hex_viewers = {}
+        self.images = ImageWindows(self)
+        self.image_viewers = self.images.viewers
         self._readonly_closing = False
         self.force_close = False
         self._exit_requested = False
@@ -1161,7 +1165,7 @@ class MainWindow(QMainWindow):
     def confirm_leave(self, continuation, *, exiting=False):
         if self.task:
             return
-        if self.database_viewers or self.hex_viewers:
+        if self.database_viewers or self.hex_viewers or self.image_viewers:
             self.close_readonly_viewers(lambda: self.confirm_leave(continuation, exiting=exiting))
             return
         for record in list(self.plist_editors.values()):
@@ -1291,6 +1295,7 @@ class MainWindow(QMainWindow):
         )
 
     def clear_opened_files(self):
+        self.images.clear_cache()
         paths = self.watcher.files() + self.watcher.directories()
         if paths:
             self.watcher.removePaths(paths)
@@ -1545,6 +1550,12 @@ class MainWindow(QMainWindow):
         if len(rows) != 1 or rows[0].kind != "file":
             return
         token = rows[0].entry.token
+        if not external and (
+            image_candidate(rows[0].name)
+            or any(v.current_token == token and not v._closing for v in self.image_viewers)
+        ):
+            self.images.open(token)
+            return
         if token in self.database_viewers:
             viewer = self.database_viewers[token].viewer
             viewer.showNormal()
@@ -1593,12 +1604,17 @@ class MainWindow(QMainWindow):
                         "内置查看器只支持标准 SQLite；此文件可能使用其他格式或应用自身的加密。"
                         "可通过右键菜单选择“以十六进制查看”“使用系统应用打开”，或导出项目。"
                     )
+                if not external and is_image(target):
+                    return "image"
                 return digest(target, cancel=cancel)
             except Exception:
                 shutil.rmtree(target.parent, ignore_errors=True)
                 raise
 
         def opened(fingerprint):
+            if fingerprint == "image":
+                self.images.open(token, prepared=target)
+                return
             if isinstance(fingerprint, DatabaseSnapshot):
                 shutil.rmtree(target.parent, ignore_errors=True)
                 self.show_database(token, fingerprint)
@@ -1646,14 +1662,18 @@ class MainWindow(QMainWindow):
         self._readonly_closing = True
 
         def closed(_):
-            if not self.database_viewers and not self.hex_viewers:
+            if not self.database_viewers and not self.hex_viewers and not self.image_viewers:
                 self._readonly_closing = False
                 QTimer.singleShot(0, after)
 
-        for record in list(self.database_viewers.values()) + list(self.hex_viewers.values()):
-            record.viewer._skip_prompt = True
-            record.viewer.finished.connect(closed)
-            record.viewer.reject()
+        viewers = [
+            record.viewer
+            for record in list(self.database_viewers.values()) + list(self.hex_viewers.values())
+        ] + list(self.image_viewers)
+        for viewer in viewers:
+            viewer._skip_prompt = True
+            viewer.finished.connect(closed)
+            viewer.reject()
 
     def open_hex(self):
         if self.task or not self.session or self.sidebar_active():
@@ -2389,7 +2409,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         if self.force_close:
-            if self.database_viewers or self.hex_viewers:
+            if self.database_viewers or self.hex_viewers or self.image_viewers:
                 event.ignore()
                 self.close_readonly_viewers(self.close)
                 return
