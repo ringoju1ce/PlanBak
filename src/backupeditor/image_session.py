@@ -39,7 +39,11 @@ class ImageWindows:
         return self.cache
 
     def open(self, token):
-        if self.owner._readonly_closing:
+        if (
+            self.owner._readonly_closing
+            or self.owner._transitioning
+            or self.owner._outgoing_transfers
+        ):
             return None
         if viewer := self.reuse(token):
             return viewer

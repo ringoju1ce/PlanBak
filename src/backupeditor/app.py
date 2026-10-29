@@ -73,6 +73,7 @@ from .backup import (
     load_plist,
     stale_workspaces,
 )
+from .backup_windows import BackupWindows
 from .codec import CHUNK, BackupError, Cancelled, check_cancel
 from .dialogs import FixedDialog as QDialog
 from .dialogs import FixedFileDialog as QFileDialog
@@ -449,8 +450,16 @@ class OpenedHex:
 
 
 class MainWindow(QMainWindow):
-    def __init__(self):
+    def __init__(self, manager=None):
         super().__init__()
+        self.manager = manager or BackupWindows.current()
+        self.manager.windows.add(self)
+        self._backup_claim = None
+        self._opening_claim = None
+        self._output_claim = None
+        self._transitioning = False
+        self._outgoing_transfers = 0
+        self._close_after_transfer = False
         self.settings = QSettings("BackupEditor", "BackupEditor")
         self.session = None
         self.domain = None
@@ -641,8 +650,12 @@ class MainWindow(QMainWindow):
 
     def _create_actions(self):
         self.open_backup_action = self.action(
-            "选择备份文件夹…", self.open_backup, "Ctrl+O", "document-open"
+            "打开备份…", self.open_backup, "Ctrl+O", "document-open"
         )
+        self.open_new_window_action = self.action(
+            "在新窗口中打开备份…", lambda: self.open_backup(new_window=True)
+        )
+        self.close_backup_action = self.action("关闭此备份", self.close_backup, "Ctrl+W")
         self.add_action = self.action("添加文件…", self.add_files, icon="list-add")
         self.add_folder_action = self.action("添加文件夹…", self.add_folder)
         self.new_folder_action = self.action("新建文件夹…", self.new_folder, "Ctrl+Shift+N")
@@ -678,6 +691,7 @@ class MainWindow(QMainWindow):
         file_menu.addActions(
             [
                 self.open_backup_action,
+                self.open_new_window_action,
                 self.create_copy_action,
                 self.add_action,
                 self.add_folder_action,
@@ -687,6 +701,7 @@ class MainWindow(QMainWindow):
             ]
         )
         file_menu.addSeparator()
+        file_menu.addAction(self.close_backup_action)
         file_menu.addAction(self.action("退出", self.close, "Ctrl+Q"))
         edit_menu = self.menuBar().addMenu("编辑")
         edit_menu.addActions(
@@ -811,7 +826,7 @@ class MainWindow(QMainWindow):
         return Location(group=self.domain_group)
 
     def navigate(self, location, *, focus_browser=True):
-        if self.task:
+        if self.task or self._outgoing_transfers or self._readonly_closing or self._transitioning:
             return
         self.domain, self.path, self.domain_group = location.domain, location.path, location.group
         self.refresh(focus_browser=focus_browser)
@@ -961,9 +976,12 @@ class MainWindow(QMainWindow):
         self.active_view().selectAll()
 
     def update_actions(self, *_):
-        busy = self.task is not None
+        busy = bool(
+            self.task or self._outgoing_transfers or self._transitioning or self._readonly_closing
+        )
         for record in self.plist_editors.values():
-            record.editor.set_busy(busy)
+            # 转场确认仍须允许编辑器处理保存/放弃/取消，尚未启动文件任务。
+            record.editor.set_busy(bool(self.task or self._outgoing_transfers))
         self.directory_tree.directory_model.suspended = busy
         self.directory_tree.setEnabled(not busy)
         rows = self.selected_rows()
@@ -971,6 +989,9 @@ class MainWindow(QMainWindow):
         session = self.session
         copying = self.copy_task is not None or self._copy_pending is not None
         self.open_backup_action.setEnabled(not busy and not copying)
+        self.open_new_window_action.setVisible(session is not None)
+        self.open_new_window_action.setEnabled(not busy and not copying)
+        self.close_backup_action.setEnabled(session is not None and not busy and not copying)
         self.create_copy_action.setEnabled(not busy and not copying and session is not None)
         editable = bool(session and session.editable)
         self.save_action.setText("应用更改" if editable else "应用更改…")
@@ -1026,7 +1047,7 @@ class MainWindow(QMainWindow):
         self.refresh()
 
     def refresh(self, *_, focus_browser=True):
-        if self.task or not hasattr(self, "sort_combo"):
+        if self.task or self._outgoing_transfers or not hasattr(self, "sort_combo"):
             return
         session_id = self.session.session_id if self.session else None
         if session_id != self._navigation_session:
@@ -1127,7 +1148,9 @@ class MainWindow(QMainWindow):
             else:
                 self.changes_dock.hide()
         else:
-            self.backup_status.setText("从“文件 → 选择备份文件夹”打开 iOS 备份")
+            self.setWindowTitle("BackupEditor")
+            self.changes_dock.hide()
+            self.backup_status.setText("从“文件 → 打开备份”打开 iOS 备份")
             self.backup_status.setToolTip("")
         self.update_actions()
         self.update_work_status()
@@ -1222,7 +1245,15 @@ class MainWindow(QMainWindow):
             self.update_work_status()
 
     def create_backup_copy(self, *_):
-        if not self.session or self.task or self.copy_task or self._copy_pending:
+        if (
+            not self.session
+            or self.task
+            or self.copy_task
+            or self._copy_pending
+            or self._transitioning
+            or self._outgoing_transfers
+            or self._readonly_closing
+        ):
             return
         session = self.session
         target, _ = QFileDialog.getSaveFileName(
@@ -1233,6 +1264,12 @@ class MainWindow(QMainWindow):
         )
         if not target:
             return
+        try:
+            claim = self.manager.reserve(target, self)
+        except Exception as exc:
+            message(self, "无法创建备份副本", str(exc), QMessageBox.Icon.Warning)
+            return
+        self._output_claim = claim
         job = Task(
             lambda progress, cancel: session.create_copy(
                 Path(target), progress=progress, cancel=cancel
@@ -1254,10 +1291,13 @@ class MainWindow(QMainWindow):
             if self._copy_exit_requested:
                 self._copy_exit_requested = False
                 self._copy_pending = None
+                self._release_output_claim()
                 QTimer.singleShot(0, self.close)
             else:
                 if job.error and not isinstance(job.error, Cancelled):
                     message(self, "无法创建备份副本", str(job.error), QMessageBox.Icon.Warning)
+                if self._copy_pending is None:
+                    self._release_output_claim()
                 self.attach_created_copy()
             self.update_actions()
             job.deleteLater()
@@ -1273,13 +1313,38 @@ class MainWindow(QMainWindow):
         session, copied = self._copy_pending
         self._copy_pending = None
         if self.session is not session:
+            self._release_output_claim()
             return
+        try:
+            claim = self._output_claim or self.manager.reserve(copied.path, self)
+        except Exception as exc:
+            message(self, "无法切换副本", str(exc), QMessageBox.Icon.Warning)
+            return
+
+        def adopted(_):
+            self._adopt_claim(claim)
+            self.refresh(focus_browser=False)
+
+        def finished():
+            if session.root == copied.path and self.session is session:
+                self._adopt_claim(claim)
+            else:
+                claim.release()
+                if self._output_claim is claim:
+                    self._output_claim = None
+
         self.run_task(
             "切换到备份副本",
             lambda progress, cancel: session.use_copy(copied),
-            lambda _: self.refresh(focus_browser=False),
+            adopted,
             silent=True,
+            on_done=finished,
         )
+
+    def _release_output_claim(self):
+        if self._output_claim:
+            self._output_claim.release()
+            self._output_claim = None
 
     def run_task(
         self,
@@ -1292,7 +1357,7 @@ class MainWindow(QMainWindow):
         on_error=None,
         on_done=None,
     ):
-        if self.task:
+        if self.task or self._outgoing_transfers:
             return
         job = Task(function, self)
         self.task = job
@@ -1307,7 +1372,7 @@ class MainWindow(QMainWindow):
             dialog = FixedProgressDialog(title, "取消", 0, 0, self)
             self.progress_dialog = dialog
             dialog.setWindowTitle("BackupEditor")
-            dialog.setWindowModality(Qt.WindowModality.ApplicationModal)
+            dialog.setWindowModality(Qt.WindowModality.WindowModal)
             dialog.canceled.connect(job.cancelled.set)
 
             def progress(text, done, total):
@@ -1342,31 +1407,44 @@ class MainWindow(QMainWindow):
                 job.deleteLater()
                 QTimer.singleShot(0, self.close)
                 return
-            if job.error:
-                if isinstance(job.error, Cancelled):
-                    self.statusBar().setToolTip("操作已取消")
-                elif on_error:
-                    on_error(job.error)
-                else:
-                    message(self, title, str(job.error), QMessageBox.Icon.Critical)
-            elif callback:
-                callback(job.result)
-            if on_done:
-                on_done()
-            job.deleteLater()
-            self.attach_created_copy()
+            try:
+                if job.error:
+                    if isinstance(job.error, Cancelled):
+                        self.statusBar().setToolTip("操作已取消")
+                    elif on_error:
+                        on_error(job.error)
+                    else:
+                        message(self, title, str(job.error), QMessageBox.Icon.Critical)
+                elif callback:
+                    callback(job.result)
+            except Exception as exc:
+                message(self, title, str(exc), QMessageBox.Icon.Critical)
+            finally:
+                if on_done:
+                    on_done()
+                job.deleteLater()
+                self.attach_created_copy()
 
         job.finished.connect(finished)
         job.start()
+        return job
 
-    def confirm_leave(self, continuation, *, exiting=False):
+    def confirm_leave(self, continuation, *, exiting=False, cancelled=None, purpose="切换备份"):
         if self.task or self.copy_task or self._copy_pending:
+            if cancelled:
+                cancelled()
             return
         if self.database_viewers or self.hex_viewers or self.image_viewers:
-            self.close_readonly_viewers(lambda: self.confirm_leave(continuation, exiting=exiting))
+            self.close_readonly_viewers(
+                lambda: self.confirm_leave(
+                    continuation, exiting=exiting, cancelled=cancelled, purpose=purpose
+                )
+            )
             return
         for record in list(self.plist_editors.values()):
             if not record.editor.close():
+                if cancelled:
+                    cancelled()
                 return
         if not self.session:
             continuation()
@@ -1392,7 +1470,8 @@ class MainWindow(QMainWindow):
             (
                 f"当前有未保存的更改。\n选择“应用更改”将{save_description}并留在应用中；选择“放弃更改”会清理临时文件并退出。"
                 if exiting
-                else f"是否{save_description}？"
+                else f"当前有未保存的更改。\n选择“应用更改”将{save_description}，成功后{purpose}；"
+                f"选择“放弃更改”将清理当前会话并{purpose}。"
             ),
             QMessageBox.StandardButton.Save
             | QMessageBox.StandardButton.Discard
@@ -1407,7 +1486,7 @@ class MainWindow(QMainWindow):
         if result == QMessageBox.StandardButton.Save:
             after_save = None if exiting else continuation
             if not external:
-                self.save(after=after_save, quiet=exiting)
+                self.save(after=after_save, quiet=True, on_cancel=cancelled)
                 return
 
             def stage_external(progress, cancel):
@@ -1433,22 +1512,52 @@ class MainWindow(QMainWindow):
                         "请先在外部应用中保存文件，然后重试。",
                         QMessageBox.Icon.Warning,
                     )
+                    if cancelled:
+                        cancelled()
                     return
-                self.save(after=after_save, quiet=exiting)
+                self.save(after=after_save, quiet=True, on_cancel=cancelled)
 
-            self.run_task("应用外部编辑", stage_external, staged)
+            succeeded = [False]
+
+            def done(updates):
+                succeeded[0] = True
+                staged(updates)
+
+            self.run_task(
+                "应用外部编辑",
+                stage_external,
+                done,
+                on_done=lambda: cancelled() if not succeeded[0] and cancelled else None,
+            )
         elif result == QMessageBox.StandardButton.Discard:
             continuation()
+        elif cancelled:
+            cancelled()
 
-    def open_backup(self, *_):
-        if self.task or self.copy_task or self._copy_pending:
+    def open_backup(self, *_, new_window=False):
+        if (
+            self.task
+            or self.copy_task
+            or self._copy_pending
+            or self._transitioning
+            or self._outgoing_transfers
+            or self._readonly_closing
+        ):
             return
-        path = QFileDialog.getExistingDirectory(self, "选择 iOS 备份文件夹")
+        path = QFileDialog.getExistingDirectory(self, "打开备份")
         if path:
-            self.confirm_leave(lambda: self.open_path(Path(path)))
+            self.open_path(Path(path), new_window=new_window)
 
-    def open_path(self, path):
-        if self._exit_requested or self.copy_task or self._copy_pending:
+    def open_path(self, path, *, new_window=False):
+        if (
+            self.task
+            or self._exit_requested
+            or self.copy_task
+            or self._copy_pending
+            or self._transitioning
+            or self._outgoing_transfers
+            or self._readonly_closing
+        ):
             return
         try:
             candidates = detect_backups(Path(path))
@@ -1466,25 +1575,87 @@ class MainWindow(QMainWindow):
                 path = next(p for p in candidates if p.name == selected)
             else:
                 path = candidates[0]
-            encrypted = load_plist(path / "Manifest.plist").get("IsEncrypted", False)
+            path = Path(path).resolve()
+            owner = self.manager.owner_for(path)
+            if owner is not None:
+                owner.showNormal()
+                owner.raise_()
+                owner.activateWindow()
+                if owner is not self or new_window:
+                    message(
+                        self, "备份已打开", "此备份已在另一个窗口中打开。", QMessageBox.Icon.Warning
+                    )
+                return
+            if new_window:
+                window = MainWindow(self.manager)
+                window.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+                window.show()
+                window.open_path(path)
+                return
+            claim = self.manager.reserve(path, self)
         except Exception as exc:
             message(self, "无法打开备份", str(exc), QMessageBox.Icon.Warning)
             return
+        self._opening_claim = claim
+        self._transitioning = True
+        self.update_actions()
+
+        def proceed():
+            self._clear_backup(lambda: self._load_backup(path, claim))
+
+        self.confirm_leave(
+            proceed, cancelled=self._cancel_open, purpose="关闭当前备份并打开所选备份"
+        )
+
+    def _cancel_open(self):
+        if self._opening_claim:
+            self._opening_claim.release()
+            self._opening_claim = None
+        self._transitioning = False
+        self.update_actions()
+
+    def _adopt_claim(self, claim):
+        claim.promote()
+        previous = self._backup_claim
+        self._backup_claim = claim
+        if previous and previous is not claim:
+            previous.release()
+        if self._opening_claim is claim:
+            self._opening_claim = None
+        if self._output_claim is claim:
+            self._output_claim = None
+
+    def _load_backup(self, path, claim):
         password = ""
+        try:
+            encrypted = load_plist(path / "Manifest.plist").get("IsEncrypted", False)
+        except Exception as exc:
+            self._cancel_open()
+            message(self, "无法打开备份", str(exc), QMessageBox.Icon.Warning)
+            return
         if encrypted:
             dialog = PasswordDialog(self)
-            if dialog.exec() != QDialog.DialogCode.Accepted:
-                return
-            password = dialog.password.text()
+            accepted = dialog.exec() == QDialog.DialogCode.Accepted
+            password = dialog.password.text() if accepted else ""
             dialog.password.clear()
             dialog.deleteLater()
+            if not accepted:
+                self._cancel_open()
+                return
 
         def loaded(session):
-            self.clear_opened_files()
-            if self.session:
-                self.session.close()
+            try:
+                self._adopt_claim(claim)
+            except Exception:
+                session.close()
+                raise
             self.session = session
+            self._transitioning = False
             self.navigate(Location())
+
+        def finished():
+            if self._opening_claim is claim:
+                self._cancel_open()
 
         self.run_task(
             "读取备份",
@@ -1493,10 +1664,73 @@ class MainWindow(QMainWindow):
             ),
             loaded,
             status=True,
+            on_done=finished,
         )
 
-    def clear_opened_files(self):
-        self.images.clear_cache()
+    def close_backup(self, *_):
+        if (
+            not self.session
+            or self.task
+            or self.copy_task
+            or self._copy_pending
+            or self._transitioning
+            or self._outgoing_transfers
+            or self._readonly_closing
+        ):
+            return
+        self._transitioning = True
+        self.update_actions()
+
+        def cancelled():
+            self._transitioning = False
+            self.update_actions()
+
+        self.confirm_leave(
+            lambda: self._clear_backup(cancelled), cancelled=cancelled, purpose="关闭此备份"
+        )
+
+    def _clear_backup(self, after):
+        session, claim = self.session, self._backup_claim
+        if not session:
+            after()
+            return
+        cache = self.images.cache
+        self.images.cache = None
+        self.clear_opened_files(clear_images=False)
+        self.clear_navigation_state()
+        self.session = None
+        self.domain, self.path, self.domain_group = None, "", None
+        self.refresh()
+        self.panes.activate(self.active_view(), focus=True)
+
+        def release():
+            if claim:
+                claim.release()
+            if self._backup_claim is claim:
+                self._backup_claim = None
+
+        def cleanup(progress, cancel):
+            if cache is not None:
+                cache.clear()
+            session.close()
+            if session.workspace.exists():
+                raise BackupError("未能完全清理会话临时文件夹，请检查文件占用或权限")
+
+        def cleaned(_):
+            release()
+            after()
+
+        def failed(exc):
+            self._cancel_open()
+            message(self, "无法完成清理", str(exc), QMessageBox.Icon.Warning)
+
+        self.run_task(
+            "关闭备份并清理缓存", cleanup, cleaned, status=True, on_error=failed, on_done=release
+        )
+
+    def clear_opened_files(self, *, clear_images=True):
+        if clear_images:
+            self.images.clear_cache()
         paths = self.watcher.files() + self.watcher.directories()
         if paths:
             self.watcher.removePaths(paths)
@@ -1755,7 +1989,14 @@ class MainWindow(QMainWindow):
             )
 
     def open_file(self, *, external=False):
-        if self._readonly_closing or self.task or not self.session or self.sidebar_active():
+        if (
+            self._transitioning
+            or self._outgoing_transfers
+            or self._readonly_closing
+            or self.task
+            or not self.session
+            or self.sidebar_active()
+        ):
             return
         rows = self.selected_rows()
         if len(rows) != 1 or rows[0].kind != "file":
@@ -1906,7 +2147,7 @@ class MainWindow(QMainWindow):
         )
 
     def show_database(self, token, snapshot):
-        if self._readonly_closing:
+        if self._transitioning or self._outgoing_transfers or self._readonly_closing:
             shutil.rmtree(snapshot.directory, ignore_errors=True)
             return
         session = self.session
@@ -1930,10 +2171,12 @@ class MainWindow(QMainWindow):
         if self._readonly_closing:
             return
         self._readonly_closing = True
+        self.update_actions()
         scheduled = False
 
         def resume():
             self._readonly_closing = False
+            self.update_actions()
             after()
 
         def closed(_):
@@ -1954,7 +2197,14 @@ class MainWindow(QMainWindow):
         closed(None)
 
     def open_hex(self):
-        if self._readonly_closing or self.task or not self.session or self.sidebar_active():
+        if (
+            self._transitioning
+            or self._outgoing_transfers
+            or self._readonly_closing
+            or self.task
+            or not self.session
+            or self.sidebar_active()
+        ):
             return
         rows = self.selected_rows()
         if len(rows) != 1 or rows[0].kind != "file":
@@ -2057,6 +2307,8 @@ class MainWindow(QMainWindow):
         )
 
     def check_hex_viewers(self):
+        if self._outgoing_transfers or self._transitioning or self._readonly_closing:
+            return False
         for record in list(self.hex_viewers.values()):
             if record.detached or record.viewer.task or record.viewer._closing:
                 continue
@@ -2077,7 +2329,13 @@ class MainWindow(QMainWindow):
         return False
 
     def open_data_hex(self, data, identity, label, *, owner=None):
-        if self._readonly_closing or self.task or not self.session:
+        if (
+            self._transitioning
+            or self._outgoing_transfers
+            or self._readonly_closing
+            or self.task
+            or not self.session
+        ):
             self.statusBar().setToolTip("备份操作进行中，请稍后再查看 Data。")
             return
         session = self.session
@@ -2215,6 +2473,8 @@ class MainWindow(QMainWindow):
         )
 
     def check_database_viewers(self):
+        if self._outgoing_transfers or self._transitioning or self._readonly_closing:
+            return False
         for record in list(self.database_viewers.values()):
             if record.viewer.task or record.viewer._closing:
                 continue
@@ -2243,7 +2503,7 @@ class MainWindow(QMainWindow):
         return (str(source), self.file_stamp(source))
 
     def open_plist(self, token, name, *, prepared=None):
-        if self._readonly_closing:
+        if self._transitioning or self._outgoing_transfers or self._readonly_closing:
             return
         session = self.session
         directory = session.workspace / "plist-editor" / uuid.uuid4().hex
@@ -2379,6 +2639,8 @@ class MainWindow(QMainWindow):
         return True
 
     def check_plist_editors(self):
+        if self._outgoing_transfers or self._transitioning or self._readonly_closing:
+            return False
         if self.task or not self.session or self.force_close or QApplication.activeModalWidget():
             return False
         for record in list(self.plist_editors.values()):
@@ -2460,6 +2722,8 @@ class MainWindow(QMainWindow):
                 self._file_event(str(record.path))
 
     def poll_open_files(self):
+        if self._outgoing_transfers or self._transitioning or self._readonly_closing:
+            return
         if self.task or not self.session or QApplication.activeModalWidget():
             return
         if self.check_plist_editors():
@@ -2535,11 +2799,22 @@ class MainWindow(QMainWindow):
         else:
             record.later_until = time.monotonic() + 30
 
-    def save(self, *_args, after=None, quiet=False):
-        if not self.session or self.task or self.copy_task or self._copy_pending:
+    def save(self, *_args, after=None, quiet=False, on_cancel=None):
+        if (
+            not self.session
+            or self.task
+            or self.copy_task
+            or self._copy_pending
+            or self._outgoing_transfers
+            or self._readonly_closing
+        ):
+            if on_cancel:
+                on_cancel()
             return
         for record in list(self.plist_editors.values()):
             if record.editor.dirty and not record.editor.save_document():
+                if on_cancel:
+                    on_cancel()
                 return
         session = self.session
         if not session.dirty:
@@ -2554,15 +2829,29 @@ class MainWindow(QMainWindow):
                 self, "创建备份副本并应用更改", suggested, "备份文件夹 (*)"
             )
             if not target:
+                if on_cancel:
+                    on_cancel()
                 return
         source_root = session.root
+        claim = None
         try:
+            if not direct:
+                claim = self.manager.reserve(target, self)
+                self._output_claim = claim
             token = session.begin_apply()  # 在线程启动/弹窗事件循环之前关闭数据层暂挂入口。
-        except BackupError as exc:
+        except Exception as exc:
+            if claim:
+                self._release_output_claim()
             message(self, "无法应用更改", str(exc), QMessageBox.Icon.Warning)
+            if on_cancel:
+                on_cancel()
             return
+        completed = [False]
 
         def saved(destination):
+            if claim:
+                self._adopt_claim(claim)
+            completed[0] = True
             self.refresh()
             if not quiet:
                 text = f"更改已应用到：\n{destination}"
@@ -2572,13 +2861,25 @@ class MainWindow(QMainWindow):
             if after:
                 after()
 
+        def finished():
+            session.end_apply(token)
+            if claim:
+                if self.session is session and session.root == claim.path:
+                    self._adopt_claim(claim)
+                else:
+                    claim.release()
+                    if self._output_claim is claim:
+                        self._output_claim = None
+            if not completed[0] and on_cancel:
+                on_cancel()
+
         self.run_task(
             "应用更改",
             lambda progress, cancel: session.save(
                 Path(target) if target else None, progress=progress, cancel=cancel, _token=token
             ),
             saved,
-            on_done=lambda: session.end_apply(token),
+            on_done=finished,
         )
 
     def context_menu(self, view, point: QPoint):
@@ -2639,7 +2940,14 @@ class MainWindow(QMainWindow):
     def queue_drop(self, mime, index):
         # 在原生拖放回调中只复制数据并确认投递。模态对话框/模型更新必须
         # 等 dropEvent 返回，不能跨嵌套事件循环持有平台借出的事件和 MIME。
-        if self.task or self._drop_queued or self.force_close or self._exit_requested:
+        if (
+            self.task
+            or self._transitioning
+            or self._readonly_closing
+            or self._drop_queued
+            or self.force_close
+            or self._exit_requested
+        ):
             return None
         internal = mime.hasFormat(INTERNAL_MIME)
         if not internal and not mime.hasUrls():
@@ -2671,7 +2979,7 @@ class MainWindow(QMainWindow):
         return Qt.DropAction.MoveAction if internal else Qt.DropAction.CopyAction
 
     def handle_drop(self, mime, index, *, target=None):
-        if self.task:
+        if self.task or self._transitioning or self._readonly_closing:
             return False
         domain, parent = target if target is not None else self.drop_location(index)
         if self.session is None:
@@ -2716,7 +3024,13 @@ class MainWindow(QMainWindow):
 
     def start_drag(self, view):
         tokens = self.selected_tokens()
-        if not tokens or not self.session or self.task:
+        if (
+            not tokens
+            or not self.session
+            or self.task
+            or self._transitioning
+            or self._outgoing_transfers
+        ):
             return
         drag = QDrag(view)
         drag.setMimeData(ExportMimeData(self, tokens))
@@ -2744,6 +3058,10 @@ class MainWindow(QMainWindow):
         return result
 
     def closeEvent(self, event):
+        if self._outgoing_transfers:
+            event.ignore()
+            self._close_after_transfer = True
+            return
         if self.copy_task:
             event.ignore()
             self._copy_exit_requested = True
@@ -2772,6 +3090,8 @@ class MainWindow(QMainWindow):
             if self.session:
                 self.session.close()
                 self.session = None
+            self.manager.remove(self)
+            self._backup_claim = self._opening_claim = self._output_claim = None
             event.accept()
             return
         event.ignore()

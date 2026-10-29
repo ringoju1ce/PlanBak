@@ -109,6 +109,8 @@ class FixedDialogMixin:
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        if self.parentWidget() is not None:
+            self.setWindowModality(Qt.WindowModality.WindowModal)
         self._locked_size = None
         unwanted = (
             Qt.WindowType.WindowMinMaxButtonsHint
