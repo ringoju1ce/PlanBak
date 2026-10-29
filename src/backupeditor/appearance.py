@@ -1,15 +1,24 @@
 """Follow Qt's platform palette; derive custom colors from the effective palette."""
 
+import sys
+
 from PySide6.QtGui import QColor, QPalette
 
 from .item_style import ItemViewStyle
 
 
 def configure_system_appearance(application):
-    # Qt's platform plugin owns detection and live updates on Linux/macOS/Windows.
-    # Do not set an application palette: explicit roles would mask OS updates.
+    # Keep Qt's native palette; Linux adds a portal scheme bridge below when
+    # native hints miss desktop preferences. Explicit palette roles mask updates.
     application.setStyle(ItemViewStyle("Fusion"))
     application.styleHints().unsetColorScheme()
+    if sys.platform.startswith("linux"):
+        try:
+            from .portal_appearance import PortalAppearance
+        except ImportError:
+            # QtDBus is optional on installations/platforms without D-Bus.
+            return
+        application._portal_appearance = PortalAppearance(application)
 
 
 def sync_background(widget, source, role):
