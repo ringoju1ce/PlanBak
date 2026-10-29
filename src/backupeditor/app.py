@@ -501,6 +501,7 @@ class MainWindow(QMainWindow):
         self._copy_pending = None
         self._copy_exit_requested = False
         self._drop_queued = False
+        self._queued_transfer = None
         self._status_jobs = {}
         self.work_label = QLabel("就绪", self)
         self.work_progress = QProgressBar(self)
@@ -1742,6 +1743,7 @@ class MainWindow(QMainWindow):
         if not session:
             after()
             return
+        self._release_queued_transfer()
         cache = self.images.cache
         self.images.cache = None
         self.clear_opened_files(clear_images=False)
@@ -3049,6 +3051,7 @@ class MainWindow(QMainWindow):
         target = self.drop_location(index)
         session = self.session
         self._drop_queued = True
+        self._queued_transfer = borrowed
 
         def consume():
             try:
@@ -3062,6 +3065,8 @@ class MainWindow(QMainWindow):
             finally:
                 if borrowed and not borrowed.started:
                     borrowed.release()
+                if self._queued_transfer is borrowed:
+                    self._queued_transfer = None
                 self._drop_queued = False
                 snapshot.deleteLater()
 
@@ -3069,6 +3074,12 @@ class MainWindow(QMainWindow):
         return (
             Qt.DropAction.MoveAction if internal and borrowed is None else Qt.DropAction.CopyAction
         )
+
+    def _release_queued_transfer(self):
+        borrowed = self._queued_transfer
+        if borrowed and not borrowed.started:
+            borrowed.release()
+            self._queued_transfer = None
 
     def handle_drop(self, mime, index, *, target=None, borrowed=None):
         if self.task or self._transitioning or self._outgoing_transfers or self._readonly_closing:
@@ -3245,6 +3256,8 @@ class MainWindow(QMainWindow):
             self.settings.setValue("descending", self.descending.isChecked())
             self.settings.setValue("directories_first", self.directories_first.isChecked())
             self.poll_timer.stop()
+            # DeleteOnClose会取消尚未消费的上下文定时器，不能只靠consume的finally。
+            self._release_queued_transfer()
             self.clear_opened_files()
             self.clear_navigation_state()
             self.directory_tree.sync(None, Location())
