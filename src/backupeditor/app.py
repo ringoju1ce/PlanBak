@@ -2199,6 +2199,10 @@ class MainWindow(QMainWindow):
                 record.viewer.set_source_state(stale=True)
                 record.viewer.status.setText(f"无法重新加载数据库：{exc}")
 
+        def cleanup():
+            if record.snapshot.directory != directory:
+                shutil.rmtree(directory, ignore_errors=True)
+
         self.run_task(
             "读取数据库快照",
             lambda progress, cancel: prepare_snapshot(
@@ -2207,6 +2211,7 @@ class MainWindow(QMainWindow):
             loaded,
             silent=automatic,
             on_error=failed,
+            on_done=cleanup,
         )
 
     def check_database_viewers(self):
