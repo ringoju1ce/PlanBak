@@ -5,9 +5,10 @@ import time
 
 from PySide6.QtCore import QEvent, QPointF, QRectF, QSignalBlocker, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QImage, QPainter
-from PySide6.QtWidgets import QMainWindow, QSlider, QWidget
+from PySide6.QtWidgets import QCheckBox, QMainWindow, QSlider, QWidget
 
 from .document_ui import DocumentStatus, DocumentToolBar
+from .image_metadata import information_text
 from .viewer_tasks import ViewerTask
 
 
@@ -265,6 +266,17 @@ class ImageZoomSlider(QSlider):
         self.window().canvas.wheelEvent(event)
 
 
+class ImageInformationStatus(DocumentStatus):
+    def __init__(self, viewer):
+        super().__init__(parent=viewer)
+        self.details_button.setText("图片信息")
+        self.details_button.setAccessibleName("图片信息")
+        self.details_button.setToolTip("查看图片信息和 EXIF")
+
+    def show_details(self):
+        self.show_text_details("图片信息", self.window().image_information())
+
+
 class ImageViewer(QMainWindow):
     finished = Signal(int)
     activated = Signal()
@@ -299,15 +311,20 @@ class ImageViewer(QMainWindow):
         self.next_button = toolbar.command(
             "下一张", lambda: self.navigate(1), icon="go-next", hint="Right"
         )
+        self.loop_toggle = QCheckBox("循环滚动", toolbar)
+        self.loop_toggle.setToolTip("首尾循环切换图片；仅对当前窗口生效，关闭窗口后丢弃")
+        self.loop_toggle.toggled.connect(self.update_navigation)
+        toolbar.addWidget(self.loop_toggle)
         toolbar.addSeparator()
         self.fit_button = toolbar.command("适应窗口", self.canvas.fit, icon="zoom-fit-best")
         self.actual_button = toolbar.command(
-            "100%", lambda: self.canvas.zoom(1.0), icon="zoom-original"
+            "实际大小", lambda: self.canvas.zoom(1.0), icon="zoom-original"
         )
+        self.actual_button.defaultAction().setToolTip("实际大小：100%（像素 1:1）")
         toolbar.addSeparator()
         self.zoom_slider = ImageZoomSlider(Qt.Orientation.Horizontal)
         self.zoom_slider.setAccessibleName("图片缩放倍率")
-        self.zoom_slider.setToolTip("调整缩放倍率；100% 为像素 1:1，适应窗口是独立模式")
+        self.zoom_slider.setToolTip("调整缩放倍率；实际大小为100%（像素1:1），适应窗口是独立模式")
         self.zoom_slider.setRange(-1661, 400)
         self.zoom_slider.setMinimumWidth(90)
         self.zoom_slider.setMaximumWidth(240)
@@ -315,15 +332,12 @@ class ImageViewer(QMainWindow):
         toolbar.addWidget(self.zoom_slider)
         toolbar.stretch()
         self.reload_button = toolbar.command("重新加载", self.reload, icon="view-refresh")
-        self.status = DocumentStatus(
-            parent=self,
-            note="只读图片快照；重新加载读取会话当前版本。左右键/滚轮切图；Ctrl+滚轮或捏合缩放，拖动平移。"
-            "动图/多页仅显示首帧/首页；HEIF 显示主图。",
-        )
+        self.status = ImageInformationStatus(self)
         self.statusBar().setSizeGripEnabled(True)
         self.statusBar().addWidget(self.status, 1)
         self.canvas.scale_changed.connect(self.update_zoom)
         self._info = ""
+        self._information = ""
         for sequence, callback in (
             ("Left", lambda: self.navigate(-1)),
             ("Right", lambda: self.navigate(1)),
@@ -363,17 +377,32 @@ class ImageViewer(QMainWindow):
             mode = "适应窗口 · " if fitting else ""
             self.status.setText(f"{self._info} · {mode}{scale * 100:.3g}%")
 
+    def image_information(self):
+        if self._information:
+            return self._information
+        return f"文件名称：{self.items[self.index][1]}\n\n{self.status.text()}"
+
     def navigate(self, delta):
-        target = max(0, min(len(self.items) - 1, self.index + delta))
+        target = (
+            (self.index + delta) % len(self.items)
+            if self.loop_toggle.isChecked()
+            else max(0, min(len(self.items) - 1, self.index + delta))
+        )
         if not self._closing and target != self.index:
             self.index = target
             self.request()
+
+    def update_navigation(self, *_):
+        looping = self.loop_toggle.isChecked() and len(self.items) > 1
+        self.previous_button.defaultAction().setEnabled(looping or self.index > 0)
+        self.next_button.defaultAction().setEnabled(looping or self.index + 1 < len(self.items))
 
     def reload(self):
         if not self._closing:
             self.request(force=True)
 
     def request(self, *, force=False):
+        self._information = ""
         self._region_timer.stop()
         self._pending_region = self._rendered_region = None
         if self.region_task:
@@ -382,8 +411,7 @@ class ImageViewer(QMainWindow):
         self._pending = (self._generation, self.current_token, force)
         name = self.items[self.index][1]
         self.setWindowTitle(f"{name} — 图片查看器（只读）")
-        self.previous_button.defaultAction().setEnabled(self.index > 0)
-        self.next_button.defaultAction().setEnabled(self.index + 1 < len(self.items))
+        self.update_navigation()
         self.canvas.clear("正在加载…")
         self.status.setText(f"正在加载：{name} · {self.index + 1}/{len(self.items)}")
         if self.task:
@@ -421,6 +449,7 @@ class ImageViewer(QMainWindow):
                         f"{result.format} · {result.width} × {result.height} · "
                         f"{self.index + 1}/{len(self.items)}"
                     )
+                    self._information = information_text(result)
                     self.canvas.set_image(result)
             task.result = None
             task.deleteLater()

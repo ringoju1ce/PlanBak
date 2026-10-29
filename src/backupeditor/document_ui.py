@@ -133,13 +133,16 @@ class DocumentStatus(QWidget):
             self._refresh()
 
     def show_details(self):
+        self.show_text_details("状态与说明", self.full_text())
+
+    def show_text_details(self, title, contents):
         dialog = FixedDialog(self.window())
-        dialog.setWindowTitle("状态与说明")
+        dialog.setWindowTitle(title)
         layout = QVBoxLayout(dialog)
         text = QPlainTextEdit()
-        text.setAccessibleName("完整状态与说明")
+        text.setAccessibleName(title)
         text.setReadOnly(True)
-        text.setPlainText(self.full_text())
+        text.setPlainText(contents)
         layout.addWidget(text)
         buttons = document_buttons(QDialogButtonBox.StandardButton.Close, dialog)
         buttons.button(QDialogButtonBox.StandardButton.Close).setText("关闭")

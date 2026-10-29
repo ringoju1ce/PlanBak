@@ -26,6 +26,7 @@ class CachedFile:
     size: int
     users: int = 0
     provider: object = None
+    metadata: object = None
 
     @property
     def disk_bytes(self):
@@ -79,7 +80,7 @@ class ImageCache:
             )
             return entry, revision
 
-    def _hit(self, token, revision, name):
+    def _hit(self, token, revision, entry):
         with self._lock:
             cached = self.decoded.get(token)
             if (
@@ -94,7 +95,8 @@ class ImageCache:
                 return replace(
                     result,
                     image=QImage(result.image),
-                    name=name,
+                    name=entry.name,
+                    backup_path=f"/{entry.domain}/{entry.path}",
                     lease=result.large.lease() if result.large else None,
                 )
         return None
@@ -102,7 +104,7 @@ class ImageCache:
     def load(self, token, cancel=None, *, force=False):
         check_cancel(cancel)
         entry, revision = self.source(token, cancel)
-        if not force and (hit := self._hit(token, revision, entry.name)):
+        if not force and (hit := self._hit(token, revision, entry)):
             return hit
         with self._lock:
             gate, users = self._loads.get(token, (threading.Lock(), 0))
@@ -114,7 +116,7 @@ class ImageCache:
             acquired = True
             check_cancel(cancel)
             entry, revision = self.source(token, cancel)
-            if not force and (hit := self._hit(token, revision, entry.name)):
+            if not force and (hit := self._hit(token, revision, entry)):
                 return hit
             while not self._work.acquire(timeout=0.05):
                 check_cancel(cancel)
@@ -169,10 +171,14 @@ class ImageCache:
         try:
             if cached.provider and not cached.provider.closed:
                 result = DecodedImage(
-                    cached.provider.preview(cancel), cached.provider.format, large=cached.provider
+                    cached.provider.preview(cancel),
+                    cached.provider.format,
+                    large=cached.provider,
+                    metadata=cached.metadata,
                 )
             else:
                 result = decode_image(cached.path, cancel)
+            cached.metadata = result.metadata
             # HEIF may already have produced a tiled file. Account for it even
             # when cancellation or a changed source prevents publishing pixels.
             if result.large:
@@ -187,6 +193,7 @@ class ImageCache:
             if after != revision:
                 raise BackupError("图片源文件在读取时发生变化，请重新加载。")
             result.name = current.name
+            result.backup_path = f"/{current.domain}/{current.path}"
             with self._lock:
                 self.decoded[token] = (revision, result)
                 lease = result.large.lease() if result.large else None

@@ -9,6 +9,7 @@ from pillow_heif import register_heif_opener
 from PySide6.QtGui import QColorSpace, QImage, QImageReader
 
 from .codec import BackupError, check_cancel
+from .image_metadata import read_metadata
 
 register_heif_opener(thumbnails=False)
 Image.init()
@@ -51,6 +52,8 @@ class DecodedImage:
     name: str = ""
     large: object = None
     lease: object = None
+    metadata: object = None
+    backup_path: str = ""
 
     @property
     def width(self):
@@ -74,7 +77,13 @@ def decode_image(path, cancel=None):
         check_cancel(cancel)
     try:
         check_cancel(cancel)
-        return _decode(path, cancel)
+        # Read metadata before large decode, which may create a tiled file that
+        # must be handed back to the cache even if cancellation follows.
+        metadata = read_metadata(path, cancel)
+        check_cancel(cancel)
+        result = _decode(path, cancel)
+        result.metadata = metadata
+        return result
     finally:
         DECODE_SLOTS.release()
 
