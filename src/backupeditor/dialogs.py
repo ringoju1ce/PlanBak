@@ -337,6 +337,8 @@ class FixedProgressDialog(FixedDialog):
         super().__init__(parent)
         self.lock_size(QSize(640, 160))
         self._cancel_requested = False
+        self._cancellable = True
+        self._finished = False
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 4, 10, 10)
         layout.setSpacing(8)
@@ -377,7 +379,22 @@ class FixedProgressDialog(FixedDialog):
     def reject(self):
         self.close()
 
+    def set_cancellable(self, enabled):
+        self._cancellable = enabled
+        self._cancel_button.setEnabled(enabled)
+        self._title_bar.close_button.setEnabled(enabled)
+
+    def finish(self):
+        self._finished = True
+        self.close()
+
     def closeEvent(self, event):
+        if self._finished:
+            event.accept()
+            return
+        if not self._cancellable:
+            event.ignore()
+            return
         if not self._cancel_requested:
             self._cancel_requested = True
             self.canceled.emit()

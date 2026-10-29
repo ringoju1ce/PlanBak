@@ -42,6 +42,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDialogButtonBox,
     QDockWidget,
+    QHBoxLayout,
     QHeaderView,
     QLabel,
     QLineEdit,
@@ -50,6 +51,7 @@ from PySide6.QtWidgets import (
     QMenu,
     QProgressBar,
     QPushButton,
+    QSizePolicy,
     QSlider,
     QSplitter,
     QStackedWidget,
@@ -447,8 +449,29 @@ class MainWindow(QMainWindow):
         self.work_progress.setMaximumHeight(max(18, self.work_progress.fontMetrics().height() + 6))
         self.work_progress.setAccessibleName("后台任务进度")
         self.work_progress.hide()
-        self.statusBar().addWidget(self.work_label)
-        self.statusBar().addWidget(self.work_progress)
+        self.backup_status = QLabel(self)
+        self.backup_status.setTextFormat(Qt.TextFormat.PlainText)
+        self.backup_status.setAccessibleName("备份状态")
+        self.backup_status.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.work_label.setTextFormat(Qt.TextFormat.PlainText)
+        self.work_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.summary_panel = QWidget(self)
+        summary_layout = QHBoxLayout(self.summary_panel)
+        summary_layout.setContentsMargins(0, 0, 8, 0)
+        summary_layout.addWidget(self.backup_status, 1)
+        summary_layout.addWidget(self.work_label)
+        self.work_panel = QWidget(self)
+        work_layout = QHBoxLayout(self.work_panel)
+        work_layout.setContentsMargins(0, 0, 0, 0)
+        work_layout.addWidget(self.work_progress)
+        work_layout.addStretch()
+        self.status_panel = QWidget(self)
+        status_layout = QHBoxLayout(self.status_panel)
+        status_layout.setContentsMargins(0, 0, 0, 0)
+        status_layout.setSpacing(0)
+        status_layout.addWidget(self.summary_panel, 3)
+        status_layout.addWidget(self.work_panel, 1)
+        self.statusBar().addPermanentWidget(self.status_panel, 1)
         self.opened: dict[str, OpenedFile] = {}
         self.plist_editors = {}
         self.database_viewers = {}
@@ -1059,16 +1082,20 @@ class MainWindow(QMainWindow):
             dirty = self.session.dirty
             category = "可编辑副本" if self.session.editable else "原始备份"
             self.setWindowTitle(f"{'* ' if dirty else ''}{device} · {category} — BackupEditor")
-            self.statusBar().setToolTip(
-                f"{device} · {category} · {self.session.root} · "
+            self.backup_status.setText(
+                f"{device} · {category} · {'加密' if self.session.encrypted else '未加密'} · "
+                f"{len(rows) - (0 if location.is_root else 1)} 个项目 · "
                 f"{len(self.session.changes)} 个已更改项目"
             )
+            self.backup_status.setToolTip(f"{self.backup_status.text()}\n{self.session.root}")
+            self.statusBar().setToolTip("")
             if dirty:
                 self.changes_dock.show()
             else:
                 self.changes_dock.hide()
         else:
-            self.statusBar().setToolTip("从“文件 → 选择备份文件夹”打开 iOS 备份")
+            self.backup_status.setText("从“文件 → 选择备份文件夹”打开 iOS 备份")
+            self.backup_status.setToolTip("")
         self.update_actions()
         self.update_work_status()
 
@@ -1258,7 +1285,7 @@ class MainWindow(QMainWindow):
                     dialog.setRange(0, 0)
                 dialog.setLabelText(text)
                 if text == "正在应用更改…":
-                    dialog.setCancelButton(None)
+                    dialog.set_cancellable(False)
 
             job.progress.connect(progress)
             dialog.show()
@@ -1270,7 +1297,7 @@ class MainWindow(QMainWindow):
             self.update_work_status()
             if dialog:
                 self.progress_dialog = None
-                dialog.close()
+                dialog.finish()
                 dialog.deleteLater()
             self.update_actions()
             if self._exit_requested:
