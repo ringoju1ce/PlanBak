@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .appearance import sync_background
+from .appearance import is_dark, sync_background
 
 
 class DialogTitleBar(QWidget):
@@ -31,7 +31,7 @@ class DialogTitleBar(QWidget):
         super().__init__(dialog)
         self.setObjectName("dialogTitleBar")
         self.setAutoFillBackground(True)
-        sync_background(self, dialog.palette(), QPalette.ColorRole.Base)
+        self.sync_background()
         self.setFixedHeight(max(36, self.fontMetrics().height() + 14))
         layout = QHBoxLayout(self)
         layout.setContentsMargins(6, 3, 6, 3)
@@ -68,9 +68,27 @@ class DialogTitleBar(QWidget):
     def changeEvent(self, event):
         super().changeEvent(event)
         if event.type() in (QEvent.Type.PaletteChange, QEvent.Type.ApplicationPaletteChange):
-            sync_background(self, self.parentWidget().palette(), QPalette.ColorRole.Base)
+            self.sync_background()
             if hasattr(self, "close_button"):
                 self.close_button.setPalette(QPalette())
+                # QStyleSheetStyle caches palette(...) colors for hover/pressed
+                # rules independently of the button's effective palette.
+                self.close_button.setStyleSheet(self.close_button.styleSheet())
+
+    def sync_background(self):
+        source = self.parentWidget().palette()
+        if not is_dark(source):
+            for group in (
+                QPalette.ColorGroup.Active,
+                QPalette.ColorGroup.Inactive,
+                QPalette.ColorGroup.Disabled,
+            ):
+                source.setColor(
+                    group,
+                    QPalette.ColorRole.Base,
+                    source.color(group, QPalette.ColorRole.Window).darker(106),
+                )
+        sync_background(self, source, QPalette.ColorRole.Base)
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
