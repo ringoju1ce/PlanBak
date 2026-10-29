@@ -303,6 +303,7 @@ class XmlTextEdit(QPlainTextEdit):
 class XmlSearchDialog(FixedDialog):
     def __init__(self, pane):
         super().__init__(pane)
+        self.setWindowModality(Qt.WindowModality.NonModal)
         self.setWindowTitle("搜索与替换")
         layout = QVBoxLayout(self)
         self.find_field = QLineEdit()

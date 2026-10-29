@@ -1453,8 +1453,32 @@ class MainWindow(QMainWindow):
         job.start()
         return job
 
+    def _focus_owned_modal(self, *, focus=True):
+        owners = {self}
+        owners.update(record.editor for record in self.plist_editors.values())
+        owners.update(record.viewer for record in self.database_viewers.values())
+        owners.update(record.viewer for record in self.hex_viewers.values())
+        owners.update(self.image_viewers)
+        # 不只检查全局activeModalWidget：其他备份可能同时有自己的WindowModal。
+        for widget in QApplication.topLevelWidgets():
+            if not widget.isVisible() or not widget.isModal():
+                continue
+            parent = widget.parentWidget()
+            while parent is not None:
+                if parent in owners:
+                    if focus:
+                        widget.raise_()
+                        widget.activateWindow()
+                    return True
+                parent = parent.parentWidget()
+        return False
+
     def confirm_leave(self, continuation, *, exiting=False, cancelled=None, purpose="切换备份"):
         if self.task or self.copy_task or self._copy_pending:
+            if cancelled:
+                cancelled()
+            return
+        if self._focus_owned_modal():
             if cancelled:
                 cancelled()
             return
@@ -1927,10 +1951,14 @@ class MainWindow(QMainWindow):
     def revert_pending(self, token=None):
         if self.task or not self.session:
             return
+        if self._focus_owned_modal():
+            return
         session = self.session
         directory = session.at(self.domain, self.path) if self.domain else None
 
         def prepared(plan):
+            if self._focus_owned_modal():
+                return
             if not plan.updates:
                 return
             editors = [
@@ -2026,6 +2054,8 @@ class MainWindow(QMainWindow):
         if len(rows) != 1 or rows[0].kind != "file":
             return
         token = rows[0].entry.token
+        if external and self._focus_owned_modal():
+            return
         # 明确指定系统应用时，先关闭可编辑窗口，沿用保存/放弃/取消保护。
         if external:
             record = self.plist_editors.get(token)
@@ -2291,6 +2321,8 @@ class MainWindow(QMainWindow):
             return digest(path, cancel=cancel)
 
         def loaded(fingerprint):
+            if self._focus_owned_modal(focus=False):
+                return
             if self.hex_viewers.get(record.token) is not record:
                 return
             record.revision = revision
@@ -2332,6 +2364,8 @@ class MainWindow(QMainWindow):
 
     def check_hex_viewers(self):
         if self._outgoing_transfers or self._transitioning or self._readonly_closing:
+            return False
+        if self._focus_owned_modal(focus=False):
             return False
         for record in list(self.hex_viewers.values()):
             if record.detached or record.viewer.task or record.viewer._closing:
@@ -2413,7 +2447,7 @@ class MainWindow(QMainWindow):
                                 any(r.editor is target for r in self.plist_editors.values())
                                 and target.isVisible()
                                 and not target.isMinimized()
-                                and not QApplication.activeModalWidget()
+                                and not self._focus_owned_modal(focus=False)
                                 and QApplication.activeWindow() in (None, self, viewer, target)
                             ):
                                 target.activateWindow()
@@ -2449,6 +2483,8 @@ class MainWindow(QMainWindow):
         directory = session.workspace / "sqlite-viewer" / uuid.uuid4().hex
 
         def loaded(snapshot):
+            if self._focus_owned_modal(focus=False):
+                return
             if record.token not in self.database_viewers:
                 shutil.rmtree(snapshot.directory, ignore_errors=True)
                 return
@@ -2499,6 +2535,8 @@ class MainWindow(QMainWindow):
     def check_database_viewers(self):
         if self._outgoing_transfers or self._transitioning or self._readonly_closing:
             return False
+        if self._focus_owned_modal(focus=False):
+            return False
         for record in list(self.database_viewers.values()):
             if record.viewer.task or record.viewer._closing:
                 continue
@@ -2544,6 +2582,8 @@ class MainWindow(QMainWindow):
             def stage(data):
                 if self.task or self.session is not session:
                     raise BackupError("备份操作进行中，请稍后再保存")
+                if self._focus_owned_modal(focus=False):
+                    raise BackupError("请先完成或取消当前编辑弹窗，再保存 plist")
                 latest = directory / "before-save.plist"
                 try:
                     session.extract_file(token, latest)
@@ -2627,7 +2667,7 @@ class MainWindow(QMainWindow):
                 or self.session is not session
                 or not self.isVisible()
                 or self.isMinimized()
-                or QApplication.activeModalWidget()
+                or self._focus_owned_modal(focus=False)
                 or QApplication.activePopupWidget()
                 or QApplication.activeWindow() not in (None, self, editor)
             ):
@@ -2665,7 +2705,12 @@ class MainWindow(QMainWindow):
     def check_plist_editors(self):
         if self._outgoing_transfers or self._transitioning or self._readonly_closing:
             return False
-        if self.task or not self.session or self.force_close or QApplication.activeModalWidget():
+        if (
+            self.task
+            or not self.session
+            or self.force_close
+            or self._focus_owned_modal(focus=False)
+        ):
             return False
         for record in list(self.plist_editors.values()):
             try:
@@ -2689,6 +2734,8 @@ class MainWindow(QMainWindow):
                     path.unlink(missing_ok=True)
 
             def checked(data, rec=record, version=revision):
+                if self._focus_owned_modal(focus=False):
+                    return
                 if rec.token not in self.plist_editors:
                     return
                 try:
@@ -2719,6 +2766,8 @@ class MainWindow(QMainWindow):
                     self.reload_plist(rec, data)
 
             def failed(exc, rec=record, version=revision):
+                if self._focus_owned_modal(focus=False):
+                    return
                 rec.revision = version
                 rec.editor.show_error(exc)
 
@@ -2748,7 +2797,7 @@ class MainWindow(QMainWindow):
     def poll_open_files(self):
         if self._outgoing_transfers or self._transitioning or self._readonly_closing:
             return
-        if self.task or not self.session or QApplication.activeModalWidget():
+        if self.task or not self.session or self._focus_owned_modal(focus=False):
             return
         if self.check_plist_editors():
             return
@@ -3169,6 +3218,10 @@ class MainWindow(QMainWindow):
         if self._outgoing_transfers:
             event.ignore()
             self._close_after_transfer = True
+            return
+        if not self.task and self._focus_owned_modal():
+            event.ignore()
+            self.force_close = False
             return
         if self.copy_task:
             event.ignore()
