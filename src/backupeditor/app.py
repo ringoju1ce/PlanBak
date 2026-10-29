@@ -1627,7 +1627,9 @@ class MainWindow(QMainWindow):
             path = Path(path).resolve()
             owner = self.manager.owner_for(path)
             if owner is not None:
-                owner.showNormal()
+                if owner.isMinimized():
+                    owner.setWindowState(owner.windowState() & ~Qt.WindowState.WindowMinimized)
+                owner.show()
                 owner.raise_()
                 owner.activateWindow()
                 if owner is not self or new_window:
