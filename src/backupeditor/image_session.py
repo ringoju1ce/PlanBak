@@ -39,6 +39,8 @@ class ImageWindows:
         return self.cache
 
     def open(self, token):
+        if self.owner._readonly_closing:
+            return None
         if viewer := self.reuse(token):
             return viewer
         owner, session = self.owner, self.owner.session

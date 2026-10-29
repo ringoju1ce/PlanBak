@@ -1745,7 +1745,7 @@ class MainWindow(QMainWindow):
             )
 
     def open_file(self, *, external=False):
-        if self.task or not self.session or self.sidebar_active():
+        if self._readonly_closing or self.task or not self.session or self.sidebar_active():
             return
         rows = self.selected_rows()
         if len(rows) != 1 or rows[0].kind != "file":
@@ -1896,6 +1896,9 @@ class MainWindow(QMainWindow):
         )
 
     def show_database(self, token, snapshot):
+        if self._readonly_closing:
+            shutil.rmtree(snapshot.directory, ignore_errors=True)
+            return
         session = self.session
         viewer = SQLiteViewer(snapshot, session.get(token).name, self)
         record = OpenedDatabase(token, viewer, snapshot, self.database_revision(token))
@@ -1917,11 +1920,18 @@ class MainWindow(QMainWindow):
         if self._readonly_closing:
             return
         self._readonly_closing = True
+        scheduled = False
+
+        def resume():
+            self._readonly_closing = False
+            after()
 
         def closed(_):
+            nonlocal scheduled
             if not self.database_viewers and not self.hex_viewers and not self.image_viewers:
-                self._readonly_closing = False
-                QTimer.singleShot(0, after)
+                if not scheduled:
+                    scheduled = True
+                    QTimer.singleShot(0, resume)
 
         viewers = [
             record.viewer
@@ -1931,9 +1941,10 @@ class MainWindow(QMainWindow):
             viewer._skip_prompt = True
             viewer.finished.connect(closed)
             viewer.reject()
+        closed(None)
 
     def open_hex(self):
-        if self.task or not self.session or self.sidebar_active():
+        if self._readonly_closing or self.task or not self.session or self.sidebar_active():
             return
         rows = self.selected_rows()
         if len(rows) != 1 or rows[0].kind != "file":
@@ -2056,7 +2067,7 @@ class MainWindow(QMainWindow):
         return False
 
     def open_data_hex(self, data, identity, label, *, owner=None):
-        if self.task or not self.session:
+        if self._readonly_closing or self.task or not self.session:
             self.statusBar().setToolTip("备份操作进行中，请稍后再查看 Data。")
             return
         session = self.session
@@ -2217,6 +2228,8 @@ class MainWindow(QMainWindow):
         return (str(source), self.file_stamp(source))
 
     def open_plist(self, token, name, *, prepared=None):
+        if self._readonly_closing:
+            return
         session = self.session
         directory = session.workspace / "plist-editor" / uuid.uuid4().hex
 
