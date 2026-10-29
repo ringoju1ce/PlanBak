@@ -17,13 +17,11 @@ from PySide6.QtWidgets import (
     QDateEdit,
     QDialogButtonBox,
     QFormLayout,
-    QHBoxLayout,
     QHeaderView,
     QLabel,
     QLineEdit,
     QMenu,
     QPlainTextEdit,
-    QPushButton,
     QStackedWidget,
     QTimeEdit,
     QTreeWidget,
@@ -33,6 +31,7 @@ from PySide6.QtWidgets import (
 )
 
 from .dialogs import FixedDialog, FixedDocumentWindow, FixedFileDialog, FixedMessageBox
+from .document_ui import DocumentStatus, DocumentToolBar, document_buttons
 from .plist_xml import PlistXmlError, XmlPane, parse_xml
 
 TYPES = (
@@ -425,24 +424,23 @@ class PlistEditor(FixedDocumentWindow):
         self._xml_cache = ""
         self.xml_reason = ""
         layout = QVBoxLayout(self)
-        actions = QHBoxLayout()
-        for label, method, attribute in (
-            ("添加", self.add_node, "add_button"),
-            ("编辑", self.edit_node, "edit_button"),
-            ("删除", self.delete_node, "delete_button"),
-            ("XML 编辑器", lambda: self.switch_mode(1), "xml_button"),
+        action_bar = DocumentToolBar("plist 树形编辑操作", self)
+        for label, method, attribute, icon, hint in (
+            ("添加", self.add_node, "add_button", "list-add", None),
+            ("编辑", self.edit_node, "edit_button", "document-edit", "F2"),
+            ("删除", self.delete_node, "delete_button", "edit-delete", "Delete"),
+            ("XML 编辑器", lambda: self.switch_mode(1), "xml_button", None, None),
         ):
-            button = QPushButton(label)
-            button.clicked.connect(method)
+            if attribute == "xml_button":
+                action_bar.addSeparator()
+            button = action_bar.command(label, method, icon=icon, hint=hint)
             setattr(self, attribute, button)
-            actions.addWidget(button)
-        actions.addStretch()
-        action_bar = QWidget()
-        action_bar.setLayout(actions)
+        action_bar.stretch()
         layout.addWidget(action_bar)
         self.tree_actions = action_bar
         self.tree = QTreeWidget()
         self.tree.setHeaderLabels(["键 / 索引", "类型", "值"])
+        self.tree.setAccessibleName("plist 键、类型与值")
         self.tree.setAlternatingRowColors(True)
         self.tree.setSelectionMode(QTreeWidget.SelectionMode.ExtendedSelection)
         self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -469,15 +467,14 @@ class PlistEditor(FixedDocumentWindow):
         ):
             note += "\nNSKeyedArchiver：按原始结构编辑，UID 表示对象引用。"
         self.note = note
-        self.status = QLabel(note)
-        self.status.setWordWrap(True)
-        self.status.setTextFormat(Qt.TextFormat.PlainText)
+        self.status = DocumentStatus(note=note)
         layout.addWidget(self.status)
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Close
+        buttons = document_buttons(
+            QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Close, self
         )
         self.save_button = buttons.button(QDialogButtonBox.StandardButton.Save)
         self.save_button.setText("保存")
+        self.save_button.setToolTip("保存到会话（Ctrl+S）；生成备份副本请使用主窗口")
         buttons.button(QDialogButtonBox.StandardButton.Close).setText("关闭")
         self.save_button.clicked.connect(self.save_document)
         buttons.rejected.connect(self.reject)
@@ -529,8 +526,8 @@ class PlistEditor(FixedDocumentWindow):
         except Exception as exc:
             self._xml_cache = ""
             self.xml_reason = f"无法使用 XML 模式：{exc}"
-        self.xml_button.setEnabled(not self.xml_reason)
-        self.xml_button.setToolTip(self.xml_reason or "使用 XML 编辑此 plist")
+        self.xml_button.defaultAction().setEnabled(not self.xml_reason)
+        self.xml_button.defaultAction().setToolTip(self.xml_reason or "使用 XML 编辑此 plist")
 
     def xml_changed(self):
         self.update_actions()
@@ -707,9 +704,9 @@ class PlistEditor(FixedDocumentWindow):
 
     def update_actions(self):
         node = self.selected_node()
-        self.add_button.setEnabled(bool(node and node.container))
-        self.edit_button.setEnabled(node is not None)
-        self.delete_button.setEnabled(bool(self.deletion_roots()))
+        self.add_button.defaultAction().setEnabled(bool(node and node.container))
+        self.edit_button.defaultAction().setEnabled(node is not None)
+        self.delete_button.defaultAction().setEnabled(bool(self.deletion_roots()))
         self.save_button.setEnabled(self.dirty and not self._busy and self._available)
         self.setWindowTitle(
             f"{'* ' if self.dirty else ''}{self.name} — plist 编辑器 ({'二进制' if self.document.format == plistlib.FMT_BINARY else 'XML'})"
@@ -726,7 +723,7 @@ class PlistEditor(FixedDocumentWindow):
             extra = "\n源文件已被删除或替换；撤销删除后可继续保存。"
         elif conflict:
             extra = "\n备份中的文件已有更新；保存前将要求确认覆盖。"
-        self.status.setText(self.note + extra)
+        self.status.setText(extra.strip())
         self.update_actions()
 
     def reload_document(self, document):

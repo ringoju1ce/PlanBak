@@ -19,17 +19,16 @@ from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
     QDialogButtonBox,
-    QHBoxLayout,
     QLabel,
     QLineEdit,
     QMenu,
-    QPushButton,
     QTableView,
     QVBoxLayout,
 )
 
 from .codec import BackupError
 from .dialogs import FixedDocumentWindow
+from .document_ui import DocumentStatus, DocumentToolBar, document_buttons
 from .hex_data import PAGE_SIZE, parse_offset, parse_pattern, read_page, search_bytes
 from .viewer_tasks import ViewerTask
 
@@ -115,54 +114,48 @@ class HexViewer(FixedDocumentWindow):
         self.available, self.stale = True, False
         self.setWindowTitle(f"{name} — 十六进制查看器（只读）")
         layout = QVBoxLayout(self)
-        toolbar = QHBoxLayout()
-        self.previous_button, self.next_button = QPushButton("上一页"), QPushButton("下一页")
-        self.previous_button.clicked.connect(lambda: self.go(max(0, self.offset - PAGE_SIZE)))
-        self.next_button.clicked.connect(lambda: self.go(self.offset + PAGE_SIZE))
+        toolbar = DocumentToolBar("十六进制导航", self)
+        self.previous_button = toolbar.command(
+            "上一页", lambda: self.go(max(0, self.offset - PAGE_SIZE)), icon="go-previous"
+        )
+        self.next_button = toolbar.command(
+            "下一页", lambda: self.go(self.offset + PAGE_SIZE), icon="go-next"
+        )
+        toolbar.addSeparator()
         self.address = QLineEdit()
         self.address.setPlaceholderText("偏移：十进制或 0x…")
         self.address.setAccessibleName("跳转偏移")
+        self.address.setToolTip("输入十进制或 0x 开头的偏移，按 Enter 跳转；Ctrl+G 定位此输入框")
+        self.address.setMinimumWidth(
+            self.address.fontMetrics().horizontalAdvance("0x00000000") + 24
+        )
         self.address.returnPressed.connect(self.jump)
-        self.jump_button = QPushButton("跳转")
-        self.jump_button.clicked.connect(self.jump)
-        self.reload_button = QPushButton("重新加载")
-        self.reload_button.clicked.connect(self.reload_requested)
-        for widget in (
-            self.previous_button,
-            self.next_button,
-            self.address,
-            self.jump_button,
-            self.reload_button,
-        ):
-            toolbar.addWidget(widget)
-        layout.addLayout(toolbar)
-        search = QHBoxLayout()
+        toolbar.addWidget(self.address)
+        self.jump_button = toolbar.command("跳转", self.jump)
+        toolbar.addSeparator()
+        self.reload_button = toolbar.command("重新加载", self.reload_requested, icon="view-refresh")
+        layout.addWidget(toolbar)
+        search = DocumentToolBar("十六进制搜索", self)
         self.search_mode = QComboBox()
+        self.search_mode.setAccessibleName("搜索内容类型")
         self.search_mode.addItems(["十六进制字节", "UTF-8 文本"])
+        search.addWidget(self.search_mode)
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("搜索内容（Ctrl+F）")
         self.search_input.setAccessibleName("搜索内容")
+        self.search_input.setToolTip("Enter 查找下一个匹配；Ctrl+F 定位此输入框")
         self.search_input.returnPressed.connect(self.find_next)
-        self.find_previous_button, self.find_next_button = (
-            QPushButton("上一个"),
-            QPushButton("下一个"),
+        search.addWidget(self.search_input)
+        self.find_previous_button = search.command(
+            "上一个", lambda: self.find_next(backwards=True), icon="go-previous"
         )
-        self.find_previous_button.clicked.connect(lambda: self.find_next(backwards=True))
-        self.find_next_button.clicked.connect(self.find_next)
-        self.cancel_button = QPushButton("取消搜索")
-        self.cancel_button.clicked.connect(self.cancel_search)
-        for widget in (
-            self.search_mode,
-            self.search_input,
-            self.find_previous_button,
-            self.find_next_button,
-            self.cancel_button,
-        ):
-            search.addWidget(widget)
-        layout.addLayout(search)
+        self.find_next_button = search.command("下一个", self.find_next, icon="go-next")
+        self.cancel_button = search.command("取消搜索", self.cancel_search, icon="process-stop")
+        layout.addWidget(search)
         self.table = QTableView()
         self.model = HexModel(self)
         self.table.setModel(self.model)
+        self.table.setAccessibleName("十六进制字节与 ASCII")
         self.table.setFont(QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont))
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
@@ -180,12 +173,11 @@ class HexViewer(FixedDocumentWindow):
         self.table.selectionModel().selectionChanged.connect(self.selection_changed)
         layout.addWidget(self.table, 1)
         self.position_label = QLabel()
+        self.position_label.setTextFormat(Qt.TextFormat.PlainText)
         layout.addWidget(self.position_label)
-        self.status = QLabel("只读快照；选择字节后右键复制，Ctrl+A 选中当前页。")
-        self.status.setTextFormat(Qt.TextFormat.PlainText)
-        self.status.setWordWrap(True)
+        self.status = DocumentStatus(note="只读快照；选择字节后右键复制，Ctrl+A 选中当前页。")
         layout.addWidget(self.status)
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons = document_buttons(QDialogButtonBox.StandardButton.Close, self)
         buttons.button(QDialogButtonBox.StandardButton.Close).setText("关闭")
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
@@ -204,19 +196,16 @@ class HexViewer(FixedDocumentWindow):
 
     def update_controls(self):
         busy = self.task is not None
-        for widget in (
-            self.address,
-            self.jump_button,
-            self.search_mode,
-            self.search_input,
-            self.find_previous_button,
-            self.find_next_button,
-        ):
+        for widget in (self.address, self.search_mode, self.search_input):
             widget.setEnabled(not busy)
-        self.previous_button.setEnabled(not busy and self.offset > 0)
-        self.next_button.setEnabled(not busy and self.offset + PAGE_SIZE < self.file_size)
-        self.reload_button.setEnabled(not busy and self.available)
-        self.cancel_button.setEnabled(busy)
+        for button in (self.jump_button, self.find_previous_button, self.find_next_button):
+            button.defaultAction().setEnabled(not busy)
+        self.previous_button.defaultAction().setEnabled(not busy and self.offset > 0)
+        self.next_button.defaultAction().setEnabled(
+            not busy and self.offset + PAGE_SIZE < self.file_size
+        )
+        self.reload_button.defaultAction().setEnabled(not busy and self.available)
+        self.cancel_button.defaultAction().setEnabled(busy)
 
     def go(self, offset, *, select=False):
         if self.task or offset < 0 or offset >= max(1, self.file_size):

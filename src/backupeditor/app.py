@@ -1813,7 +1813,7 @@ class MainWindow(QMainWindow):
                 viewer.table.setFocus()
                 return
             viewer = HexViewer(path, label, self)
-            viewer.reload_button.hide()
+            viewer.reload_button.defaultAction().setVisible(False)
             viewer.status.setText("plist Data 的只读快照；重新从 plist 打开可查看更新后的内容。")
             record = OpenedHex(token, viewer, path, fingerprint, fingerprint, (), detached=True)
             self.hex_viewers[token] = record

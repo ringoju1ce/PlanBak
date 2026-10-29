@@ -11,6 +11,7 @@ from PySide6.QtGui import (
     QAction,
     QColor,
     QFontDatabase,
+    QKeySequence,
     QPalette,
     QSyntaxHighlighter,
     QTextCharFormat,
@@ -31,6 +32,7 @@ from PySide6.QtWidgets import (
 
 from .appearance import marked_background, sync_background, xml_colors
 from .dialogs import FixedDialog
+from .document_ui import DocumentStatus, DocumentToolBar
 
 
 class PlistXmlError(ValueError):
@@ -305,6 +307,7 @@ class XmlSearchDialog(FixedDialog):
         layout = QVBoxLayout(self)
         self.find_field = QLineEdit()
         self.find_field.setPlaceholderText("查找（纯文本）")
+        self.find_field.setAccessibleName("查找文本")
         self.case_sensitive = QCheckBox("区分大小写")
         row = QHBoxLayout()
         row.addWidget(self.find_field, 1)
@@ -319,6 +322,7 @@ class XmlSearchDialog(FixedDialog):
         row = QHBoxLayout()
         self.replace_field = QLineEdit()
         self.replace_field.setPlaceholderText("替换为")
+        self.replace_field.setAccessibleName("替换文本")
         row.addWidget(self.replace_field, 1)
         for label, method in (("替换", pane.replace_one), ("全部替换", pane.replace_all)):
             button = QPushButton(label)
@@ -353,28 +357,29 @@ class XmlPane(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         self.code = XmlTextEdit()
+        self.code.setAccessibleName("plist XML 内容")
         self.code.palette_changed.connect(self.refresh_matches)
-        toolbar = QHBoxLayout()
-        self.undo_button = QPushButton("撤销")
-        self.redo_button = QPushButton("重做")
-        self.search_button = QPushButton("搜索")
-        self.tree_button = QPushButton("树形编辑器")
-        for button in (self.undo_button, self.redo_button, self.search_button, self.tree_button):
-            toolbar.addWidget(button)
-        toolbar.addStretch()
-        layout.addLayout(toolbar)
-        self.undo_button.setEnabled(False)
-        self.redo_button.setEnabled(False)
-        self.undo_button.clicked.connect(self.code.undo)
-        self.redo_button.clicked.connect(self.code.redo)
-        self.code.undoAvailable.connect(self.undo_button.setEnabled)
-        self.code.redoAvailable.connect(self.redo_button.setEnabled)
-        self.search_button.clicked.connect(lambda: self.show_search())
-        self.tree_button.clicked.connect(self.tree_requested)
+        toolbar = DocumentToolBar("XML 编辑操作", self)
+        self.undo_button = toolbar.command(
+            "撤销", self.code.undo, icon="edit-undo", hint=QKeySequence.StandardKey.Undo
+        )
+        self.redo_button = toolbar.command(
+            "重做", self.code.redo, icon="edit-redo", hint=QKeySequence.StandardKey.Redo
+        )
+        toolbar.addSeparator()
+        self.search_button = toolbar.command(
+            "搜索", lambda: self.show_search(), icon="edit-find", hint="Ctrl+F"
+        )
+        toolbar.addSeparator()
+        self.tree_button = toolbar.command("树形编辑器", self.tree_requested)
+        toolbar.stretch()
+        layout.addWidget(toolbar)
+        self.undo_button.defaultAction().setEnabled(False)
+        self.redo_button.defaultAction().setEnabled(False)
+        self.code.undoAvailable.connect(self.undo_button.defaultAction().setEnabled)
+        self.code.redoAvailable.connect(self.redo_button.defaultAction().setEnabled)
         layout.addWidget(self.code, 1)
-        self.error = QLabel()
-        self.error.setTextFormat(Qt.TextFormat.PlainText)
-        self.error.setWordWrap(True)
+        self.error = DocumentStatus(parent=self)
         layout.addWidget(self.error)
         self.code.textChanged.connect(self.clear_error)
         for sequence, replacement in (("Ctrl+F", False), ("Ctrl+H", True)):

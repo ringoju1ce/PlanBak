@@ -4,17 +4,23 @@ from __future__ import annotations
 
 from html import escape
 
-from PySide6.QtCore import QAbstractTableModel, QModelIndex, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QAction, QKeySequence
+from PySide6.QtCore import (
+    QAbstractTableModel,
+    QModelIndex,
+    QSignalBlocker,
+    QSize,
+    Qt,
+    QTimer,
+    Signal,
+)
+from PySide6.QtGui import QAction, QFontDatabase, QKeySequence
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
     QDialogButtonBox,
-    QHBoxLayout,
     QHeaderView,
     QLabel,
     QPlainTextEdit,
-    QPushButton,
     QSplitter,
     QTableView,
     QTabWidget,
@@ -25,6 +31,7 @@ from PySide6.QtWidgets import (
 )
 
 from .dialogs import FixedDialog, FixedDocumentWindow
+from .document_ui import DocumentStatus, DocumentToolBar, document_buttons
 from .pane_focus import BrowserPaneFocus
 from .sqlite_database import PAGE_SIZE, QueryResult, query, quote_identifier, schema
 from .viewer_tasks import ViewerTask
@@ -106,20 +113,16 @@ class SQLiteViewer(FixedDocumentWindow):
         self.setWindowTitle(f"{name} — SQLite 查看器（只读）")
         self.setModal(False)
         layout = QVBoxLayout(self)
-        toolbar = QHBoxLayout()
-        self.reload_button = QPushButton("重新加载")
-        self.reload_button.clicked.connect(self.reload_requested)
-        self.cancel_button = QPushButton("取消查询")
-        self.cancel_button.clicked.connect(self.cancel_query)
-        toolbar.addWidget(self.reload_button)
-        toolbar.addWidget(self.cancel_button)
-        toolbar.addStretch()
-        toolbar.addWidget(QLabel("只读；查询不会暂挂更改"))
-        layout.addLayout(toolbar)
+        toolbar = DocumentToolBar("SQLite 操作", self)
+        self.reload_button = toolbar.command("重新加载", self.reload_requested, icon="view-refresh")
+        self.cancel_button = toolbar.command("取消查询", self.cancel_query, icon="process-stop")
+        toolbar.stretch()
+        layout.addWidget(toolbar)
         splitter = QSplitter()
         self.tree = QTreeWidget()
         self.tree.setHeaderLabels(["表与视图", "类型"])
-        self.tree.setMinimumWidth(190)
+        self.tree.setAccessibleName("数据库表与视图")
+        self.tree.setMinimumWidth(150)
         self.tree.setRootIsDecorated(False)
         self.tree.setTabKeyNavigation(False)
         self.tree.header().setStretchLastSection(False)
@@ -130,51 +133,59 @@ class SQLiteViewer(FixedDocumentWindow):
         self.tabs = QTabWidget()
         page = QWidget()
         page_layout = QVBoxLayout(page)
+        page_layout.setContentsMargins(0, 0, 0, 0)
         self.table = QTableView()
         self.model = ResultModel(self)
         self.table.setModel(self.model)
+        self.table.setAccessibleName("只读查询结果")
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.table.setTabKeyNavigation(False)
         self.table.setAlternatingRowColors(True)
         self.table.setSortingEnabled(True)
+        self.table.horizontalHeader().setSortIndicator(-1, Qt.SortOrder.AscendingOrder)
+        self.table.horizontalHeader().setSortIndicatorShown(False)
         self.model.sort_requested.connect(self.sort_table)
         self.table.doubleClicked.connect(self.show_cell)
         self.table.horizontalHeader().setDefaultSectionSize(160)
         page_layout.addWidget(self.table)
-        pages = QHBoxLayout()
-        self.previous_button = QPushButton("上一页")
-        self.next_button = QPushButton("下一页")
+        pages = DocumentToolBar("查询结果分页", self)
+        self.previous_button = pages.command(
+            "上一页", lambda: self.load_page(-PAGE_SIZE), icon="go-previous"
+        )
+        self.next_button = pages.command(
+            "下一页", lambda: self.load_page(PAGE_SIZE), icon="go-next"
+        )
         self.page_label = QLabel()
-        self.previous_button.clicked.connect(lambda: self.load_page(-PAGE_SIZE))
-        self.next_button.clicked.connect(lambda: self.load_page(PAGE_SIZE))
-        pages.addWidget(self.previous_button)
-        pages.addWidget(self.next_button)
+        self.page_label.setTextFormat(Qt.TextFormat.PlainText)
         pages.addWidget(self.page_label)
-        pages.addStretch()
-        page_layout.addLayout(pages)
+        pages.stretch()
+        page_layout.addWidget(pages)
         self.tabs.addTab(page, "数据")
         self.structure = QPlainTextEdit()
         self.structure.setReadOnly(True)
+        self.structure.setAccessibleName("表结构与索引 SQL")
+        self.structure.setFont(QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont))
         self.tabs.addTab(self.structure, "结构与索引")
         sql_page = QWidget()
         sql_layout = QVBoxLayout(sql_page)
+        sql_layout.setContentsMargins(0, 0, 0, 0)
         sql_layout.addWidget(QLabel("输入单条只读 SELECT / WITH 查询；结果显示在“数据”中。"))
         self.code = QPlainTextEdit()
+        self.code.setAccessibleName("只读 SQL 查询")
+        self.code.setFont(QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont))
         self.code.setPlaceholderText("SELECT * FROM sqlite_schema;")
         sql_layout.addWidget(self.code)
-        self.execute_button = QPushButton("执行查询（Ctrl+Enter）")
-        self.execute_button.clicked.connect(self.execute_sql)
-        sql_layout.addWidget(self.execute_button)
+        query_bar = DocumentToolBar("SQL 查询操作", self)
+        self.execute_button = query_bar.command("执行查询", self.execute_sql, hint="Ctrl+Return")
+        sql_layout.addWidget(query_bar)
         self.tabs.addTab(sql_page, "SQL 查询")
         splitter.addWidget(self.tabs)
         splitter.setStretchFactor(1, 1)
         layout.addWidget(splitter, 1)
-        self.status = QLabel()
-        self.status.setTextFormat(Qt.TextFormat.PlainText)
-        self.status.setWordWrap(True)
+        self.status = DocumentStatus(note="只读；查询不会暂挂更改。")
         layout.addWidget(self.status)
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons = document_buttons(QDialogButtonBox.StandardButton.Close, self)
         buttons.button(QDialogButtonBox.StandardButton.Close).setText("关闭")
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
@@ -188,11 +199,11 @@ class SQLiteViewer(FixedDocumentWindow):
 
     def update_controls(self):
         busy = self.task is not None
-        self.execute_button.setEnabled(not busy)
-        self.reload_button.setEnabled(not busy and self.available)
-        self.cancel_button.setEnabled(busy)
-        self.previous_button.setEnabled(not busy and self.offset > 0)
-        self.next_button.setEnabled(not busy and self.model.result.more)
+        self.execute_button.defaultAction().setEnabled(not busy)
+        self.reload_button.defaultAction().setEnabled(not busy and self.available)
+        self.cancel_button.defaultAction().setEnabled(busy)
+        self.previous_button.defaultAction().setEnabled(not busy and self.offset > 0)
+        self.next_button.defaultAction().setEnabled(not busy and self.model.result.more)
         self.table.horizontalHeader().setSectionsClickable(not busy and self.mode == "table")
 
     def start(self, function, callback):
@@ -229,6 +240,8 @@ class SQLiteViewer(FixedDocumentWindow):
 
     def load_schema(self):
         self._pending_object = None
+        self.sort_column = None
+        self.sync_sort_indicator()
         self.tree.clear()
 
         def loaded(objects):
@@ -259,6 +272,7 @@ class SQLiteViewer(FixedDocumentWindow):
             return
         self.object_name = item.data(0, Qt.ItemDataRole.UserRole)
         self.mode, self.offset, self.sort_column = "table", 0, None
+        self.sync_sort_indicator()
         self.structure.setPlainText(
             "\n\n".join(
                 sql or f"-- {name}：由 SQLite 自动创建"
@@ -268,6 +282,16 @@ class SQLiteViewer(FixedDocumentWindow):
         )
         self.tabs.setCurrentIndex(0)
         self.run_query()
+
+    def sync_sort_indicator(self, *, applied=False):
+        header = self.table.horizontalHeader()
+        ordered = applied and self.mode == "table" and self.sort_column is not None
+        with QSignalBlocker(header):
+            header.setSortIndicator(
+                self.sort_column if ordered else -1,
+                Qt.SortOrder.DescendingOrder if self.descending else Qt.SortOrder.AscendingOrder,
+            )
+            header.setSortIndicatorShown(ordered)
 
     def sort_table(self, column, order):
         if self.mode != "table" or not self.object_name or self.task or column < 0:
@@ -304,6 +328,7 @@ class SQLiteViewer(FixedDocumentWindow):
 
         def loaded(result):
             self.model.set_result(result)
+            self.sync_sort_indicator(applied=True)
             start = self.offset + 1 if result.rows else 0
             self.page_label.setText(
                 f"第 {start}–{self.offset + len(result.rows)} 行 · 每页最多 200 行"
@@ -322,6 +347,7 @@ class SQLiteViewer(FixedDocumentWindow):
                 )
             )
 
+        self.sync_sort_indicator()
         self.start(
             lambda cancel: query(self.snapshot.path, sql, offset=offset, cancel=cancel), loaded
         )
@@ -345,9 +371,11 @@ class SQLiteViewer(FixedDocumentWindow):
         layout = QVBoxLayout(dialog)
         text = QPlainTextEdit()
         text.setReadOnly(True)
+        text.setAccessibleName("单元格完整内容")
         text.setPlainText(cell_text(value, 1024 * 1024))
         layout.addWidget(text)
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons = document_buttons(QDialogButtonBox.StandardButton.Close, dialog)
+        buttons.button(QDialogButtonBox.StandardButton.Close).setText("关闭")
         buttons.rejected.connect(dialog.reject)
         layout.addWidget(buttons)
         dialog.lock_size(QSize(760, 460))
