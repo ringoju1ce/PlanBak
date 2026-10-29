@@ -28,18 +28,26 @@ def backup_keys(path):
 
 
 class BackupClaim:
-    def __init__(self, manager, path, owner):
+    def __init__(self, manager, path, owner, *, shared=None):
         self.manager = manager
         self.path, keys = backup_keys(path)
         self.owner = weakref.ref(owner)
         self.locks = {}
         self.released = False
-        self._acquire(keys)
+        if shared is not None and (
+            shared.manager is not manager or shared.owner() is not owner or shared.released
+        ):
+            raise BackupError("不能共享其他会话的备份占用")
+        self._acquire(keys, shared=shared)
 
-    def _acquire(self, keys):
+    def _acquire(self, keys, *, shared=None):
         acquired = {}
+        created = []
         try:
             for key in sorted(keys - self.locks.keys()):
+                if shared is not None and key in shared.locks:
+                    acquired[key] = shared.locks[key]
+                    continue
                 name = hashlib.sha256(key.encode()).hexdigest() + ".lock"
                 lock = QLockFile(str(self.manager.lock_directory / name))
                 # 长任务不能仅因锁年龄被误判失效；QLockFile仍检查死亡进程。
@@ -47,8 +55,9 @@ class BackupClaim:
                 if not lock.tryLock(0):
                     raise BackupError("此备份已在另一个窗口或程序实例中打开，请先关闭它。")
                 acquired[key] = lock
+                created.append(lock)
         except BaseException:
-            for lock in acquired.values():
+            for lock in created:
                 lock.unlock()
             raise
         self.locks.update(acquired)
@@ -64,8 +73,11 @@ class BackupClaim:
         if self.released:
             return
         self.released = True
-        for lock in self.locks.values():
-            lock.unlock()
+        for key, lock in self.locks.items():
+            if not any(
+                claim is not self and claim.locks.get(key) is lock for claim in self.manager.claims
+            ):
+                lock.unlock()
         self.locks.clear()
         if self in self.manager.claims:
             self.manager.claims.remove(self)
@@ -99,8 +111,8 @@ class BackupWindows:
             app._backup_windows = manager
         return manager
 
-    def reserve(self, path, owner):
-        claim = BackupClaim(self, path, owner)
+    def reserve(self, path, owner, *, shared=None):
+        claim = BackupClaim(self, path, owner, shared=shared)
         self.claims.append(claim)
         return claim
 

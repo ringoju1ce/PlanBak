@@ -1626,7 +1626,13 @@ class MainWindow(QMainWindow):
                 path = candidates[0]
             path = Path(path).resolve()
             owner = self.manager.owner_for(path)
-            if owner is not None:
+            relocated = (
+                owner is self
+                and not new_window
+                and self.session is not None
+                and path != self.session.root
+            )
+            if owner is not None and not relocated:
                 if owner.isMinimized():
                     owner.setWindowState(owner.windowState() & ~Qt.WindowState.WindowMinimized)
                 owner.show()
@@ -1643,7 +1649,11 @@ class MainWindow(QMainWindow):
                 window.show()
                 window.open_path(path)
                 return
-            claim = self.manager.reserve(path, self)
+            # 外部移动后目录身份不变，旧会话仍指向旧路径。重新打开必须
+            # 完整清理并解锁/建索引，身份锁在新旧占用之间连续共享。
+            claim = self.manager.reserve(
+                path, self, shared=self._backup_claim if relocated else None
+            )
         except Exception as exc:
             message(self, "无法打开备份", str(exc), QMessageBox.Icon.Warning)
             return
