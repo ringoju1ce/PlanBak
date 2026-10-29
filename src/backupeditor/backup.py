@@ -649,7 +649,6 @@ class BackupSession(SessionOverlay):
                                 meta.set("LastModified", entry.mtime)
                                 meta.set("LastStatusChange", int(time.time()))
                                 sha1 = digest(staged, "sha1", cancel)
-                                meta.set("Digest", sha1)
                                 if self.encrypted:
                                     clas = int(meta.get("ProtectionClass", 3))
                                     key, wrapped = self.keybag.new_key(clas)
@@ -658,6 +657,12 @@ class BackupSession(SessionOverlay):
                                 else:
                                     meta.root.pop("EncryptionKey", None)
                                     copy_file(staged, output, cancel)
+                                # MBFile的Digest校验备份中的存储字节；加密备份
+                                # 必须在加密后计算。sha1单独用于明文往返验证。
+                                meta.set(
+                                    "Digest",
+                                    digest(output, "sha1", cancel) if self.encrypted else sha1,
+                                )
                                 verification.append((fid, sha1, meta))
                             elif entry.original_id != fid:
                                 copy_file(self.payload_path(entry.original_id), output, cancel)
