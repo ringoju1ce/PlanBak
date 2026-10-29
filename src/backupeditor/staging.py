@@ -455,7 +455,11 @@ class SessionOverlay:
                     else:
                         raise BackupError(f"目标已存在：{basename}")
                 for entry in self.subtree(root):
-                    plans.append(relocated(entry, target + entry.path[len(root.path) :]))
+                    moved = relocated(entry, target + entry.path[len(root.path) :])
+                    # 明确移动/重命名的合成文件夹必须能独立保存为空文件夹。
+                    if moved.kind == "directory":
+                        moved = replace(moved, explicit=1)
+                    plans.append(moved)
             for entry in plans:
                 work.remove(entry.token)
             for entry in plans:
