@@ -18,6 +18,11 @@ from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives.keywrap import InvalidUnwrap, aes_key_unwrap, aes_key_wrap
 
 CHUNK = 1024 * 1024
+# 应用资源预算，并非 iOS 规格上限。较大的 NSData 不等于大量解析对象。
+MAX_METADATA_BYTES = 8 * 1024**2
+MAX_METADATA_OBJECTS = 100_000
+MAX_METADATA_ITEMS = 200_000
+MAX_METADATA_DEPTH = 128
 
 
 class BackupError(Exception):
@@ -161,14 +166,41 @@ class Metadata:
     """Minimal MBFile keyed archive access without changing unrelated UID indices."""
 
     def __init__(self, blob: bytes):
+        if len(blob) > MAX_METADATA_BYTES:
+            raise BackupError("文件元数据超过程序的 8 MiB 资源上限")
+        if blob.startswith(b"bplist00") and len(blob) >= 32:
+            # 二进制 plist 尾部已有对象数量；在 plistlib 分配对象前拒绝异常表。
+            count = int.from_bytes(blob[-24:-16], "big")
+            if count > MAX_METADATA_OBJECTS:
+                raise BackupError("文件元数据的对象数量超过资源上限")
         try:
             self.archive = plistlib.loads(blob)
+            self.validate_structure()
             self.objects = self.archive["$objects"]
+            if not isinstance(self.objects, list):
+                raise ValueError("not an object array")
             self.root = self.objects[self.archive["$top"]["root"].data]
             if not isinstance(self.root, dict):
                 raise ValueError("not MBFile")
-        except (ValueError, KeyError, TypeError, IndexError, AttributeError) as exc:
+        except (ValueError, KeyError, TypeError, IndexError, AttributeError, RecursionError) as exc:
             raise BackupError("文件元数据不是支持的 MBFile 归档") from exc
+
+    def validate_structure(self):
+        pending = [(self.archive, 1)]
+        visited = set()
+        items = 0
+        while pending:
+            value, depth = pending.pop()
+            if depth > MAX_METADATA_DEPTH:
+                raise BackupError("文件元数据的嵌套深度超过资源上限")
+            if not isinstance(value, (list, dict)) or id(value) in visited:
+                continue
+            visited.add(id(value))
+            items += len(value) * (2 if isinstance(value, dict) else 1)
+            if items > MAX_METADATA_ITEMS:
+                raise BackupError("文件元数据的容器条目数量超过资源上限")
+            children = value.values() if isinstance(value, dict) else value
+            pending.extend((child, depth + 1) for child in children)
 
     def get(self, key, default=None):
         value = self.root.get(key, default)
@@ -179,6 +211,8 @@ class Metadata:
         return value
 
     def set(self, key, value):
+        if key in self.root and self.get(key) == value:
+            return
         if isinstance(value, bytes):
             # Append rather than editing a possibly shared archived NSData object.
             data_class = next(
@@ -203,7 +237,14 @@ class Metadata:
             self.root[key] = value
 
     def dump(self):
-        return plistlib.dumps(self.archive, fmt=plistlib.FMT_BINARY, sort_keys=False)
+        self.validate_structure()
+        blob = plistlib.dumps(self.archive, fmt=plistlib.FMT_BINARY, sort_keys=False)
+        # 同一约束用于输入和发布，不能生成程序无法重新打开的归档。
+        if len(blob) > MAX_METADATA_BYTES:
+            raise BackupError("修改后的文件元数据超过程序的 8 MiB 资源上限，未应用更改")
+        if int.from_bytes(blob[-24:-16], "big") > MAX_METADATA_OBJECTS:
+            raise BackupError("修改后的文件元数据对象数量超过资源上限，未应用更改")
+        return blob
 
     @classmethod
     def new(cls, *, directory: bool, timestamp: int, uid: int, gid: int, clas: int):

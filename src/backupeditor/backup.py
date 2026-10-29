@@ -27,6 +27,7 @@ from .backup_copy import (
 )
 from .codec import (
     CHUNK,
+    MAX_METADATA_BYTES,
     BackupError,
     Keybag,
     Metadata,
@@ -295,7 +296,7 @@ class BackupSession(SessionOverlay):
                 or any(c not in "0123456789abcdef" for c in fid)
             ):
                 raise BackupError("清单包含无效文件 ID")
-            if blob and len(blob) > 128 * 1024:
+            if blob and len(blob) > MAX_METADATA_BYTES:
                 raise BackupError("清单中的文件元数据过大，拒绝解析")
             meta = Metadata(blob) if blob else None
             mode = meta.get("Mode", 0) if meta else 0
@@ -656,9 +657,15 @@ class BackupSession(SessionOverlay):
                             flags = self.db.execute(
                                 "SELECT flags FROM Files WHERE fileID=?", (entry.original_id,)
                             ).fetchone()[0]
+                        blob = meta.dump()
+                        if len(blob) > MAX_METADATA_BYTES:
+                            raise BackupError(
+                                "修改后的文件元数据超过程序的 8 MiB 资源上限；"
+                                "未应用更改，备份与暂挂内容均保留"
+                            )
                         out_db.execute(
                             "INSERT INTO Files(fileID,domain,relativePath,flags,file) VALUES(?,?,?,?,?)",
-                            (fid, entry.domain, entry.path, flags, meta.dump()),
+                            (fid, entry.domain, entry.path, flags, blob),
                         )
                     removed = []
                     for fid in obsolete:
