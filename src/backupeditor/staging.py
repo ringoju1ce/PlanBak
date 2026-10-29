@@ -705,7 +705,11 @@ class SessionOverlay:
                     entries = [
                         replace(
                             Entry.row(row),
-                            original_id=file_id(row["domain"], row["path"])
+                            original_id=(
+                                file_id(row["domain"], row["path"])
+                                if row["changed"]
+                                else row["original_id"]
+                            )
                             if row["explicit"]
                             else None,
                             staged=None,
