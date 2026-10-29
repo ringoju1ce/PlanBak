@@ -21,6 +21,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .appearance import sync_background
+
 
 class DialogTitleBar(QWidget):
     """Dialog-only chrome: one close button and native window dragging."""
@@ -29,9 +31,7 @@ class DialogTitleBar(QWidget):
         super().__init__(dialog)
         self.setObjectName("dialogTitleBar")
         self.setAutoFillBackground(True)
-        palette = self.palette()
-        palette.setColor(QPalette.ColorRole.Window, palette.color(QPalette.ColorRole.Base))
-        self.setPalette(palette)
+        sync_background(self, dialog.palette(), QPalette.ColorRole.Base)
         self.setFixedHeight(max(36, self.fontMetrics().height() + 14))
         layout = QHBoxLayout(self)
         layout.setContentsMargins(6, 3, 6, 3)
@@ -64,6 +64,13 @@ class DialogTitleBar(QWidget):
         self.close_button.clicked.connect(dialog.close)
         layout.addWidget(self.close_button)
         dialog.windowTitleChanged.connect(self.title.setText)
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() in (QEvent.Type.PaletteChange, QEvent.Type.ApplicationPaletteChange):
+            sync_background(self, self.parentWidget().palette(), QPalette.ColorRole.Base)
+            if hasattr(self, "close_button"):
+                self.close_button.setPalette(QPalette())
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:

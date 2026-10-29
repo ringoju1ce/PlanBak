@@ -60,6 +60,7 @@ from PySide6.QtWidgets import (
 )
 
 from . import __version__
+from .appearance import configure_system_appearance
 from .backup import BackupSession, Entry, detect_backups, digest, load_plist, stale_workspaces
 from .codec import CHUNK, BackupError, Cancelled, check_cancel
 from .dialogs import FixedDialog as QDialog
@@ -69,7 +70,6 @@ from .dialogs import FixedMessageBox as QMessageBox
 from .dialogs import FixedProgressDialog
 from .hex_viewer import HexViewer
 from .icons import ApplicationIcons
-from .item_style import ItemViewStyle
 from .navigation import Location, ViewState, split_domain
 from .pane_focus import BrowserPaneFocus
 from .pending_view import PendingChangesModel
@@ -2460,7 +2460,7 @@ def main():
     app = QApplication(sys.argv[:1])
     app.setApplicationName("BackupEditor")
     app.setApplicationVersion(__version__)
-    app.setStyle(ItemViewStyle("Fusion"))
+    configure_system_appearance(app)
     window = MainWindow()
     window.show()
     QTimer.singleShot(

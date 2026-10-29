@@ -1,7 +1,8 @@
 """Explicit browser-pane ownership, independent of transient menu/dialog focus."""
 
-from PySide6.QtCore import QEvent, QObject, Qt, Signal
-from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import QEvent, QObject, Qt, QTimer, Signal
+from PySide6.QtGui import QPalette
+from PySide6.QtWidgets import QApplication, QHeaderView
 
 
 class BrowserPaneFocus(QObject):
@@ -15,6 +16,9 @@ class BrowserPaneFocus(QObject):
         self.generation = 0
         self.stopped = False
         self.watched = {}
+        self._palette_refresh = QTimer(self)
+        self._palette_refresh.setSingleShot(True)
+        self._palette_refresh.timeout.connect(self.refresh_palette)
         for view in (tree, *self.files):
             for widget in (view, view.viewport()):
                 self.watched[widget] = view
@@ -31,13 +35,30 @@ class BrowserPaneFocus(QObject):
             """
             )
         QApplication.instance().focusChanged.connect(self.focus_changed)
+        QApplication.instance().paletteChanged.connect(self.schedule_palette_refresh)
         self.update_visuals()
+
+    def schedule_palette_refresh(self, _palette):
+        if not self.stopped:
+            self._palette_refresh.start(0)
+
+    def refresh_palette(self):
+        if self.stopped:
+            return
+        self.update_visuals()
+        # QStyleSheetStyle can leave child headers with the old inherited
+        # palette. Resolve them from their parent again, without pinning colors.
+        for view in (self.tree, *self.files):
+            for header in view.findChildren(QHeaderView):
+                header.setPalette(QPalette())
 
     @property
     def sidebar_active(self):
         return self.owner == "tree"
 
     def update_visuals(self):
+        if self.stopped:
+            return
         for view in (self.tree, *self.files):
             active = self.sidebar_active if view is self.tree else not self.sidebar_active
             view.setProperty("activeBrowserPane", active)

@@ -6,7 +6,7 @@ import base64
 import plistlib
 from xml.parsers import expat
 
-from PySide6.QtCore import QRect, QSize, Qt, Signal
+from PySide6.QtCore import QEvent, QRect, QSignalBlocker, QSize, Qt, Signal
 from PySide6.QtGui import (
     QAction,
     QColor,
@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .appearance import marked_background, sync_background, xml_colors
 from .dialogs import FixedDialog
 
 
@@ -155,8 +156,7 @@ class XmlHighlighter(QSyntaxHighlighter):
     def highlightBlock(self, text):
         import re
 
-        dark = self.editor.palette().base().color().lightness() < 128
-        colors = ("#80bfff", "#e6b673", "#83c794") if dark else ("#175ca3", "#a04310", "#39733b")
+        colors = xml_colors(self.editor.palette())
         for pattern, color in (
             (r"</?[\w:.-]+|/?>|<\?.*?\?>", colors[0]),
             (r'"[^"<>]*"|\b[\w:.-]+(?==)', colors[1]),
@@ -169,7 +169,7 @@ class XmlHighlighter(QSyntaxHighlighter):
         self.setCurrentBlockState(0)
         offset = 0 if self.previousBlockState() == 1 else text.find("<!--")
         comment = QTextCharFormat()
-        comment.setForeground(QColor("#829182" if dark else "#687468"))
+        comment.setForeground(QColor(colors[3]))
         while offset >= 0:
             end = text.find(
                 "-->", offset + (0 if self.previousBlockState() == 1 and offset == 0 else 4)
@@ -188,11 +188,12 @@ class LineNumbers(QWidget):
         self.editor = editor
         self.labels = []
         self.setAutoFillBackground(True)
-        palette = self.palette()
-        palette.setColor(
-            QPalette.ColorRole.Window, editor.palette().color(QPalette.ColorRole.AlternateBase)
-        )
-        self.setPalette(palette)
+        sync_background(self, editor.palette(), QPalette.ColorRole.AlternateBase)
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() in (QEvent.Type.PaletteChange, QEvent.Type.ApplicationPaletteChange):
+            sync_background(self, self.editor.palette(), QPalette.ColorRole.AlternateBase)
 
     def sizeHint(self):
         return QSize(self.editor.gutter_width(), 0)
@@ -222,6 +223,8 @@ class LineNumbers(QWidget):
 
 
 class XmlTextEdit(QPlainTextEdit):
+    palette_changed = Signal()
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.error_selections = []
@@ -234,6 +237,18 @@ class XmlTextEdit(QPlainTextEdit):
         self.updateRequest.connect(self.scroll_gutter)
         self.highlighter = XmlHighlighter(self)
         self.update_gutter()
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.PaletteChange and hasattr(self, "highlighter"):
+            sync_background(self.gutter, self.palette(), QPalette.ColorRole.AlternateBase)
+            with QSignalBlocker(self):
+                self.highlighter.rehighlight()
+            for selection in self.error_selections:
+                selection.format.setBackground(marked_background(self.palette(), error=True))
+                selection.format.setForeground(self.palette().color(QPalette.ColorRole.Text))
+            self.update_selections()
+            self.palette_changed.emit()
 
     def gutter_width(self):
         return 14 + self.fontMetrics().horizontalAdvance("9") * len(str(max(1, self.blockCount())))
@@ -264,7 +279,8 @@ class XmlTextEdit(QPlainTextEdit):
         self.centerCursor()
         selection = QTextEdit.ExtraSelection()
         selection.cursor = QTextCursor(block)
-        selection.format.setBackground(QColor(200, 60, 60, 55))
+        selection.format.setBackground(marked_background(self.palette(), error=True))
+        selection.format.setForeground(self.palette().color(QPalette.ColorRole.Text))
         selection.format.setProperty(QTextCharFormat.Property.FullWidthSelection, True)
         self.error_selections = [selection]
         self.update_selections()
@@ -337,6 +353,7 @@ class XmlPane(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         self.code = XmlTextEdit()
+        self.code.palette_changed.connect(self.refresh_matches)
         toolbar = QHBoxLayout()
         self.undo_button = QPushButton("撤销")
         self.redo_button = QPushButton("重做")
@@ -442,7 +459,8 @@ class XmlPane(QWidget):
                     break
                 selection = QTextEdit.ExtraSelection()
                 selection.cursor = QTextCursor(cursor)
-                selection.format.setBackground(QColor(240, 190, 30, 100))
+                selection.format.setBackground(marked_background(self.code.palette()))
+                selection.format.setForeground(self.code.palette().color(QPalette.ColorRole.Text))
                 selections.append(selection)
                 count += 1
             current = self.code.textCursor()
