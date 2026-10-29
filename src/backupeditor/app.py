@@ -1587,8 +1587,18 @@ class MainWindow(QMainWindow):
                     [entry.token], entry.domain, entry.parent, name=name, collision=policy
                 )
                 if current:
-                    updated = self.session.get(current.token)
-                    location = Location(updated.domain, updated.path)
+                    updated = self.session.find(current.token)
+                    location = (
+                        Location(updated.domain, updated.path)
+                        if updated
+                        else self.current_location()
+                    )
+                    # 替换可删除当前身份；地址存在时展示替代者，否则退回上层。
+                    while location.path:
+                        container = self.session.at(location.domain, location.path)
+                        if container and container.kind == "directory":
+                            break
+                        location = location.parent
                     if location != self.current_location():
                         self.domain, self.path, self.domain_group = (
                             location.domain,
