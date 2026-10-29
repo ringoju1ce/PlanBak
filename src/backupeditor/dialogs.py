@@ -214,9 +214,15 @@ class FixedMessageBox(FixedDialogMixin, QMessageBox):
         self.setText(text)
         self.setStandardButtons(buttons)
 
-    def showEvent(self, event):
-        if not self.buttons():
+    def setVisible(self, visible):
+        # QMessageBox resolves Escape/close before delivering showEvent.
+        # Supply fallback buttons before that setup, leaving custom choices alone.
+        if visible and not self.buttons():
             self.setStandardButtons(QMessageBox.StandardButton.Ok)
+            self.setEscapeButton(QMessageBox.StandardButton.Ok)
+        super().setVisible(visible)
+
+    def showEvent(self, event):
         for label in self.findChildren(QLabel):
             if label.objectName() == "qt_msgbox_label":
                 label.setWordWrap(True)
