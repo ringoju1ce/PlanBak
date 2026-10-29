@@ -1417,7 +1417,7 @@ class MainWindow(QMainWindow):
                     if stamp == (None,):
                         raise BackupError(f"外部编辑文件已被移动或删除：{record.path.name}")
                     self.session.stage_edit(record.token, record.path, cancel)
-                    staged = Path(self.session.get(record.token).staged)
+                    staged = self.session.cached_file(record.token, cancel=cancel)
                     updates.append((record, digest(staged, cancel=cancel), stamp))
                 return updates
 
@@ -2528,6 +2528,8 @@ class MainWindow(QMainWindow):
                 return
         session = self.session
         if not session.dirty:
+            if after:
+                after()
             return
         target = None
         direct = session.editable
