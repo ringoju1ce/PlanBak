@@ -32,7 +32,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .dialogs import FixedDialog, FixedFileDialog, FixedMessageBox
+from .dialogs import FixedDialog, FixedDocumentWindow, FixedFileDialog, FixedMessageBox
 from .plist_xml import PlistXmlError, XmlPane, parse_xml
 
 TYPES = (
@@ -406,7 +406,7 @@ class ValueDialog(FixedDialog):
         super().accept()
 
 
-class PlistEditor(FixedDialog):
+class PlistEditor(FixedDocumentWindow):
     contents_changed = Signal()
     data_hex_requested = Signal(object, str, str)
 

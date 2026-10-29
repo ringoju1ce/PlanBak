@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .dialogs import FixedDialog
+from .dialogs import FixedDialog, FixedDocumentWindow
 from .pane_focus import BrowserPaneFocus
 from .sqlite_database import PAGE_SIZE, QueryResult, query, quote_identifier, schema
 from .viewer_tasks import ViewerTask
@@ -83,7 +83,7 @@ class ResultModel(QAbstractTableModel):
         self.sort_requested.emit(column, order)
 
 
-class SQLiteViewer(FixedDialog):
+class SQLiteViewer(FixedDocumentWindow):
     reload_requested = Signal()
 
     def __init__(self, snapshot, name, parent=None):

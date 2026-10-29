@@ -165,6 +165,21 @@ class FixedDialog(FixedDialogMixin, QDialog):
     pass
 
 
+class FixedDocumentWindow(FixedDialogMixin, QDialog):
+    """Independent document surface; lifetime belongs to the window registry.
+
+    A QWidget parent can become a native transient-parent stacking constraint.
+    Keep document editors/viewers out of that hierarchy while retaining dialog
+    signals, Escape handling and the existing fixed, close-only chrome.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(None, Qt.WindowType.Window)
+        if parent is not None:
+            self.setScreen(parent.screen())
+        self.setWindowModality(Qt.WindowModality.NonModal)
+
+
 class FixedMessageBox(FixedDialogMixin, QMessageBox):
     def __init__(
         self,

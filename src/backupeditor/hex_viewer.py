@@ -29,7 +29,7 @@ from PySide6.QtWidgets import (
 )
 
 from .codec import BackupError
-from .dialogs import FixedDialog
+from .dialogs import FixedDocumentWindow
 from .hex_data import PAGE_SIZE, parse_offset, parse_pattern, read_page, search_bytes
 from .viewer_tasks import ViewerTask
 
@@ -102,7 +102,7 @@ class HexModel(QAbstractTableModel):
         return None
 
 
-class HexViewer(FixedDialog):
+class HexViewer(FixedDocumentWindow):
     reload_requested = Signal()
 
     def __init__(self, path, name, parent=None):
