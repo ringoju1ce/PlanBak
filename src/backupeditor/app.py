@@ -334,12 +334,11 @@ class BrowserInteraction:
         self.dragEnterEvent(event)
 
     def dropEvent(self, event):
-        if self.controller.handle_drop(event.mimeData(), self.indexAt(event.position().toPoint())):
-            event.setDropAction(
-                Qt.DropAction.MoveAction
-                if event.mimeData().hasFormat(INTERNAL_MIME)
-                else Qt.DropAction.CopyAction
-            )
+        action = self.controller.queue_drop(
+            event.mimeData(), self.indexAt(event.position().toPoint())
+        )
+        if action is not None:
+            event.setDropAction(action)
             event.accept()
         else:
             event.ignore()
@@ -442,6 +441,7 @@ class MainWindow(QMainWindow):
         self.copy_task = None
         self._copy_pending = None
         self._copy_exit_requested = False
+        self._drop_queued = False
         self._status_jobs = {}
         self.work_label = QLabel("就绪", self)
         self.work_progress = QProgressBar(self)
@@ -2573,10 +2573,44 @@ class MainWindow(QMainWindow):
                 domain, parent = None, ""
         return domain, parent
 
-    def handle_drop(self, mime, index):
+    def queue_drop(self, mime, index):
+        # 在原生拖放回调中只复制数据并确认投递。模态对话框/模型更新必须
+        # 等 dropEvent 返回，不能跨嵌套事件循环持有平台借出的事件和 MIME。
+        if self.task or self._drop_queued or self.force_close or self._exit_requested:
+            return None
+        internal = mime.hasFormat(INTERNAL_MIME)
+        if not internal and not mime.hasUrls():
+            return None
+        snapshot = QMimeData(self)
+        if internal:
+            # 不能读取内部拖放的 URL：ExportMimeData 会为外部消费者即时导出。
+            snapshot.setData(INTERNAL_MIME, bytes(mime.data(INTERNAL_MIME)))
+        else:
+            snapshot.setUrls(mime.urls())
+        target = self.drop_location(index)
+        session = self.session
+        self._drop_queued = True
+
+        def consume():
+            try:
+                if (
+                    self.session is session
+                    and not self.task
+                    and not self.force_close
+                    and not self._exit_requested
+                ):
+                    self.handle_drop(snapshot, QModelIndex(), target=target)
+            finally:
+                self._drop_queued = False
+                snapshot.deleteLater()
+
+        QTimer.singleShot(0, self, consume)
+        return Qt.DropAction.MoveAction if internal else Qt.DropAction.CopyAction
+
+    def handle_drop(self, mime, index, *, target=None):
         if self.task:
             return False
-        domain, parent = self.drop_location(index)
+        domain, parent = target if target is not None else self.drop_location(index)
         if self.session is None:
             if mime.hasUrls() and len(mime.urls()) == 1:
                 self.open_path(Path(mime.urls()[0].toLocalFile()))
