@@ -110,7 +110,7 @@ def message(parent, title, text, icon=QMessageBox.Icon.Information):
 
 
 class Task(QThread):
-    progress = Signal(str, int, int)
+    progress = Signal(str, object, object)
 
     def __init__(self, function, parent=None):
         super().__init__(parent)
