@@ -61,23 +61,31 @@ from PySide6.QtWidgets import (
 
 from . import __version__
 from .appearance import configure_system_appearance
-from .backup import BackupSession, Entry, detect_backups, digest, load_plist, stale_workspaces
+from .backup import (
+    BackupSession,
+    Entry,
+    copy_file,
+    detect_backups,
+    digest,
+    load_plist,
+    stale_workspaces,
+)
 from .codec import CHUNK, BackupError, Cancelled, check_cancel
 from .dialogs import FixedDialog as QDialog
 from .dialogs import FixedFileDialog as QFileDialog
 from .dialogs import FixedInputDialog as QInputDialog
 from .dialogs import FixedMessageBox as QMessageBox
 from .dialogs import FixedProgressDialog
+from .file_opening import identify_file, source_revision
 from .hex_viewer import HexViewer
 from .icons import ApplicationIcons
-from .image_data import image_candidate, is_image
 from .image_session import ImageWindows
 from .navigation import Location, ViewState, split_domain
 from .pane_focus import BrowserPaneFocus
 from .pending_view import PendingChangesModel
 from .plist_editor import PlistDocument, PlistEditor
 from .sidebar import DirectoryTree
-from .sqlite_database import DatabaseSnapshot, companions, is_sqlite, prepare_snapshot
+from .sqlite_database import DatabaseSnapshot, companions, prepare_snapshot
 from .sqlite_viewer import SQLiteViewer
 
 INTERNAL_MIME = "application/x-backupeditor-entries"
@@ -1550,76 +1558,111 @@ class MainWindow(QMainWindow):
         if len(rows) != 1 or rows[0].kind != "file":
             return
         token = rows[0].entry.token
-        if not external and (
-            image_candidate(rows[0].name)
-            or any(v.current_token == token and not v._closing for v in self.image_viewers)
-        ):
-            self.images.open(token)
-            return
-        if token in self.database_viewers:
-            viewer = self.database_viewers[token].viewer
-            viewer.showNormal()
-            viewer.raise_()
-            viewer.activateWindow()
-            viewer.table.setFocus()
-            return
-        if token in self.plist_editors:
-            editor = self.plist_editors[token].editor
-            editor.showNormal()
-            editor.raise_()
-            editor.activateWindow()
-            editor.tree.setFocus()
-            self.check_plist_editors()
-            return
+        # 明确指定系统应用时，先关闭可编辑窗口，沿用保存/放弃/取消保护。
+        if external:
+            record = self.plist_editors.get(token)
+            if record and not record.editor.close():
+                return
+        else:
+            if self.images.reuse(token):
+                return
+            if token in self.database_viewers:
+                viewer = self.database_viewers[token].viewer
+                viewer.showNormal()
+                viewer.raise_()
+                viewer.activateWindow()
+                viewer.table.setFocus()
+                return
+            if token in self.plist_editors:
+                editor = self.plist_editors[token].editor
+                editor.showNormal()
+                editor.raise_()
+                editor.activateWindow()
+                editor.tree.setFocus()
+                self.check_plist_editors()
+                return
         current = self.opened.get(token)
         if current and current.path.exists():
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(current.path)))
             return
-        if not external and Path(rows[0].name).suffix.lower() == ".plist":
-            self.open_plist(token, rows[0].name)
-            return
-        target = self.session.workspace / "opened" / uuid.uuid4().hex / rows[0].name
+        session = self.session
+        name = rows[0].name
+        target = session.workspace / "opened" / uuid.uuid4().hex / name
+        cache = self.images.session_cache() if not external else None
+        resources = {"snapshot": None, "keep_file": False}
+        revision = None
+
+        def prepare_plist(source, cancel):
+            data = source.read_bytes()
+            return PlistDocument(data), hashlib.sha256(data).digest()
+
+        def prepare_database(source, cancel):
+            directory = session.workspace / "sqlite-viewer" / uuid.uuid4().hex
+            snapshot = prepare_snapshot(session, token, directory, cancel=cancel, source=source)
+            resources["snapshot"] = snapshot
+            return snapshot
+
+        def prepare_image(source, cancel):
+            cache.adopt(token, target, revision, cancel)
+
+        def prepare_external(source, cancel):
+            if source != target:
+                copy_file(source, target, cancel)
+            return digest(target, cancel=cancel)
+
+        # 识别器在 file_opening 登记；此处负责子系统的准备与交接。
+        preparers = {
+            "plist": prepare_plist,
+            "sqlite": prepare_database,
+            "image": prepare_image,
+            "external": prepare_external,
+        }
 
         def prepare(progress, cancel):
-            try:
-                self.session.extract_file(token, target, cancel=cancel)
-                if not external and is_sqlite(target):
-                    directory = self.session.workspace / "sqlite-viewer" / uuid.uuid4().hex
-                    return prepare_snapshot(
-                        self.session, token, directory, cancel=cancel, source=target
-                    )
-                if not external and target.name.endswith(("-wal", "-shm", "-journal")):
-                    raise BackupError("这是数据库的配套文件，请打开对应的主文件。")
-                if not external and target.suffix.lower() in {
-                    ".db",
-                    ".sqlite",
-                    ".sqlite3",
-                    ".sqlitedb",
-                    ".db3",
-                    ".realm",
-                    ".mdb",
-                    ".ldb",
-                }:
-                    raise BackupError(
-                        "内置查看器只支持标准 SQLite；此文件可能使用其他格式或应用自身的加密。"
-                        "可通过右键菜单选择“以十六进制查看”“使用系统应用打开”，或导出项目。"
-                    )
-                if not external and is_image(target):
-                    return "image"
-                return digest(target, cancel=cancel)
-            except Exception:
-                shutil.rmtree(target.parent, ignore_errors=True)
-                raise
+            nonlocal revision
+            if external:
+                session.extract_file(token, target, cancel=cancel)
+                return "external", preparers["external"](target, cancel)
+            with cache.session_lock(cancel):
+                revision = source_revision(session, token)
+                with cache.prepared_source(token, revision) as existing:
+                    if existing and identify_file(existing) == "image":
+                        return "image", None
+                entry = session.get(token)
+                source = Path(entry.staged) if entry.staged else session.cache_path(token)
+                if not source.is_file():
+                    session.extract_file(token, target, cancel=cancel)
+                    source = target
+                kind = identify_file(source)
+                check_cancel(cancel)
+                # 后缀仅用于无法识别内容时解释错误，不决定使用哪个查看器。
+                if kind == "external":
+                    if name.endswith(("-wal", "-shm", "-journal")):
+                        raise BackupError("这是数据库的配套文件，请打开对应的主文件。")
+                    if target.suffix.lower() in {
+                        ".db",
+                        ".sqlite",
+                        ".sqlite3",
+                        ".sqlitedb",
+                        ".db3",
+                        ".realm",
+                        ".mdb",
+                        ".ldb",
+                    }:
+                        raise BackupError(
+                            "内置查看器只支持标准 SQLite；此文件可能使用其他格式或应用自身的加密。"
+                            "可通过右键菜单选择“以十六进制查看”“使用系统应用打开”，或导出项目。"
+                        )
+                if kind != "image":
+                    return kind, preparers[kind](source, cancel)
+                if source != target:
+                    copy_file(source, target, cancel)
+            # 同图任务锁在会话锁之外获取，避免与图片导航线程互相等待。
+            return kind, preparers[kind](target, cancel)
 
-        def opened(fingerprint):
-            if fingerprint == "image":
-                self.images.open(token, prepared=target)
-                return
-            if isinstance(fingerprint, DatabaseSnapshot):
-                shutil.rmtree(target.parent, ignore_errors=True)
-                self.show_database(token, fingerprint)
-                return
+        def open_external(fingerprint):
             self.opened[token] = OpenedFile(token, target, fingerprint, self.file_stamp(target))
+            resources["keep_file"] = True
             self.watcher.addPath(str(target))
             self.watcher.addPath(str(target.parent))
             if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(target))):
@@ -1630,7 +1673,28 @@ class MainWindow(QMainWindow):
                     QMessageBox.Icon.Warning,
                 )
 
-        self.run_task("导出并打开文件", prepare, opened)
+        def open_database(snapshot):
+            self.show_database(token, snapshot)
+            resources["snapshot"] = None
+
+        openers = {
+            "plist": lambda result: self.open_plist(token, name, prepared=result),
+            "sqlite": open_database,
+            "image": lambda _: self.images.open(token),
+            "external": open_external,
+        }
+
+        def opened(result):
+            kind, payload = result
+            openers[kind](payload)
+
+        def cleanup():
+            if not resources["keep_file"]:
+                shutil.rmtree(target.parent, ignore_errors=True)
+            if resources["snapshot"]:
+                shutil.rmtree(resources["snapshot"].directory, ignore_errors=True)
+
+        self.run_task("读取并打开文件", prepare, opened, silent=True, on_done=cleanup)
 
     def database_revision(self, token):
         return tuple(
@@ -1959,7 +2023,7 @@ class MainWindow(QMainWindow):
         )
         return (str(source), self.file_stamp(source))
 
-    def open_plist(self, token, name):
+    def open_plist(self, token, name, *, prepared=None):
         session = self.session
         directory = session.workspace / "plist-editor" / uuid.uuid4().hex
 
@@ -2040,7 +2104,14 @@ class MainWindow(QMainWindow):
             if token not in self.plist_editors:
                 shutil.rmtree(directory, ignore_errors=True)
 
-        self.run_task("读取 plist", prepare, opened, on_done=cleanup)
+        if prepared is None:
+            self.run_task("读取 plist", prepare, opened, on_done=cleanup)
+        else:
+            directory.mkdir(parents=True, exist_ok=True)
+            try:
+                opened(prepared)
+            finally:
+                cleanup()
 
     def restore_browser_after_editor(self, session, editor):
         def restore():

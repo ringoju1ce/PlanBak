@@ -1,7 +1,5 @@
 """Backup-owned image windows; no extraction work runs on the GUI thread."""
 
-import shutil
-
 from PySide6.QtCore import Qt
 
 from .image_cache import ImageCache
@@ -20,8 +18,7 @@ class ImageWindows:
             self.cache.clear()
             self.cache = None
 
-    def open(self, token, prepared=None):
-        owner, session = self.owner, self.owner.session
+    def reuse(self, token):
         matches = [v for v in self.viewers if v.current_token == token and not v._closing]
         if matches:
             viewer = max(matches, key=lambda v: v.last_active)
@@ -31,9 +28,20 @@ class ImageWindows:
             viewer.raise_()
             viewer.activateWindow()
             viewer.canvas.setFocus()
-            if prepared:
-                shutil.rmtree(prepared.parent, ignore_errors=True)
             return viewer
+        return None
+
+    def session_cache(self):
+        session = self.owner.session
+        if self.cache is None or self.cache.session is not session:
+            self.clear_cache()
+            self.cache = ImageCache(session)
+        return self.cache
+
+    def open(self, token):
+        if viewer := self.reuse(token):
+            return viewer
+        owner, session = self.owner, self.owner.session
         items = [
             (row.entry.token, row.name)
             for row in owner.model.rows
@@ -43,20 +51,10 @@ class ImageWindows:
             # A generic content detector can finish after selection changes.
             # Never infer a different folder's sequence in that case.
             items = [(token, session.get(token).name)]
-        if self.cache is None or self.cache.session is not session:
-            self.clear_cache()
-            self.cache = ImageCache(session)
-        cache = self.cache
+        cache = self.session_cache()
 
         def load(current, cancel, *, force=False):
-            try:
-                return cache.load(current, cancel, force=force)
-            finally:
-                # Generic content detection may already have extracted a file.
-                # Re-read the session for a version-checked cache entry rather
-                # than associating an older snapshot with a newer source stamp.
-                if prepared:
-                    shutil.rmtree(prepared.parent, ignore_errors=True)
+            return cache.load(current, cancel, force=force)
 
         def accept(viewer, image, region=False):
             allocations = {image.cacheKey(): image.sizeInBytes()}
@@ -76,8 +74,6 @@ class ImageWindows:
 
         def closed(_):
             self.viewers.remove(viewer)
-            if prepared:
-                shutil.rmtree(prepared.parent, ignore_errors=True)
             if not viewer._skip_prompt:
                 owner.restore_browser_after_editor(session, viewer)
             viewer.deleteLater()

@@ -11,6 +11,7 @@ from pathlib import Path
 from PySide6.QtGui import QImage
 
 from .codec import BackupError, check_cancel
+from .file_opening import source_revision
 from .image_data import MAX_FILE_BYTES, DecodedImage, decode_image
 
 MEMORY_BUDGET = 128 * 1024**2
@@ -64,21 +65,54 @@ class ImageCache:
                 raise BackupError("此项目已不再是可读取的图片文件。")
             if entry.size > MAX_FILE_BYTES:
                 raise BackupError("图片文件超过 128 MiB 的预览上限。")
-            path = Path(entry.staged) if entry.staged else self.session.cache_path(token)
-            if not path.is_file():
-                if not entry.original_id:
-                    raise BackupError("图片源文件已不可用。")
-                path = self.session.payload_path(entry.original_id)
-            stat = path.stat()
-            revision = (
-                str(self.session.root),
-                str(path),
-                stat.st_size,
-                stat.st_mtime_ns,
-                stat.st_ctime_ns,
-                stat.st_ino,
-            )
-            return entry, revision
+            return entry, source_revision(self.session, token)
+
+    @contextmanager
+    def prepared_source(self, token, revision):
+        """为文件头识别短暂固定已有快照，避免重复提取已浏览过的图片。"""
+        with self._lock:
+            cached = self.files.get(token)
+            if cached and cached.revision == revision and cached.path.is_file():
+                cached.users += 1
+            else:
+                cached = None
+        try:
+            yield cached.path if cached else None
+        finally:
+            if cached:
+                with self._lock:
+                    cached.users -= 1
+                    self._trim()
+
+    def adopt(self, token, path, revision, cancel=None):
+        """接收统一打开流程提取的快照；转移所有权而不是再次解密。"""
+        # 与正在导航/解码同一图片的任务串行，避免覆盖它刚登记的缓存。
+        with self.token_lock(token, cancel), self.session_lock(cancel):
+            _, current = self.source(token, cancel)
+            if current != revision:
+                raise BackupError("图片源文件在读取时发生变化，请重新打开。")
+            size = path.stat().st_size
+            if size > MAX_FILE_BYTES:
+                raise BackupError("图片文件超过 128 MiB 的预览上限。")
+            with self._lock:
+                previous = self.files.get(token)
+                if previous and previous.revision == revision and previous.path.is_file():
+                    return
+                self.directory.mkdir(parents=True, exist_ok=True)
+                target = self.directory / uuid.uuid4().hex
+                path.replace(target)
+                cached = CachedFile(revision, target, size, users=1)
+                if previous:
+                    self._retired.append(previous)
+                self.decoded.pop(token, None)
+                self.files[token] = cached
+                try:
+                    if not self._trim():
+                        self.files.pop(token)
+                        target.unlink(missing_ok=True)
+                        raise BackupError("图片文件缓存空间不足，请关闭部分图片窗口。")
+                finally:
+                    cached.users -= 1
 
     def _hit(self, token, revision, entry):
         with self._lock:
@@ -106,15 +140,7 @@ class ImageCache:
         entry, revision = self.source(token, cancel)
         if not force and (hit := self._hit(token, revision, entry)):
             return hit
-        with self._lock:
-            gate, users = self._loads.get(token, (threading.Lock(), 0))
-            self._loads[token] = (gate, users + 1)
-        acquired = False
-        try:
-            while not gate.acquire(timeout=0.05):
-                check_cancel(cancel)
-            acquired = True
-            check_cancel(cancel)
+        with self.token_lock(token, cancel):
             entry, revision = self.source(token, cancel)
             if not force and (hit := self._hit(token, revision, entry)):
                 return hit
@@ -125,6 +151,19 @@ class ImageCache:
                 return self._load(token, revision, cancel, force)
             finally:
                 self._work.release()
+
+    @contextmanager
+    def token_lock(self, token, cancel):
+        with self._lock:
+            gate, users = self._loads.get(token, (threading.Lock(), 0))
+            self._loads[token] = (gate, users + 1)
+        acquired = False
+        try:
+            while not gate.acquire(timeout=0.05):
+                check_cancel(cancel)
+            acquired = True
+            check_cancel(cancel)
+            yield
         finally:
             if acquired:
                 gate.release()
