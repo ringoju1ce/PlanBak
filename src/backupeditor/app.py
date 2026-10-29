@@ -7,6 +7,7 @@ import hashlib
 import json
 import shutil
 import sys
+import tempfile
 import threading
 import time
 import uuid
@@ -447,6 +448,29 @@ class OpenedHex:
     observed_digest: bytes
     revision: tuple
     detached: bool = False
+
+
+@dataclass
+class WindowTransfer:
+    source: MainWindow
+    session: BackupSession
+    token: object
+    started: bool = False
+    released: bool = False
+
+    def release(self):
+        if self.released:
+            return
+        self.released = True
+        self.session.end_transfer(self.token)
+        source = self.source
+        source._outgoing_transfers -= 1
+        source._status_jobs.pop(self.token, None)
+        source.update_actions()
+        source.update_work_status()
+        if not source._outgoing_transfers and source._close_after_transfer:
+            source._close_after_transfer = False
+            QTimer.singleShot(0, source.close)
 
 
 class MainWindow(QMainWindow):
@@ -2943,6 +2967,7 @@ class MainWindow(QMainWindow):
         if (
             self.task
             or self._transitioning
+            or self._outgoing_transfers
             or self._readonly_closing
             or self._drop_queued
             or self.force_close
@@ -2950,12 +2975,26 @@ class MainWindow(QMainWindow):
         ):
             return None
         internal = mime.hasFormat(INTERNAL_MIME)
+        if internal and self.session is None:
+            return None
         if not internal and not mime.hasUrls():
             return None
         snapshot = QMimeData(self)
+        borrowed = None
         if internal:
             # 不能读取内部拖放的 URL：ExportMimeData 会为外部消费者即时导出。
             snapshot.setData(INTERNAL_MIME, bytes(mime.data(INTERNAL_MIME)))
+            try:
+                content = json.loads(bytes(snapshot.data(INTERNAL_MIME)))
+                if not isinstance(content, dict):
+                    raise ValueError("无效拖放内容")
+                local = self.session and content["session"] == self.session.session_id
+                if not local:
+                    # 仅取得快速的会话租约，不在原生事件内弹窗或导出文件。
+                    borrowed = self.borrow_transfer(content["session"])
+            except (ValueError, KeyError, TypeError, BackupError):
+                snapshot.deleteLater()
+                return None
         else:
             snapshot.setUrls(mime.urls())
         target = self.drop_location(index)
@@ -2970,16 +3009,20 @@ class MainWindow(QMainWindow):
                     and not self.force_close
                     and not self._exit_requested
                 ):
-                    self.handle_drop(snapshot, QModelIndex(), target=target)
+                    self.handle_drop(snapshot, QModelIndex(), target=target, borrowed=borrowed)
             finally:
+                if borrowed and not borrowed.started:
+                    borrowed.release()
                 self._drop_queued = False
                 snapshot.deleteLater()
 
         QTimer.singleShot(0, self, consume)
-        return Qt.DropAction.MoveAction if internal else Qt.DropAction.CopyAction
+        return (
+            Qt.DropAction.MoveAction if internal and borrowed is None else Qt.DropAction.CopyAction
+        )
 
-    def handle_drop(self, mime, index, *, target=None):
-        if self.task or self._transitioning or self._readonly_closing:
+    def handle_drop(self, mime, index, *, target=None, borrowed=None):
+        if self.task or self._transitioning or self._outgoing_transfers or self._readonly_closing:
             return False
         domain, parent = target if target is not None else self.drop_location(index)
         if self.session is None:
@@ -2994,7 +3037,7 @@ class MainWindow(QMainWindow):
             try:
                 content = json.loads(bytes(mime.data(INTERNAL_MIME)))
                 if content["session"] != self.session.session_id:
-                    raise BackupError("不支持从其他会话直接移动；请先导出文件再添加")
+                    return self.copy_from_window(content, domain, parent, borrowed=borrowed)
                 tokens = content["tokens"]
                 entries = self.session.roots(tokens)
                 conflict = any(
@@ -3014,13 +3057,78 @@ class MainWindow(QMainWindow):
                 )
                 return True
             except (ValueError, KeyError, TypeError, BackupError) as exc:
-                message(self, "无法移动项目", str(exc), QMessageBox.Icon.Warning)
+                message(self, "无法处理拖放项目", str(exc), QMessageBox.Icon.Warning)
                 return False
         paths = [url.toLocalFile() for url in mime.urls() if url.isLocalFile()]
         if paths:
             self.import_paths(paths, domain, parent)
             return True
         return False
+
+    def borrow_transfer(self, session_id):
+        source = self.manager.window_for_session(session_id)
+        if source is None or source is self:
+            raise BackupError("来源备份会话已关闭，或不属于当前程序；请先导出项目再添加。")
+        if (
+            source.task
+            or source.copy_task
+            or source._copy_pending
+            or source._transitioning
+            or source._readonly_closing
+            or source.force_close
+        ):
+            raise BackupError("来源备份正在处理其他操作，请稍后复制")
+        session = source.session
+        token = session.begin_transfer()
+        source._outgoing_transfers += 1
+        return WindowTransfer(source, session, token)
+
+    def copy_from_window(self, content, domain, parent, *, borrowed=None):
+        borrowed = borrowed or self.borrow_transfer(content["session"])
+        session = self.session
+        try:
+            tokens = content["tokens"]
+            if (
+                not isinstance(tokens, list)
+                or not tokens
+                or any(not isinstance(t, str) for t in tokens)
+            ):
+                raise BackupError("无效的拖放项目列表")
+            source = borrowed.source
+            source._status_jobs[borrowed.token] = ("正在向其他备份复制项目…", 0, 0)
+            source.update_actions()
+            source.update_work_status()
+            roots = borrowed.session.roots(tokens)
+            conflict = any(session.at(domain, f"{parent}/{e.name}".lstrip("/")) for e in roots)
+            policy = self.collision_policy() if conflict else "error"
+            if (
+                not policy
+                or self.session is not session
+                or self.force_close
+                or self._transitioning
+                or self.task
+            ):
+                return False
+
+            def copy(progress, cancel):
+                with tempfile.TemporaryDirectory(
+                    prefix=".transfer-", dir=session.workspace
+                ) as directory:
+                    paths = borrowed.session.export(
+                        tokens, Path(directory), progress=progress, cancel=cancel
+                    )
+                    session.import_paths(
+                        paths, domain, parent, collision=policy, progress=progress, cancel=cancel
+                    )
+
+            job = self.run_task(
+                "复制到当前备份", copy, lambda _: self.refresh(), on_done=borrowed.release
+            )
+            borrowed.started = job is not None
+            return borrowed.started
+        finally:
+            if not borrowed.started:
+                borrowed.release()
 
     def start_drag(self, view):
         tokens = self.selected_tokens()

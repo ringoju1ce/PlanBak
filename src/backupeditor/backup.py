@@ -175,6 +175,7 @@ class BackupSession(SessionOverlay):
         self.lock = threading.RLock()
         self._state_lock = threading.Lock()
         self._applying = None
+        self._transfers = set()
         self._copying = False
         self.db = None
         self.keybag = None
@@ -230,16 +231,30 @@ class BackupSession(SessionOverlay):
 
     def check_changes_allowed(self):
         with self._state_lock:
+            if self._transfers:
+                raise BackupError("正在向其他备份复制项目，请稍后再修改")
             if self._applying is not None:
                 raise BackupError("正在应用更改，不能新增或放弃暂挂更改")
 
     def begin_apply(self):
         with self._state_lock:
-            if self._applying is not None or self._copying:
+            if self._applying is not None or self._copying or self._transfers:
                 raise BackupError("正在应用更改或创建副本，请稍后重试")
             token = object()
             self._applying = token
             return token
+
+    def begin_transfer(self):
+        with self._state_lock:
+            if self._applying is not None or self._copying:
+                raise BackupError("来源备份正在应用更改或创建副本，请稍后复制")
+            token = object()
+            self._transfers.add(token)
+            return token
+
+    def end_transfer(self, token):
+        with self._state_lock:
+            self._transfers.discard(token)
 
     def end_apply(self, token):
         with self._state_lock:
@@ -248,7 +263,7 @@ class BackupSession(SessionOverlay):
 
     def create_copy(self, destination, *, progress=None, cancel=None):
         with self._state_lock:
-            if self._applying is not None or self._copying:
+            if self._applying is not None or self._copying or self._transfers:
                 raise BackupError("已有保存或副本任务进行中")
             self._copying = True
         try:
@@ -797,6 +812,9 @@ class BackupSession(SessionOverlay):
                     out_db_path.unlink(missing_ok=True)
 
     def close(self):
+        with self._state_lock:
+            if self._transfers:
+                raise BackupError("正在向其他备份复制项目，暂不能清理来源会话")
         with contextlib.suppress(Exception):
             if self.db is not None:
                 self.db.close()
