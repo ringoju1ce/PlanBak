@@ -320,6 +320,7 @@ class ValueDialog(FixedDialog):
         if kind == "String":
             self.values.setCurrentIndex(0)
             self.value_field.setPlainText(self.node.value if existing else "")
+            self._string_display = self.value_field.toPlainText()
         elif kind in ("Integer", "Real", "UID"):
             self.values.setCurrentIndex(1)
             expression = {
@@ -382,6 +383,8 @@ class ValueDialog(FixedDialog):
                 value = self.date_field.value()
             elif kind == "String":
                 value = self.value_field.toPlainText()
+                if self.node.kind == "String" and value == self._string_display:
+                    value = self.node.value
             elif (
                 kind == "Real"
                 and self.node.kind == "Real"
