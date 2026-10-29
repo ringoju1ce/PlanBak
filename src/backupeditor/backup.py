@@ -82,7 +82,7 @@ def stale_workspaces():
             if marker.is_symlink() or marker.stat().st_size > 2048:
                 continue
             data = json.loads(marker.read_text())
-            if data.get("application") != "BackupEditor":
+            if not isinstance(data, dict) or data.get("application") != "BackupEditor":
                 continue
             pid = int(data["pid"])
             if pid < 1:
