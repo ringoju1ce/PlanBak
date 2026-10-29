@@ -17,7 +17,14 @@ import uuid
 from pathlib import Path
 from typing import Callable
 
-from .backup_copy import backup_stamp, copy_backup, output_location, read_marker, write_marker
+from .backup_copy import (
+    backup_stamp,
+    check_persistent_location,
+    copy_backup,
+    output_location,
+    read_marker,
+    write_marker,
+)
 from .codec import (
     CHUNK,
     BackupError,
@@ -247,6 +254,7 @@ class BackupSession(SessionOverlay):
             # 不持有会话锁进行整份复制，允许期间继续浏览、编辑和暂挂。
             with self.lock:
                 source, stamp = self.root, self.source_stamp
+            destination = output_location(source, destination, workspace=self.workspace)
             return copy_backup(source, destination, stamp, progress or (lambda *a: None), cancel)
         finally:
             with self._state_lock:
@@ -256,6 +264,7 @@ class BackupSession(SessionOverlay):
         self.check_changes_allowed()
         with self.lock:
             self.check_changes_allowed()
+            check_persistent_location(copied.path, self.workspace)
             if self.root != copied.source or self._stamp() != copied.stamp:
                 raise BackupError("当前备份已改变，未切换到新副本")
             if not read_marker(copied.path) or backup_stamp(copied.path) != copied.stamp:
@@ -554,7 +563,8 @@ class BackupSession(SessionOverlay):
                     raise BackupError("没有有效副本标记，必须保存为新的备份副本")
                 destination = self.root
             else:
-                destination = output_location(self.root, destination)
+                destination = output_location(self.root, destination, workspace=self.workspace)
+            check_persistent_location(destination, self.workspace)
             if self._stamp() != self.source_stamp:
                 raise BackupError("原备份在打开后已改变，请重新打开备份")
             destination.parent.mkdir(parents=True, exist_ok=True)

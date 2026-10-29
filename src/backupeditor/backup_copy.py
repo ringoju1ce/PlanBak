@@ -57,11 +57,28 @@ def backup_stamp(root):
     )
 
 
-def output_location(source, destination):
+def check_persistent_location(destination, workspace=None):
+    """持久备份不能交给任何会话工作区的退出/启动清理逻辑。"""
+    destination = Path(destination).expanduser().resolve()
+    if workspace is not None and destination.is_relative_to(Path(workspace).resolve()):
+        raise BackupError("备份输出不能位于会话临时文件夹内")
+    for parent in (destination, *destination.parents):
+        marker = parent / ".backupeditor-session.json"
+        try:
+            if marker.is_file() and marker.stat().st_size <= 2048:
+                value = json.loads(marker.read_text())
+                if isinstance(value, dict) and value.get("application") == "BackupEditor":
+                    raise BackupError("备份输出不能位于会话临时文件夹内")
+        except (OSError, ValueError):
+            continue
+
+
+def output_location(source, destination, *, workspace=None):
     destination = Path(destination).expanduser().absolute()
     if destination.exists() or destination.is_symlink():
         raise BackupError("保存目标已存在，请选择一个新的文件夹名称")
     destination = destination.parent.resolve() / destination.name
+    check_persistent_location(destination, workspace)
     if destination == source or source in destination.parents or destination in source.parents:
         raise BackupError("保存位置不能与原备份重叠")
     destination.parent.mkdir(parents=True, exist_ok=True)
