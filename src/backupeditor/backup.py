@@ -1,4 +1,4 @@
-"""Read-only source backups, transactional session overlay, and separate-output saves."""
+"""受保护的来源备份、会话暂挂及可编辑副本保存。"""
 
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ import uuid
 from pathlib import Path
 from typing import Callable
 
+from .backup_copy import backup_stamp, copy_backup, output_location, read_marker, write_marker
 from .codec import (
     CHUNK,
     BackupError,
@@ -30,6 +31,34 @@ from .codec import (
 from .staging import Entry, SessionOverlay
 
 Progress = Callable[[str, int, int], None]
+
+
+def process_alive(pid):
+    if os.name == "nt":
+        # Windows 的 os.kill(pid, 0) 不能当作无副作用的 POSIX 存活探测。
+        import ctypes
+        from ctypes import wintypes
+
+        api = ctypes.WinDLL("kernel32", use_last_error=True)
+        api.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        api.OpenProcess.restype = wintypes.HANDLE
+        api.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+        api.CloseHandle.argtypes = [wintypes.HANDLE]
+        handle = api.OpenProcess(0x1000, False, pid)
+        if not handle:
+            return ctypes.get_last_error() != 87  # 无权限/未知错误时保守保留。
+        try:
+            code = wintypes.DWORD()
+            return not api.GetExitCodeProcess(handle, ctypes.byref(code)) or code.value == 259
+        finally:
+            api.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        pass
+    return True
 
 
 def stale_workspaces():
@@ -50,13 +79,9 @@ def stale_workspaces():
             pid = int(data["pid"])
             if pid < 1:
                 continue
-            try:
-                os.kill(pid, 0)
-            except ProcessLookupError:
+            if not process_alive(pid):
                 result.append(path)
-            except PermissionError:
-                pass
-        except (OSError, ValueError, KeyError, TypeError):
+        except (OSError, ValueError, KeyError, TypeError, OverflowError):
             continue
     return result
 
@@ -89,7 +114,7 @@ def load_plist(path: Path):
         raise BackupError(f"无法读取 {path.name}") from exc
 
 
-def copy_file(src: Path, dst: Path, cancel=None):
+def copy_file(src: Path, dst: Path, cancel=None, *, progress=None):
     if src.is_symlink() or not src.is_file():
         raise BackupError(f"拒绝读取链接或特殊文件：{src.name}")
     dst.parent.mkdir(parents=True, exist_ok=True)
@@ -99,6 +124,8 @@ def copy_file(src: Path, dst: Path, cancel=None):
             while chunk := fi.read(CHUNK):
                 check_cancel(cancel)
                 fo.write(chunk)
+                if progress:
+                    progress(len(chunk))
         current = src.stat()
         if (original.st_size, original.st_mtime_ns, original.st_ino) != (
             current.st_size,
@@ -137,6 +164,9 @@ class BackupSession(SessionOverlay):
             )
         )
         self.lock = threading.RLock()
+        self._state_lock = threading.Lock()
+        self._applying = None
+        self._copying = False
         self.db = None
         self.keybag = None
         self.manifest_key = None
@@ -183,14 +213,60 @@ class BackupSession(SessionOverlay):
             raise
 
     def _stamp(self):
-        return tuple(
-            (p, (self.root / p).stat().st_size, (self.root / p).stat().st_mtime_ns)
-            for p in ("Manifest.db", "Manifest.plist", "Info.plist")
-        )
+        return backup_stamp(self.root)
+
+    @property
+    def editable(self):
+        return read_marker(self.root) is not None
+
+    def check_changes_allowed(self):
+        with self._state_lock:
+            if self._applying is not None:
+                raise BackupError("正在应用更改，不能新增或放弃暂挂更改")
+
+    def begin_apply(self):
+        with self._state_lock:
+            if self._applying is not None or self._copying:
+                raise BackupError("正在应用更改或创建副本，请稍后重试")
+            token = object()
+            self._applying = token
+            return token
+
+    def end_apply(self, token):
+        with self._state_lock:
+            if self._applying is token:
+                self._applying = None
+
+    def create_copy(self, destination, *, progress=None, cancel=None):
+        with self._state_lock:
+            if self._applying is not None or self._copying:
+                raise BackupError("已有保存或副本任务进行中")
+            self._copying = True
+        try:
+            # 不持有会话锁进行整份复制，允许期间继续浏览、编辑和暂挂。
+            with self.lock:
+                source, stamp = self.root, self.source_stamp
+            return copy_backup(source, destination, stamp, progress or (lambda *a: None), cancel)
+        finally:
+            with self._state_lock:
+                self._copying = False
+
+    def use_copy(self, copied):
+        self.check_changes_allowed()
+        with self.lock:
+            self.check_changes_allowed()
+            if self.root != copied.source or self._stamp() != copied.stamp:
+                raise BackupError("当前备份已改变，未切换到新副本")
+            if not read_marker(copied.path) or backup_stamp(copied.path) != copied.stamp:
+                raise BackupError("副本标记或清单已改变，未切换保存位置")
+            self.root = copied.path
+            self.source_stamp = copied.stamp
+            self._revision += 1
 
     def _index(self, cancel):
         self.create_entry_table(self.db)
         total = self.db.execute("SELECT COUNT(*) FROM Files").fetchone()[0]
+        self._progress("建立备份索引…", 0, total)
         parents = set()
         batch = []
         cursor = self.db.execute("SELECT fileID,domain,relativePath,flags,file FROM Files")
@@ -435,25 +511,42 @@ class BackupSession(SessionOverlay):
     def estimate_save_bytes(self):
         return sum(p.stat().st_size for p in self.root.rglob("*") if p.is_file())
 
-    def save(self, destination: Path, *, progress=None, cancel=None):
-        """Publish a complete, validated, separately copied backup; source is never written."""
+    def save(self, destination: Path | None = None, *, progress=None, cancel=None, _token=None):
+        token = _token if _token is not None else self.begin_apply()
+        try:
+            with self._state_lock:
+                if token is not self._applying:
+                    raise BackupError("无效的保存状态")
+            return self._save(destination, progress=progress, cancel=cancel)
+        finally:
+            self.end_apply(token)
+
+    def _save(self, destination, *, progress=None, cancel=None):
+        """Prepare and validate output, then publish a copy or update a marked backup."""
         with self.lock:
             progress = progress or (lambda *a: None)
-            destination = destination.expanduser().absolute()
-            if destination.exists():
-                raise BackupError("保存目标已存在，请选择一个新的文件夹名称")
-            destination = destination.parent.resolve() / destination.name
-            if (
-                destination == self.root
-                or self.root in destination.parents
-                or destination in self.root.parents
-            ):
-                raise BackupError("保存位置不能与原备份重叠")
+            direct = destination is None
+            marker = read_marker(self.root)
+            if direct:
+                if not marker:
+                    raise BackupError("没有有效副本标记，必须保存为新的备份副本")
+                destination = self.root
+            else:
+                destination = output_location(self.root, destination)
             if self._stamp() != self.source_stamp:
                 raise BackupError("原备份在打开后已改变，请重新打开备份")
             destination.parent.mkdir(parents=True, exist_ok=True)
             progress("估算备份大小…", 0, 0)
-            required = self.estimate_save_bytes()
+            required = (
+                sum(
+                    r[0]
+                    for r in self.db.execute(
+                        "SELECT size FROM EditorEntries WHERE changed=1 AND kind='file'"
+                    )
+                )
+                if direct
+                else self.estimate_save_bytes()
+            )
             extra = self.manifest_path.stat().st_size * 2
             if shutil.disk_usage(destination.parent).free < required + extra:
                 raise BackupError("目标磁盘空间不足以创建独立备份副本")
@@ -461,7 +554,15 @@ class BackupSession(SessionOverlay):
             out_db_path = self.workspace / (uuid.uuid4().hex + ".db")
             saved_db = None
             try:
-                files = [p for p in self.root.rglob("*") if p.is_file() or p.is_symlink()]
+                files = (
+                    []
+                    if direct
+                    else [
+                        p
+                        for p in self.root.rglob("*")
+                        if (p.is_file() or p.is_symlink()) and p.name != ".backupeditor.json"
+                    ]
+                )
                 for n, source in enumerate(files, 1):
                     check_cancel(cancel)
                     progress("复制备份到独立输出文件夹…", n, len(files))
@@ -527,10 +628,12 @@ class BackupSession(SessionOverlay):
                             "INSERT INTO Files(fileID,domain,relativePath,flags,file) VALUES(?,?,?,?,?)",
                             (fid, entry.domain, entry.path, flags, meta.dump()),
                         )
+                    removed = []
                     for fid in obsolete:
                         if not out_db.execute(
                             "SELECT 1 FROM Files WHERE fileID=?", (fid,)
                         ).fetchone():
+                            removed.append(fid)
                             for candidate in (work / fid[:2] / fid, work / fid):
                                 candidate.unlink(missing_ok=True)
                     expected_count = out_db.execute(
@@ -547,7 +650,10 @@ class BackupSession(SessionOverlay):
                     payload_ids = out_db.execute("SELECT fileID FROM Files WHERE flags=1")
                     for (fid,) in payload_ids:
                         check_cancel(cancel)
-                        if not (work / fid[:2] / fid).is_file() and not (work / fid).is_file():
+                        locations = [work / fid[:2] / fid, work / fid]
+                        if direct:
+                            locations += [self.root / fid[:2] / fid, self.root / fid]
+                        if not any(p.is_file() and not p.is_symlink() for p in locations):
                             raise BackupError(f"输出备份缺少文件数据：{fid}")
                 progress("重新封装并验证清单…", 0, 0)
                 if self.encrypted:
@@ -589,20 +695,48 @@ class BackupSession(SessionOverlay):
                 check_cancel(cancel)
                 if self._stamp() != self.source_stamp:
                     raise BackupError("保存期间原备份发生变化，输出未发布")
-                if destination.exists():
+                if not direct and destination.exists():
                     raise BackupError("保存目标被其他程序创建，输出未覆盖")
                 progress("建立新的保存基线…", 0, 0)
                 saved_db = self.prepare_saved_index(out_db_path, cancel)
                 check_cancel(cancel)
                 if self._stamp() != self.source_stamp:
                     raise BackupError("保存期间原备份发生变化，输出未发布")
-                if destination.exists():
+                if not direct and destination.exists():
                     raise BackupError("保存目标被其他程序创建，输出未覆盖")
-                new_stamp = tuple(
-                    (name, (work / name).stat().st_size, (work / name).stat().st_mtime_ns)
-                    for name in ("Manifest.db", "Manifest.plist", "Info.plist")
-                )
-                work.rename(destination)
+                if direct:
+                    if read_marker(self.root) != marker:
+                        raise BackupError("副本标记在保存期间发生变化")
+                    # 最后一次取消检查在写入前。开始安装后完成本次写入，不提供日志/回滚。
+                    progress("正在应用更改…", 0, 0)
+                    payloads = [
+                        p for p in work.rglob("*") if p.is_file() and p.name != "Manifest.db"
+                    ]
+                    installs = [(p, destination / p.relative_to(work)) for p in payloads]
+                    deletes = [
+                        p
+                        for fid in removed
+                        for p in (destination / fid[:2] / fid, destination / fid)
+                    ]
+                    deletes += [destination / p.name for p in payloads]
+                    for path in [target for _, target in installs] + deletes:
+                        if path.is_symlink() or path.parent.is_symlink():
+                            raise BackupError("副本输出位置不能是链接")
+                    try:
+                        for payload, target in installs:
+                            target.parent.mkdir(parents=True, exist_ok=True)
+                            os.replace(payload, target)
+                        for path in deletes:
+                            path.unlink(missing_ok=True)
+                        os.replace(work / "Manifest.db", destination / "Manifest.db")
+                    except OSError as exc:
+                        raise BackupError(
+                            "应用更改未完成，当前副本可能已部分写入；请从原备份重新创建副本。"
+                        ) from exc
+                else:
+                    write_marker(work)
+                    work.rename(destination)
+                new_stamp = backup_stamp(destination)
                 old_db, old_path = self.db, self.manifest_path
                 self.db, saved_db = saved_db, None
                 self.manifest_path = out_db_path

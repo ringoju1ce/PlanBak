@@ -351,10 +351,12 @@ class SessionOverlay:
 
     @contextlib.contextmanager
     def mutation(self, *, progress=None, cancel=None):
+        self.check_changes_allowed()
         with (
             self.lock,
             tempfile.TemporaryDirectory(prefix=".change-", dir=self.workspace) as directory,
         ):
+            self.check_changes_allowed()
             work = Mutation(self, Path(directory), cancel)
             self._change_progress = progress or (lambda *args: None)
             try:
@@ -680,6 +682,7 @@ class SessionOverlay:
                     work.locations[key] = plan.locations[key]
 
     def discard(self, *, progress=None, cancel=None):
+        self.check_changes_allowed()
         self.revert(self.plan_revert(cancel=cancel), progress=progress, cancel=cancel)
 
     def prepare_saved_index(self, path, cancel=None):

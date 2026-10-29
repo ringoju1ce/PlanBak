@@ -48,6 +48,7 @@ from PySide6.QtWidgets import (
     QListView,
     QMainWindow,
     QMenu,
+    QProgressBar,
     QPushButton,
     QSlider,
     QSplitter,
@@ -117,12 +118,18 @@ class Task(QThread):
         self.error = None
 
     def run(self):
-        last_progress = [0.0]
+        last_progress = [0.0, ""]
 
         def notify(text, done, total):
             now = time.monotonic()
-            if now - last_progress[0] > 0.07 or (total and done == total):
-                last_progress[0] = now
+            # 阶段切换不能被限频吞掉；同阶段的逐文件/字节通知仍限频。
+            phase = text.partition("：")[0]
+            if (
+                phase != last_progress[1]
+                or now - last_progress[0] > 0.07
+                or (total and done == total)
+            ):
+                last_progress[:] = [now, phase]
                 self.progress.emit(text, done, total)
 
         try:
@@ -430,6 +437,18 @@ class MainWindow(QMainWindow):
         self._rendered_sort = ()
         self.task = None
         self.progress_dialog = None
+        self.copy_task = None
+        self._copy_pending = None
+        self._copy_exit_requested = False
+        self._status_jobs = {}
+        self.work_label = QLabel("就绪", self)
+        self.work_progress = QProgressBar(self)
+        self.work_progress.setFixedWidth(160)
+        self.work_progress.setMaximumHeight(max(18, self.work_progress.fontMetrics().height() + 6))
+        self.work_progress.setAccessibleName("后台任务进度")
+        self.work_progress.hide()
+        self.statusBar().addWidget(self.work_label)
+        self.statusBar().addWidget(self.work_progress)
         self.opened: dict[str, OpenedFile] = {}
         self.plist_editors = {}
         self.database_viewers = {}
@@ -582,7 +601,8 @@ class MainWindow(QMainWindow):
         )
         self.rename_action = self.action("重命名…", self.rename_selected, "F2")
         self.delete_action = self.action("删除", self.delete_selected, "Delete", "edit-delete")
-        self.save_action = self.action("保存备份副本…", self.save, "Ctrl+S", "document-save")
+        self.save_action = self.action("应用更改…", self.save, "Ctrl+S", "document-save")
+        self.create_copy_action = self.action("创建备份副本…", self.create_backup_copy)
         self.discard_action = self.action("放弃所有更改", self.discard)
         self.up_action = self.action("上层文件夹", self.up, "Backspace", "go-up")
         select_all = self.action("全选", self.select_all, "Ctrl+A")
@@ -607,6 +627,7 @@ class MainWindow(QMainWindow):
         file_menu.addActions(
             [
                 self.open_backup_action,
+                self.create_copy_action,
                 self.add_action,
                 self.add_folder_action,
                 self.new_folder_action,
@@ -894,7 +915,14 @@ class MainWindow(QMainWindow):
         rows = self.selected_rows()
         tokens = self.selected_tokens()
         session = self.session
-        self.open_backup_action.setEnabled(not busy)
+        copying = self.copy_task is not None or self._copy_pending is not None
+        self.open_backup_action.setEnabled(not busy and not copying)
+        self.create_copy_action.setEnabled(not busy and not copying and session is not None)
+        editable = bool(session and session.editable)
+        self.save_action.setText("应用更改" if editable else "应用更改…")
+        self.save_action.setToolTip(
+            "应用更改到当前可编辑副本" if editable else "创建新的备份副本并应用更改"
+        )
         self.location.setEnabled(not busy) if hasattr(self, "location") else None
         self.open_action.setEnabled(not busy and len(rows) == 1 and rows[0].kind == "file")
         self.extract_action.setEnabled(not busy and bool(tokens))
@@ -910,6 +938,7 @@ class MainWindow(QMainWindow):
             action.setEnabled(not busy and session is not None and self.domain is not None)
         self.save_action.setEnabled(
             not busy
+            and not copying
             and bool(
                 session
                 and (
@@ -1028,10 +1057,10 @@ class MainWindow(QMainWindow):
         if self.session:
             device = self.session.info.get("Device Name", self.session.root.name)
             dirty = self.session.dirty
-            self.setWindowTitle(f"{'* ' if dirty else ''}{device} — BackupEditor")
-            self.statusBar().showMessage(
-                f"{device} · {'加密' if self.session.encrypted else '未加密'} · "
-                f"{len(rows) - (0 if location.is_root else 1)} 个项目 · "
+            category = "可编辑副本" if self.session.editable else "原始备份"
+            self.setWindowTitle(f"{'* ' if dirty else ''}{device} · {category} — BackupEditor")
+            self.statusBar().setToolTip(
+                f"{device} · {category} · {self.session.root} · "
                 f"{len(self.session.changes)} 个已更改项目"
             )
             if dirty:
@@ -1039,8 +1068,9 @@ class MainWindow(QMainWindow):
             else:
                 self.changes_dock.hide()
         else:
-            self.statusBar().showMessage("从“文件 → 选择备份文件夹”打开 iOS 备份")
+            self.statusBar().setToolTip("从“文件 → 选择备份文件夹”打开 iOS 备份")
         self.update_actions()
+        self.update_work_status()
 
         QTimer.singleShot(0, self.check_plist_editors)
 
@@ -1113,16 +1143,109 @@ class MainWindow(QMainWindow):
             return
         self.navigate(location)
 
+    def update_work_status(self):
+        self.statusBar().clearMessage()
+        if not self._status_jobs:
+            self.work_label.setText("就绪")
+            self.work_progress.hide()
+            return
+        text, done, total = next(reversed(self._status_jobs.values()))
+        self.work_label.setText(text)
+        self.work_progress.setRange(0, 1000 if total > 0 else 0)
+        if total > 0:
+            self.work_progress.setValue(min(1000, int(done / total * 1000)))
+        self.work_progress.show()
+
+    def work_progress_changed(self, job, text, done, total):
+        if job in self._status_jobs:
+            self._status_jobs[job] = (text, done, total)
+            self.update_work_status()
+
+    def create_backup_copy(self, *_):
+        if not self.session or self.task or self.copy_task or self._copy_pending:
+            return
+        session = self.session
+        target, _ = QFileDialog.getSaveFileName(
+            self,
+            "创建备份副本",
+            str(session.root.parent / (session.root.name + "-copy")),
+            "备份文件夹 (*)",
+        )
+        if not target:
+            return
+        job = Task(
+            lambda progress, cancel: session.create_copy(
+                Path(target), progress=progress, cancel=cancel
+            ),
+            self,
+        )
+        self.copy_task = job
+        self._status_jobs[job] = ("正在创建备份副本…", 0, 0)
+        job.progress.connect(
+            lambda text, done, total: self.work_progress_changed(job, text, done, total)
+        )
+
+        def finished():
+            self.copy_task = None
+            self._status_jobs.pop(job, None)
+            self.update_work_status()
+            if not job.error and self.session is session:
+                self._copy_pending = (session, job.result)
+            if self._copy_exit_requested:
+                self._copy_exit_requested = False
+                self._copy_pending = None
+                QTimer.singleShot(0, self.close)
+            else:
+                if job.error and not isinstance(job.error, Cancelled):
+                    message(self, "无法创建备份副本", str(job.error), QMessageBox.Icon.Warning)
+                self.attach_created_copy()
+            self.update_actions()
+            job.deleteLater()
+
+        job.finished.connect(finished)
+        self.update_actions()
+        self.update_work_status()
+        job.start()
+
+    def attach_created_copy(self):
+        if not self._copy_pending or self.task or self._exit_requested:
+            return
+        session, copied = self._copy_pending
+        self._copy_pending = None
+        if self.session is not session:
+            return
+        self.run_task(
+            "切换到备份副本",
+            lambda progress, cancel: session.use_copy(copied),
+            lambda _: self.refresh(focus_browser=False),
+            silent=True,
+        )
+
     def run_task(
-        self, title, function, callback=None, *, silent=False, on_error=None, on_done=None
+        self,
+        title,
+        function,
+        callback=None,
+        *,
+        silent=False,
+        status=False,
+        on_error=None,
+        on_done=None,
     ):
         if self.task:
             return
         job = Task(function, self)
         self.task = job
         dialog = None
-        if not silent:
+        if status:
+            self._status_jobs[job] = (title + "…", 0, 0)
+            job.progress.connect(
+                lambda text, done, total: self.work_progress_changed(job, text, done, total)
+            )
+            self.update_work_status()
+        if not silent and not status:
             dialog = FixedProgressDialog(title, "取消", 0, 0, self)
+            self.progress_dialog = dialog
             dialog.setWindowTitle("BackupEditor")
             dialog.setWindowModality(Qt.WindowModality.ApplicationModal)
             dialog.canceled.connect(job.cancelled.set)
@@ -1134,6 +1257,8 @@ class MainWindow(QMainWindow):
                 else:
                     dialog.setRange(0, 0)
                 dialog.setLabelText(text)
+                if text == "正在应用更改…":
+                    dialog.setCancelButton(None)
 
             job.progress.connect(progress)
             dialog.show()
@@ -1141,7 +1266,10 @@ class MainWindow(QMainWindow):
 
         def finished():
             self.task = None
+            self._status_jobs.pop(job, None)
+            self.update_work_status()
             if dialog:
+                self.progress_dialog = None
                 dialog.close()
                 dialog.deleteLater()
             self.update_actions()
@@ -1156,7 +1284,7 @@ class MainWindow(QMainWindow):
                 return
             if job.error:
                 if isinstance(job.error, Cancelled):
-                    self.statusBar().showMessage("操作已取消")
+                    self.statusBar().setToolTip("操作已取消")
                 elif on_error:
                     on_error(job.error)
                 else:
@@ -1166,12 +1294,13 @@ class MainWindow(QMainWindow):
             if on_done:
                 on_done()
             job.deleteLater()
+            self.attach_created_copy()
 
         job.finished.connect(finished)
         job.start()
 
     def confirm_leave(self, continuation, *, exiting=False):
-        if self.task:
+        if self.task or self.copy_task or self._copy_pending:
             return
         if self.database_viewers or self.hex_viewers or self.image_viewers:
             self.close_readonly_viewers(lambda: self.confirm_leave(continuation, exiting=exiting))
@@ -1194,20 +1323,23 @@ class MainWindow(QMainWindow):
         if not self.session.dirty and not external:
             continuation()
             return
+        save_description = (
+            "应用更改到当前可编辑副本" if self.session.editable else "创建备份副本并应用更改"
+        )
         box = QMessageBox(
             QMessageBox.Icon.Question,
             "未保存更改",
             (
-                "当前有未保存的更改。\n选择“保存备份副本”会创建新副本并留在应用中；选择“放弃更改”会清理临时文件并退出。"
+                f"当前有未保存的更改。\n选择“应用更改”将{save_description}并留在应用中；选择“放弃更改”会清理临时文件并退出。"
                 if exiting
-                else "是否将当前更改保存为新的备份副本？"
+                else f"是否{save_description}？"
             ),
             QMessageBox.StandardButton.Save
             | QMessageBox.StandardButton.Discard
             | QMessageBox.StandardButton.Cancel,
             self,
         )
-        box.button(QMessageBox.StandardButton.Save).setText("保存备份副本")
+        box.button(QMessageBox.StandardButton.Save).setText("应用更改")
         box.button(QMessageBox.StandardButton.Discard).setText("放弃更改")
         box.button(QMessageBox.StandardButton.Cancel).setText("取消")
         box.setDefaultButton(QMessageBox.StandardButton.Cancel)
@@ -1249,14 +1381,14 @@ class MainWindow(QMainWindow):
             continuation()
 
     def open_backup(self, *_):
-        if self.task:
+        if self.task or self.copy_task or self._copy_pending:
             return
         path = QFileDialog.getExistingDirectory(self, "选择 iOS 备份文件夹")
         if path:
             self.confirm_leave(lambda: self.open_path(Path(path)))
 
     def open_path(self, path):
-        if self._exit_requested:
+        if self._exit_requested or self.copy_task or self._copy_pending:
             return
         try:
             candidates = detect_backups(Path(path))
@@ -1300,6 +1432,7 @@ class MainWindow(QMainWindow):
                 Path(path), password, progress=progress, cancel=cancel
             ),
             loaded,
+            status=True,
         )
 
     def clear_opened_files(self):
@@ -1548,7 +1681,7 @@ class MainWindow(QMainWindow):
                 lambda progress, cancel: self.session.export(
                     tokens, Path(target), collision=policy, progress=progress, cancel=cancel
                 ),
-                lambda _: self.statusBar().showMessage(f"已导出到 {target}"),
+                lambda _: self.statusBar().setToolTip(f"已导出到 {target}"),
             )
 
     def open_file(self, *, external=False):
@@ -1864,7 +1997,7 @@ class MainWindow(QMainWindow):
 
     def open_data_hex(self, data, identity, label, *, owner=None):
         if self.task or not self.session:
-            self.statusBar().showMessage("备份操作进行中，请稍后再查看 Data。")
+            self.statusBar().setToolTip("备份操作进行中，请稍后再查看 Data。")
             return
         session = self.session
         path = session.workspace / "hex-viewer" / uuid.uuid4().hex / "data.bin"
@@ -2315,39 +2448,47 @@ class MainWindow(QMainWindow):
             record.later_until = time.monotonic() + 30
 
     def save(self, *_args, after=None, quiet=False):
-        if not self.session or self.task:
+        if not self.session or self.task or self.copy_task or self._copy_pending:
             return
         for record in list(self.plist_editors.values()):
             if record.editor.dirty and not record.editor.save_document():
                 return
-        if not self.session.dirty:
+        session = self.session
+        if not session.dirty:
             return
-        suggested = str(self.session.root.parent / (self.session.root.name + "-edited"))
-        target, _ = QFileDialog.getSaveFileName(
-            self, "保存为新的备份文件夹", suggested, "备份文件夹 (*)"
-        )
-        if not target:
+        target = None
+        direct = session.editable
+        if not direct:
+            suggested = str(session.root.parent / (session.root.name + "-edited"))
+            target, _ = QFileDialog.getSaveFileName(
+                self, "创建备份副本并应用更改", suggested, "备份文件夹 (*)"
+            )
+            if not target:
+                return
+        source_root = session.root
+        try:
+            token = session.begin_apply()  # 在线程启动/弹窗事件循环之前关闭数据层暂挂入口。
+        except BackupError as exc:
+            message(self, "无法应用更改", str(exc), QMessageBox.Icon.Warning)
             return
-
-        source_root = self.session.root
 
         def saved(destination):
             self.refresh()
             if not quiet:
-                message(
-                    self,
-                    "保存完成",
-                    f"修改版备份已保存：\n{destination}\n\n原备份保留在：\n{source_root}",
-                )
+                text = f"更改已应用到：\n{destination}"
+                if not direct:
+                    text += f"\n\n原备份保留在：\n{source_root}"
+                message(self, "应用完成", text)
             if after:
                 after()
 
         self.run_task(
-            "保存备份副本",
-            lambda progress, cancel: self.session.save(
-                Path(target), progress=progress, cancel=cancel
+            "应用更改",
+            lambda progress, cancel: session.save(
+                Path(target) if target else None, progress=progress, cancel=cancel, _token=token
             ),
             saved,
+            on_done=lambda: session.end_apply(token),
         )
 
     def context_menu(self, view, point: QPoint):
@@ -2479,6 +2620,12 @@ class MainWindow(QMainWindow):
         return result
 
     def closeEvent(self, event):
+        if self.copy_task:
+            event.ignore()
+            self._copy_exit_requested = True
+            self.copy_task.cancelled.set()
+            return
+        self._copy_pending = None
         if self.force_close:
             if self.database_viewers or self.hex_viewers or self.image_viewers:
                 event.ignore()
@@ -2521,27 +2668,17 @@ class MainWindow(QMainWindow):
             if after:
                 after()
             return
-        answer = QMessageBox.question(
-            self,
-            "旧的会话临时文件",
-            f"发现 {len(paths)} 个已结束会话的临时文件夹，可能包含尚未保存的编辑副本。\n"
-            "是否删除？选择“否”可保留它们以便手动恢复。",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-        if answer == QMessageBox.StandardButton.Yes:
 
-            def cleanup(progress, cancel):
-                valid = set(stale_workspaces())
-                for path in paths:
-                    if cancel():
-                        raise Cancelled("清理已取消")
-                    if path in valid:
-                        shutil.rmtree(path)
+        def cleanup(progress, cancel):
+            # 只清理已结束且仍满足私有会话标记的工作区，不触碰活动实例。
+            valid = set(stale_workspaces())
+            for number, path in enumerate(paths, 1):
+                check_cancel(cancel)
+                if path in valid:
+                    progress("清理旧会话缓存…", number, len(paths))
+                    shutil.rmtree(path)
 
-            self.run_task("清理旧会话", cleanup, on_done=after)
-        elif after:
-            after()
+        self.run_task("清理旧会话缓存", cleanup, status=True, on_done=after)
 
 
 def main():
