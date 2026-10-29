@@ -197,7 +197,7 @@ class BackupSession(SessionOverlay):
         for count, row in enumerate(cursor, 1):
             if count % 500 == 0:
                 check_cancel(cancel)
-                self._progress("建立文件夹索引…", count, total)
+                self._progress("建立备份索引…", count, total)
             fid, domain, path, flags, blob = row
             safe_path(path)
             if not domain or "/" in domain or "\\" in domain or "\x00" in domain:
