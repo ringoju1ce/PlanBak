@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 from PySide6.QtCore import QAbstractItemModel, QModelIndex, QSize, Qt, Signal
 from PySide6.QtGui import QIcon
-from PySide6.QtWidgets import QAbstractItemView, QApplication, QStyle, QTreeView
+from PySide6.QtWidgets import QAbstractItemView, QApplication, QHeaderView, QStyle, QTreeView
 
 from .backup import Entry
 from .codec import BackupError
@@ -222,6 +222,12 @@ class DirectoryTree(QTreeView):
         self.directory_model = DirectoryTreeModel(self)
         self.setModel(self.directory_model)
         self.setHeaderHidden(True)
+        self.header().setStretchLastSection(False)
+        self.header().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        self.header().setResizeContentsPrecision(0)
+        self.setTextElideMode(Qt.TextElideMode.ElideNone)
+        self.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.setAccessibleName("备份文件夹树")
         self.setUniformRowHeights(True)
         self.setIndentation(18)

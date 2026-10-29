@@ -345,7 +345,33 @@ class BrowserInteraction:
 
 
 class BrowserTable(BrowserInteraction, QTableView):
-    pass
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._name_width = 320
+        self._fitting_name = False
+        self.horizontalHeader().sectionResized.connect(self._column_resized)
+
+    def _column_resized(self, column, before, after):
+        if self._fitting_name:
+            return
+        if column == 0:
+            self._name_width = max(160, after)
+        self._fit_name_column()
+
+    def _fit_name_column(self):
+        if getattr(self, "_fitting_name", True) or self.model() is None:
+            return
+        others = sum(self.columnWidth(i) for i in range(1, self.model().columnCount()))
+        width = max(self._name_width, self.viewport().width() - others)
+        self._fitting_name = True
+        try:
+            self.setColumnWidth(0, width)
+        finally:
+            self._fitting_name = False
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._fit_name_column()
 
 
 class BrowserGrid(BrowserInteraction, QListView):
@@ -489,7 +515,8 @@ class MainWindow(QMainWindow):
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.verticalHeader().hide()
         self.table.setShowGrid(False)
-        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
+        self.table.setColumnWidth(0, 320)
         for col, width in ((1, 155), (2, 100), (3, 150), (4, 100)):
             self.table.setColumnWidth(col, width)
         self.grid = BrowserGrid()
@@ -502,6 +529,7 @@ class MainWindow(QMainWindow):
         for view in (self.table, self.grid):
             view.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
             view.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+            view.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.table.setup_interaction(self)
         self.grid.setup_interaction(self)
         self.stack = QStackedWidget()
