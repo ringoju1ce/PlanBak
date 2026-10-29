@@ -47,6 +47,44 @@ TYPES = (
     "Null",
 )
 
+MAX_PLIST_NODES = 100_000
+MAX_PLIST_DEPTH = 128
+
+
+def validate_structure(value):
+    """先测量共享对象图，按展开后的大小限制类型树，而非先分配指数级节点。"""
+    measured = {}
+    active = set()
+
+    def measure(current, depth):
+        if depth > MAX_PLIST_DEPTH:
+            raise ValueError("plist 嵌套超过 128 层，请导出后处理")
+        if not isinstance(current, (dict, list)):
+            return 1, 1
+        identity = id(current)
+        if identity in active:
+            raise ValueError("plist 包含循环引用，无法作为树编辑")
+        if identity not in measured:
+            active.add(identity)
+            nodes, height = 1, 1
+            try:
+                children = current.values() if isinstance(current, dict) else current
+                for child in children:
+                    count, levels = measure(child, depth + 1)
+                    nodes += count
+                    height = max(height, levels + 1)
+                    if nodes > MAX_PLIST_NODES:
+                        raise ValueError("plist 展开超过 100000 个节点，请导出后处理")
+                measured[identity] = nodes, height
+            finally:
+                active.remove(identity)
+        nodes, height = measured[identity]
+        if depth + height - 1 > MAX_PLIST_DEPTH:
+            raise ValueError("plist 嵌套超过 128 层，请导出后处理")
+        return nodes, height
+
+    measure(value, 1)
+
 
 def same_value(left, right):
     """Typed equality for round-trip checks, including valid binary NaN values."""
@@ -69,11 +107,17 @@ class PlistNode:
     children: list[PlistNode] = field(default_factory=list)
 
     @classmethod
-    def from_value(cls, value, key=""):
+    def from_value(cls, value, key="", *, _checked=False):
+        if not _checked:
+            validate_structure(value)
         if isinstance(value, dict):
-            return cls("Dictionary", key, children=[cls.from_value(v, k) for k, v in value.items()])
+            return cls(
+                "Dictionary",
+                key,
+                children=[cls.from_value(v, k, _checked=True) for k, v in value.items()],
+            )
         if isinstance(value, list):
-            return cls("Array", key, children=[cls.from_value(v) for v in value])
+            return cls("Array", key, children=[cls.from_value(v, _checked=True) for v in value])
         kind = {
             str: "String",
             int: "Integer",
@@ -168,6 +212,7 @@ class PlistDocument:
 
     def serialize(self):
         value = self.root.to_value()
+        validate_structure(value)
         data = plistlib.dumps(value, fmt=self.format, sort_keys=False)
         # Refuse values that would silently lose precision, e.g. XML fractional dates.
         if not same_value(plistlib.loads(data), value):
