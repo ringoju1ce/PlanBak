@@ -64,6 +64,7 @@ from PySide6.QtWidgets import (
 )
 
 from . import __version__
+from .about import AboutDialog
 from .appearance import configure_system_appearance
 from .backup import (
     BackupSession,
@@ -746,17 +747,12 @@ class MainWindow(QMainWindow):
         self.addAction(self.sidebar_action)
         view_menu.addAction(self.sidebar_action)
         help_menu = self.menuBar().addMenu("帮助")
-        help_menu.addAction(
-            self.action(
-                "关于",
-                lambda: message(
-                    self,
-                    "关于 BackupEditor",
-                    f"BackupEditor {__version__}\n离线浏览与编辑 Manifest.db 格式的 iOS 备份。\n"
-                    "编辑先暂挂，保存生成独立副本。\n加密输出已做离线校验，尚未验证真机恢复。",
-                ),
-            )
-        )
+        help_menu.addAction(self.action("关于", self.show_about))
+
+    def show_about(self):
+        dialog = AboutDialog(self)
+        dialog.exec()
+        dialog.deleteLater()
 
     def _create_toolbar(self):
         toolbar = QToolBar("文件操作", self)
