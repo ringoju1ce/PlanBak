@@ -507,7 +507,7 @@ class MainWindow(QMainWindow):
         self.work_label = QLabel("就绪", self)
         self.work_progress = QProgressBar(self)
         self.work_progress.setFixedWidth(160)
-        self.work_progress.setMaximumHeight(max(18, self.work_progress.fontMetrics().height() + 6))
+        self.work_progress.setFixedHeight(self.work_label.sizeHint().height())
         self.work_progress.setAccessibleName("后台任务进度")
         self.work_progress.hide()
         self.backup_status = QLabel(self)
