@@ -9,7 +9,6 @@ from PySide6.QtCore import (
     QItemSelectionModel,
     QMimeData,
     QModelIndex,
-    QSize,
     Qt,
     Signal,
 )
@@ -27,7 +26,7 @@ from PySide6.QtWidgets import (
 )
 
 from .codec import BackupError
-from .dialogs import FixedDocumentWindow
+from .dialogs import DocumentWindow
 from .document_ui import DocumentStatus, DocumentToolBar, document_buttons
 from .hex_data import PAGE_SIZE, parse_offset, parse_pattern, read_page, search_bytes
 from .viewer_tasks import ViewerTask
@@ -101,7 +100,7 @@ class HexModel(QAbstractTableModel):
         return None
 
 
-class HexViewer(FixedDocumentWindow):
+class HexViewer(DocumentWindow):
     reload_requested = Signal()
 
     def __init__(self, path, name, parent=None):
@@ -191,7 +190,8 @@ class HexViewer(FixedDocumentWindow):
             action.setShortcutContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
             action.triggered.connect(callback)
             (self.table if key == "Ctrl+C" else self).addAction(action)
-        self.lock_size(QSize(1080, 720))
+        self.setMinimumSize(720, 480)
+        self.resize(1080, 720)
         self.go(0)
 
     def update_controls(self):

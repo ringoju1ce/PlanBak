@@ -30,7 +30,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .dialogs import FixedDialog, FixedDocumentWindow, FixedFileDialog, FixedMessageBox
+from .dialogs import DocumentWindow, FixedDialog, FixedFileDialog, FixedMessageBox
 from .document_ui import DocumentStatus, DocumentToolBar, document_buttons
 from .plist_xml import PlistXmlError, XmlPane, parse_xml
 
@@ -453,7 +453,7 @@ class ValueDialog(FixedDialog):
         super().accept()
 
 
-class PlistEditor(FixedDocumentWindow):
+class PlistEditor(DocumentWindow):
     contents_changed = Signal()
     data_hex_requested = Signal(object, str, str)
 
@@ -539,7 +539,8 @@ class PlistEditor(FixedDocumentWindow):
             action.triggered.connect(method)
             target.addAction(action)
         self.rebuild()
-        self.lock_size(QSize(940, 650))
+        self.setMinimumSize(QSize(640, 420))
+        self.resize(QSize(940, 650))
 
     @property
     def dirty(self):

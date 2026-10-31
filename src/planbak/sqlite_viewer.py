@@ -30,7 +30,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .dialogs import FixedDialog, FixedDocumentWindow
+from .dialogs import DocumentWindow, FixedDialog
 from .document_ui import DocumentStatus, DocumentToolBar, document_buttons
 from .pane_focus import BrowserPaneFocus
 from .sqlite_database import PAGE_SIZE, QueryResult, query, quote_identifier, schema
@@ -90,7 +90,7 @@ class ResultModel(QAbstractTableModel):
         self.sort_requested.emit(column, order)
 
 
-class SQLiteViewer(FixedDocumentWindow):
+class SQLiteViewer(DocumentWindow):
     reload_requested = Signal()
 
     def __init__(self, snapshot, name, parent=None):
@@ -194,7 +194,8 @@ class SQLiteViewer(FixedDocumentWindow):
         action.triggered.connect(self.execute_sql)
         self.addAction(action)
         self.panes = BrowserPaneFocus(self.tree, (self.table, self.structure, self.code), self)
-        self.lock_size(QSize(1080, 720))
+        self.setMinimumSize(720, 480)
+        self.resize(1080, 720)
         self.load_schema()
 
     def update_controls(self):
