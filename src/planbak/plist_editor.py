@@ -508,21 +508,14 @@ class PlistEditor(DocumentWindow):
         self.xml.tree_requested.connect(lambda: self.switch_mode(0))
         self.xml.save_requested.connect(self.save_document)
         layout.addWidget(self.pages, 1)
-        note = "保存会将修改暂挂到会话；主窗口“保存备份副本”才会生成备份副本。"
-        if (
-            isinstance(document.root.to_value(), dict)
-            and document.root.to_value().get("$archiver") == "NSKeyedArchiver"
-        ):
-            note += "\nNSKeyedArchiver：按原始结构编辑，UID 表示对象引用。"
-        self.note = note
-        self.status = DocumentStatus(note=note)
+        self.status = DocumentStatus(details=False)
         layout.addWidget(self.status)
         buttons = document_buttons(
             QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Close, self
         )
         self.save_button = buttons.button(QDialogButtonBox.StandardButton.Save)
         self.save_button.setText("保存")
-        self.save_button.setToolTip("保存到会话（Ctrl+S）；生成备份副本请使用主窗口")
+        self.save_button.setToolTip("保存（Ctrl+S）")
         buttons.button(QDialogButtonBox.StandardButton.Close).setText("关闭")
         self.save_button.clicked.connect(self.save_document)
         buttons.rejected.connect(self.reject)
@@ -950,18 +943,19 @@ class PlistEditor(DocumentWindow):
         if self._busy and not self._skip_prompt:
             return
         if self.dirty and not self._skip_prompt:
-            answer = FixedMessageBox.question(
+            box = FixedMessageBox(
+                FixedMessageBox.Icon.Question,
+                "未保存的更改",
+                "放弃未保存的更改？",
+                FixedMessageBox.StandardButton.Ok | FixedMessageBox.StandardButton.Cancel,
                 self,
-                "未保存的 plist 修改",
-                "是否保存修改并暂挂到当前会话？",
-                FixedMessageBox.StandardButton.Save
-                | FixedMessageBox.StandardButton.Discard
-                | FixedMessageBox.StandardButton.Cancel,
-                FixedMessageBox.StandardButton.Cancel,
             )
-            if answer == FixedMessageBox.StandardButton.Cancel:
-                return
-            if answer == FixedMessageBox.StandardButton.Save and not self.save_document():
+            box.button(FixedMessageBox.StandardButton.Ok).setText("确定")
+            box.button(FixedMessageBox.StandardButton.Cancel).setText("取消")
+            box.setDefaultButton(FixedMessageBox.StandardButton.Cancel)
+            answer = box.exec()
+            box.deleteLater()
+            if answer != FixedMessageBox.StandardButton.Ok:
                 return
         self.xml.hide_search()
         super().reject()

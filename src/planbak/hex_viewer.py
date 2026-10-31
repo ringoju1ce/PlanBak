@@ -174,7 +174,7 @@ class HexViewer(DocumentWindow):
         self.position_label = QLabel()
         self.position_label.setTextFormat(Qt.TextFormat.PlainText)
         layout.addWidget(self.position_label)
-        self.status = DocumentStatus(note="只读快照；选择字节后右键复制，Ctrl+A 选中当前页。")
+        self.status = DocumentStatus(details=False)
         layout.addWidget(self.status)
         buttons = document_buttons(QDialogButtonBox.StandardButton.Close, self)
         buttons.button(QDialogButtonBox.StandardButton.Close).setText("关闭")
@@ -381,7 +381,7 @@ class HexViewer(DocumentWindow):
             if not available
             else "源文件已更改，当前显示旧快照；可重新加载。"
             if stale
-            else "只读快照。"
+            else ""
         )
         self.update_controls()
 

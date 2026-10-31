@@ -2024,7 +2024,7 @@ class MainWindow(QMainWindow):
             and QMessageBox.question(
                 self,
                 "放弃所有更改",
-                "恢复到最近一次保存后的会话状态？",
+                "所做的改动不会被应用",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No,
             )
@@ -2364,8 +2364,8 @@ class MainWindow(QMainWindow):
                 accept = (
                     QMessageBox.question(
                         record.viewer,
-                        "文件已更改",
-                        "源文件的内容已更改，是否重新加载更新版本？",
+                        "源文件已更改",
+                        "重新加载更新版本？",
                         QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                         QMessageBox.StandardButton.No,
                     )
@@ -2457,7 +2457,7 @@ class MainWindow(QMainWindow):
                 return
             viewer = HexViewer(path, label, self)
             viewer.reload_button.defaultAction().setVisible(False)
-            viewer.status.setText("plist Data 的只读快照；重新从 plist 打开可查看更新后的内容。")
+            viewer.status.clear()
             record = OpenedHex(token, viewer, path, fingerprint, fingerprint, (), detached=True)
             self.hex_viewers[token] = record
             retained = True
@@ -2526,7 +2526,7 @@ class MainWindow(QMainWindow):
                     QMessageBox.question(
                         record.viewer,
                         "数据库已更改",
-                        "源数据库的内容已更改，是否重新加载更新版本？",
+                        "重新加载更新版本？",
                         QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                         QMessageBox.StandardButton.No,
                     )
@@ -2848,8 +2848,8 @@ class MainWindow(QMainWindow):
             if stamp == (None,):
                 choice = QMessageBox.question(
                     self,
-                    "临时文件已删除",
-                    "外部应用删除或移动了临时文件。停止跟踪此副本？备份中的原文件不会因此删除。",
+                    "临时文件已被删除",
+                    "停止跟踪此副本？不会删除备份中的文件。",
                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 )
                 if choice == QMessageBox.StandardButton.Yes:

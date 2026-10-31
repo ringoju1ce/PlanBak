@@ -428,7 +428,7 @@ class ImageViewer(QMainWindow):
         self._generation += 1
         self._pending = (self._generation, self.current_token, force)
         name = self.items[self.index][1]
-        self.setWindowTitle(f"{name} — 图片查看器（只读）")
+        self.setWindowTitle(f"{name} — 图片查看器")
         self.update_navigation()
         self.canvas.clear("正在加载…")
         self.status.setText(f"正在加载：{name} · {self.index + 1}/{len(self.items)}")
@@ -471,7 +471,7 @@ class ImageViewer(QMainWindow):
                 else:
                     result = task.result
                     name = result.name or self.items[self.index][1]
-                    self.setWindowTitle(f"{name} — 图片查看器（只读）")
+                    self.setWindowTitle(f"{name} — 图片查看器")
                     self._info = (
                         f"{result.format} · {result.width} × {result.height} · "
                         f"{self.index + 1}/{len(self.items)}"

@@ -183,7 +183,7 @@ class SQLiteViewer(DocumentWindow):
         splitter.addWidget(self.tabs)
         splitter.setStretchFactor(1, 1)
         layout.addWidget(splitter, 1)
-        self.status = DocumentStatus(note="只读；查询不会暂挂更改。")
+        self.status = DocumentStatus(details=False)
         layout.addWidget(self.status)
         buttons = document_buttons(QDialogButtonBox.StandardButton.Close, self)
         buttons.button(QDialogButtonBox.StandardButton.Close).setText("关闭")
@@ -254,9 +254,7 @@ class SQLiteViewer(DocumentWindow):
                     item.setData(0, Qt.ItemDataRole.UserRole, name)
                     item.setToolTip(0, "<qt><pre>" + escape(name) + "</pre></qt>")
                     self.tree.addTopLevelItem(item)
-            self.status.setText(
-                self.snapshot.warning or "请选择表或视图；也可以执行只读 SQL 查询。"
-            )
+            self.status.clear()
             self.model.set_result(QueryResult([], [], False))
             self.page_label.setText("每页最多 200 行")
 
@@ -339,8 +337,6 @@ class SQLiteViewer(DocumentWindow):
                     filter(
                         None,
                         [
-                            "只读查询完成",
-                            self.snapshot.warning,
                             "源文件已更改，当前显示旧快照；可重新加载。" if self.stale else "",
                             "源文件已不可用，当前显示旧快照。" if not self.available else "",
                         ],

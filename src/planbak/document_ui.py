@@ -72,7 +72,7 @@ def document_buttons(standards, parent=None):
 class DocumentStatus(QWidget):
     """One bounded line; the complete plain-text message remains inspectable."""
 
-    def __init__(self, text="", parent=None, *, note=""):
+    def __init__(self, text="", parent=None, *, note="", details=True):
         super().__init__(parent)
         self._text, self._note = str(text), note
         self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
@@ -89,6 +89,7 @@ class DocumentStatus(QWidget):
         self.details_button.setToolTip("查看并复制完整状态与说明")
         self.details_button.clicked.connect(self.show_details)
         layout.addWidget(self.details_button)
+        self.details_button.setVisible(details)
         self._refresh()
 
     def text(self):
