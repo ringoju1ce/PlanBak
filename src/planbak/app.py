@@ -94,7 +94,7 @@ from .sidebar import DirectoryTree
 from .sqlite_database import DatabaseSnapshot, companions, prepare_snapshot
 from .sqlite_viewer import SQLiteViewer
 
-INTERNAL_MIME = "application/x-backupeditor-entries"
+INTERNAL_MIME = "application/x-planbak-entries"
 
 
 def human_size(size):
@@ -485,7 +485,7 @@ class MainWindow(QMainWindow):
         self._transitioning = False
         self._outgoing_transfers = 0
         self._close_after_transfer = False
-        self.settings = QSettings("BackupEditor", "BackupEditor")
+        self.settings = QSettings("PlanBak", "PlanBak")
         self.session = None
         self.domain = None
         self.path = ""
@@ -542,7 +542,7 @@ class MainWindow(QMainWindow):
         self._readonly_closing = False
         self.force_close = False
         self._exit_requested = False
-        self.setWindowTitle("BackupEditor")
+        self.setWindowTitle("PlanBak")
         self.resize(1160, 760)
         self.model = BrowserModel(self)
         self.table = BrowserTable()
@@ -1156,7 +1156,7 @@ class MainWindow(QMainWindow):
             device = self.session.info.get("Device Name", self.session.root.name)
             dirty = self.session.dirty
             category = "可编辑副本" if self.session.editable else "原始备份"
-            self.setWindowTitle(f"{'* ' if dirty else ''}{device} · {category} — BackupEditor")
+            self.setWindowTitle(f"{'* ' if dirty else ''}{device} · {category} — PlanBak")
             self.backup_status.setText(
                 f"{device} · {category} · {'加密' if self.session.encrypted else '未加密'} · "
                 f"{len(rows) - (0 if location.is_root else 1)} 个项目 · "
@@ -1169,7 +1169,7 @@ class MainWindow(QMainWindow):
             else:
                 self.changes_dock.hide()
         else:
-            self.setWindowTitle("BackupEditor")
+            self.setWindowTitle("PlanBak")
             self.changes_dock.hide()
             self.backup_status.setText("从“文件 → 打开备份”打开 iOS 备份")
             self.backup_status.setToolTip("")
@@ -1392,7 +1392,7 @@ class MainWindow(QMainWindow):
         if not silent and not status:
             dialog = FixedProgressDialog(title, "取消", 0, 0, self)
             self.progress_dialog = dialog
-            dialog.setWindowTitle("BackupEditor")
+            dialog.setWindowTitle("PlanBak")
             dialog.setWindowModality(Qt.WindowModality.WindowModal)
             dialog.canceled.connect(job.cancelled.set)
 
@@ -3329,7 +3329,7 @@ def main():
     parser.add_argument("backup", nargs="?", type=Path, help="备份文件夹（可选）")
     args = parser.parse_args()
     app = QApplication(sys.argv[:1])
-    app.setApplicationName("BackupEditor")
+    app.setApplicationName("PlanBak")
     app.setApplicationVersion(__version__)
     configure_system_appearance(app)
     window = MainWindow()

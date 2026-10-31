@@ -3,7 +3,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "backupeditor"
+name = "planbak"
 version = "0.1.0"
 description = "Offline desktop browser and editor for iOS Manifest.db backups"
 requires-python = ">=3.12"
@@ -19,7 +19,7 @@ dependencies = [
 dev = ["pytest>=8", "pytest-qt>=4", "ruff>=0.9", "iphone_backup_decrypt>=0.11.2"]
 
 [project.scripts]
-backupeditor = "backupeditor.app:main"
+planbak = "planbak.app:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

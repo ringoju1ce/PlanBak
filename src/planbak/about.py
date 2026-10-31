@@ -10,12 +10,12 @@ from .dialogs import FixedDialog
 class AboutDialog(FixedDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("关于 BackupEditor")
+        self.setWindowTitle("关于 PlanBak")
         layout = QVBoxLayout(self)
         layout.setContentsMargins(28, 24, 28, 20)
         layout.setSpacing(14)
 
-        title = QLabel("BackupEditor", self)
+        title = QLabel("PlanBak", self)
         font = title.font()
         font.setPointSizeF(font.pointSizeF() * 1.8)
         font.setBold(True)

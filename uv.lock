@@ -3,40 +3,6 @@ revision = 5
 requires-python = ">=3.12"
 
 [[package]]
-name = "backupeditor"
-version = "0.1.0"
-source = { editable = "." }
-dependencies = [
-    { name = "cryptography" },
-    { name = "pillow" },
-    { name = "pillow-heif" },
-    { name = "pyside6" },
-    { name = "pyvips", extra = ["binary"] },
-]
-
-[package.optional-dependencies]
-dev = [
-    { name = "iphone-backup-decrypt" },
-    { name = "pytest" },
-    { name = "pytest-qt" },
-    { name = "ruff" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "cryptography", specifier = ">=43" },
-    { name = "iphone-backup-decrypt", marker = "extra == 'dev'", specifier = ">=0.11.2" },
-    { name = "pillow", specifier = ">=11,<13" },
-    { name = "pillow-heif", specifier = ">=1.1,<2" },
-    { name = "pyside6", specifier = ">=6.8,<7" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
-    { name = "pytest-qt", marker = "extra == 'dev'", specifier = ">=4" },
-    { name = "pyvips", extras = ["binary"], specifier = ">=3.1,<4" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.9" },
-]
-provides-extras = ["dev"]
-
-[[package]]
 name = "cffi"
 version = "2.1.1"
 source = { registry = "https://pypi.org/simple" }
@@ -352,6 +318,40 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/4d/7c/d8afa98c37fdb9aa52caf636cca62ec248fec4ae0457021679340dddb5bc/pillow_heif-1.8.1-cp315-cp315t-win_amd64.whl", hash = "sha256:52bfce37ac7092641b44167ad703a48cf8170a5c5859d9ff1e9718e41aba7b7d", size = 6783180, upload-time = "2026-10-11T13:18:05.253Z" },
     { url = "https://files.pythonhosted.org/packages/be/92/134b3b96fc0f3d1d14e8f034a1ddf7726c433566bff1e0f4d085fc89c895/pillow_heif-1.8.1-cp315-cp315t-win_arm64.whl", hash = "sha256:ed19023e2b77b7cf433d669873a32720a09f337645c04d480229fcf81960e305", size = 4085207, upload-time = "2026-10-11T13:18:06.813Z" },
 ]
+
+[[package]]
+name = "planbak"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "cryptography" },
+    { name = "pillow" },
+    { name = "pillow-heif" },
+    { name = "pyside6" },
+    { name = "pyvips", extra = ["binary"] },
+]
+
+[package.optional-dependencies]
+dev = [
+    { name = "iphone-backup-decrypt" },
+    { name = "pytest" },
+    { name = "pytest-qt" },
+    { name = "ruff" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "cryptography", specifier = ">=43" },
+    { name = "iphone-backup-decrypt", marker = "extra == 'dev'", specifier = ">=0.11.2" },
+    { name = "pillow", specifier = ">=11,<13" },
+    { name = "pillow-heif", specifier = ">=1.1,<2" },
+    { name = "pyside6", specifier = ">=6.8,<7" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
+    { name = "pytest-qt", marker = "extra == 'dev'", specifier = ">=4" },
+    { name = "pyvips", extras = ["binary"], specifier = ">=3.1,<4" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.9" },
+]
+provides-extras = ["dev"]
 
 [[package]]
 name = "pluggy"

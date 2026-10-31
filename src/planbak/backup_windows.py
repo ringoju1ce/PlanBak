@@ -90,9 +90,7 @@ class BackupWindows:
                 QStandardPaths.StandardLocation.RuntimeLocation
             )
             home_key = hashlib.sha256(str(Path.home()).encode()).hexdigest()[:16]
-            lock_directory = Path(runtime or tempfile.gettempdir()) / (
-                "backupeditor-locks-" + home_key
-            )
+            lock_directory = Path(runtime or tempfile.gettempdir()) / ("planbak-locks-" + home_key)
         self.lock_directory = Path(lock_directory)
         self.lock_directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         if self.lock_directory.is_symlink() or (

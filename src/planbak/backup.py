@@ -72,17 +72,17 @@ def process_alive(pid):
 def stale_workspaces():
     """Only return private, marked sessions owned by this user with no live process."""
     result = []
-    for path in Path(tempfile.gettempdir()).glob("backupeditor-*"):
+    for path in Path(tempfile.gettempdir()).glob("planbak-*"):
         try:
             if path.is_symlink() or not path.is_dir():
                 continue
             if hasattr(os, "getuid") and path.stat().st_uid != os.getuid():
                 continue
-            marker = path / ".backupeditor-session.json"
+            marker = path / ".planbak-session.json"
             if marker.is_symlink() or marker.stat().st_size > 2048:
                 continue
             data = json.loads(marker.read_text())
-            if not isinstance(data, dict) or data.get("application") != "BackupEditor":
+            if not isinstance(data, dict) or data.get("application") != "PlanBak":
                 continue
             pid = int(data["pid"])
             if pid < 1:
@@ -162,11 +162,11 @@ class BackupSession(SessionOverlay):
     ):
         self.root = Path(root).expanduser().resolve()
         self._protected_roots = {self.root}
-        self.workspace = Path(tempfile.mkdtemp(prefix="backupeditor-"))
-        (self.workspace / ".backupeditor-session.json").write_text(
+        self.workspace = Path(tempfile.mkdtemp(prefix="planbak-"))
+        (self.workspace / ".planbak-session.json").write_text(
             json.dumps(
                 {
-                    "application": "BackupEditor",
+                    "application": "PlanBak",
                     "pid": os.getpid(),
                     "created": time.time(),
                 }
@@ -527,7 +527,7 @@ class BackupSession(SessionOverlay):
                         if dest.exists() and not dest.is_file():
                             raise BackupError(f"不能用文件替换文件夹：{dest.name}")
                         dest.parent.mkdir(parents=True, exist_ok=True)
-                        temporary = dest.parent / (".backupeditor-extract-" + uuid.uuid4().hex)
+                        temporary = dest.parent / (".planbak-extract-" + uuid.uuid4().hex)
                         try:
                             self.extract_file(entry.token, temporary, cancel=cancel)
                             os.replace(temporary, dest)
@@ -598,7 +598,7 @@ class BackupSession(SessionOverlay):
             extra = self.manifest_path.stat().st_size * 2
             if shutil.disk_usage(destination.parent).free < required + extra:
                 raise BackupError("目标磁盘空间不足以创建独立备份副本")
-            work = Path(tempfile.mkdtemp(prefix=".backupeditor-save-", dir=destination.parent))
+            work = Path(tempfile.mkdtemp(prefix=".planbak-save-", dir=destination.parent))
             out_db_path = self.workspace / (uuid.uuid4().hex + ".db")
             saved_db = None
             try:
@@ -608,7 +608,7 @@ class BackupSession(SessionOverlay):
                     else [
                         p
                         for p in self.root.rglob("*")
-                        if (p.is_file() or p.is_symlink()) and p.name != ".backupeditor.json"
+                        if (p.is_file() or p.is_symlink()) and p.name != ".planbak.json"
                     ]
                 )
                 for n, source in enumerate(files, 1):

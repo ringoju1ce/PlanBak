@@ -11,7 +11,7 @@ from pathlib import Path
 from . import __version__
 from .codec import BackupError, check_cancel
 
-MARKER = ".backupeditor.json"
+MARKER = ".planbak.json"
 
 
 def read_marker(root):
@@ -22,7 +22,7 @@ def read_marker(root):
         value = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(value, dict):
             return None
-        if value.get("application") != "BackupEditor" or type(value.get("version")) is not int:
+        if value.get("application") != "PlanBak" or type(value.get("version")) is not int:
             return None
         if value["version"] != 1 or str(uuid.UUID(value["copy_id"])) != value["copy_id"]:
             return None
@@ -38,7 +38,7 @@ def read_marker(root):
 
 def write_marker(root):
     value = {
-        "application": "BackupEditor",
+        "application": "PlanBak",
         "version": 1,
         "copy_id": str(uuid.uuid4()),
         "created_utc": datetime.now(timezone.utc).isoformat(),
@@ -63,11 +63,11 @@ def check_persistent_location(destination, workspace=None):
     if workspace is not None and destination.is_relative_to(Path(workspace).resolve()):
         raise BackupError("备份输出不能位于会话临时文件夹内")
     for parent in (destination, *destination.parents):
-        marker = parent / ".backupeditor-session.json"
+        marker = parent / ".planbak-session.json"
         try:
             if marker.is_file() and marker.stat().st_size <= 2048:
                 value = json.loads(marker.read_text())
-                if isinstance(value, dict) and value.get("application") == "BackupEditor":
+                if isinstance(value, dict) and value.get("application") == "PlanBak":
                     raise BackupError("备份输出不能位于会话临时文件夹内")
         except (OSError, ValueError):
             continue
@@ -107,7 +107,7 @@ def copy_backup(source, destination, stamp, progress, cancel=None):
             total += path.stat().st_size
     if shutil.disk_usage(destination.parent).free < total:
         raise BackupError("目标磁盘空间不足以创建备份副本")
-    work = Path(tempfile.mkdtemp(prefix=".backupeditor-save-", dir=destination.parent))
+    work = Path(tempfile.mkdtemp(prefix=".planbak-save-", dir=destination.parent))
     done = 0
 
     def advanced(amount):
