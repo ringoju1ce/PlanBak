@@ -1265,6 +1265,18 @@ class MainWindow(QMainWindow):
             self._status_jobs[job] = (text, done, total)
             self.update_work_status()
 
+    def track_status_job(self, job, initial_text):
+        """Show any background job through the shared status-bar progress UI."""
+        self._status_jobs[job] = (initial_text, 0, 0)
+        job.progress.connect(
+            lambda text, done, total: self.work_progress_changed(job, text, done, total)
+        )
+        self.update_work_status()
+
+    def untrack_status_job(self, job):
+        self._status_jobs.pop(job, None)
+        self.update_work_status()
+
     def create_backup_copy(self, *_):
         if (
             not self.session
@@ -1298,15 +1310,11 @@ class MainWindow(QMainWindow):
             self,
         )
         self.copy_task = job
-        self._status_jobs[job] = ("正在创建备份副本…", 0, 0)
-        job.progress.connect(
-            lambda text, done, total: self.work_progress_changed(job, text, done, total)
-        )
+        self.track_status_job(job, "正在创建备份副本…")
 
         def finished():
             self.copy_task = None
-            self._status_jobs.pop(job, None)
-            self.update_work_status()
+            self.untrack_status_job(job)
             if not job.error and self.session is session:
                 self._copy_pending = (session, job.result)
             if self._copy_exit_requested:
@@ -1325,7 +1333,6 @@ class MainWindow(QMainWindow):
 
         job.finished.connect(finished)
         self.update_actions()
-        self.update_work_status()
         job.start()
 
     def attach_created_copy(self):
@@ -1374,7 +1381,7 @@ class MainWindow(QMainWindow):
         callback=None,
         *,
         silent=False,
-        status=False,
+        dialog_progress=False,
         on_error=None,
         on_done=None,
     ):
@@ -1383,13 +1390,10 @@ class MainWindow(QMainWindow):
         job = Task(function, self)
         self.task = job
         dialog = None
-        if status:
-            self._status_jobs[job] = (title + "…", 0, 0)
-            job.progress.connect(
-                lambda text, done, total: self.work_progress_changed(job, text, done, total)
-            )
-            self.update_work_status()
-        if not silent and not status:
+        tracked_status = not silent and not dialog_progress
+        if tracked_status:
+            self.track_status_job(job, title + "…")
+        if not silent and dialog_progress:
             dialog = FixedProgressDialog(title, "取消", 0, 0, self)
             self.progress_dialog = dialog
             dialog.setWindowTitle("PlanBak")
@@ -1412,8 +1416,8 @@ class MainWindow(QMainWindow):
 
         def finished():
             self.task = None
-            self._status_jobs.pop(job, None)
-            self.update_work_status()
+            if tracked_status:
+                self.untrack_status_job(job)
             if dialog:
                 self.progress_dialog = None
                 dialog.finish()
@@ -1720,7 +1724,6 @@ class MainWindow(QMainWindow):
                 Path(path), password, progress=progress, cancel=cancel
             ),
             loaded,
-            status=True,
             on_done=finished,
         )
 
@@ -1783,7 +1786,7 @@ class MainWindow(QMainWindow):
             message(self, "无法完成清理", str(exc), QMessageBox.Icon.Warning)
 
         self.run_task(
-            "关闭备份并清理缓存", cleanup, cleaned, status=True, on_error=failed, on_done=release
+            "关闭备份并清理缓存", cleanup, cleaned, on_error=failed, on_done=release
         )
 
     def clear_opened_files(self, *, clear_images=True):
@@ -2219,7 +2222,7 @@ class MainWindow(QMainWindow):
             if resources["snapshot"]:
                 shutil.rmtree(resources["snapshot"].directory, ignore_errors=True)
 
-        self.run_task("读取并打开文件", prepare, opened, status=True, on_done=cleanup)
+        self.run_task("读取并打开文件", prepare, opened, on_done=cleanup)
 
     def database_revision(self, token):
         return tuple(
@@ -2979,6 +2982,7 @@ class MainWindow(QMainWindow):
                 Path(target) if target else None, progress=progress, cancel=cancel, _token=token
             ),
             saved,
+            dialog_progress=True,
             on_done=finished,
         )
 
@@ -3321,7 +3325,7 @@ class MainWindow(QMainWindow):
                     progress("清理旧会话缓存…", number, len(paths))
                     shutil.rmtree(path)
 
-        self.run_task("清理旧会话缓存", cleanup, status=True, on_done=after)
+        self.run_task("清理旧会话缓存", cleanup, on_done=after)
 
 
 def main():
