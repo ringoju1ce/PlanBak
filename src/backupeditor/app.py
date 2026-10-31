@@ -2128,8 +2128,25 @@ class MainWindow(QMainWindow):
 
         def prepare(progress, cancel):
             nonlocal revision
+
+            def extract():
+                entry = session.get(token)
+                cached = Path(entry.staged) if entry.staged else session.cache_path(token)
+                source = cached if cached.is_file() else session.payload_path(entry.original_id)
+                total = source.stat().st_size
+                done = 0
+                progress("正在提取文件…", 0, total)
+
+                def advanced(amount):
+                    nonlocal done
+                    done += amount
+                    progress("正在提取文件…", done, total)
+
+                session.extract_file(token, target, cancel=cancel, progress=advanced)
+                progress("正在准备打开文件…", 0, 0)
+
             if external:
-                session.extract_file(token, target, cancel=cancel)
+                extract()
                 return "external", preparers["external"](target, cancel)
             with cache.session_lock(cancel):
                 revision = source_revision(session, token)
@@ -2139,7 +2156,7 @@ class MainWindow(QMainWindow):
                 entry = session.get(token)
                 source = Path(entry.staged) if entry.staged else session.cache_path(token)
                 if not source.is_file():
-                    session.extract_file(token, target, cancel=cancel)
+                    extract()
                     source = target
                 kind = identify_file(source)
                 check_cancel(cancel)
@@ -2202,7 +2219,7 @@ class MainWindow(QMainWindow):
             if resources["snapshot"]:
                 shutil.rmtree(resources["snapshot"].directory, ignore_errors=True)
 
-        self.run_task("读取并打开文件", prepare, opened, silent=True, on_done=cleanup)
+        self.run_task("读取并打开文件", prepare, opened, status=True, on_done=cleanup)
 
     def database_revision(self, token):
         return tuple(

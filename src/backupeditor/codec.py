@@ -63,6 +63,7 @@ def crypto_file(
     *,
     encrypt: bool,
     cancel: Callable[[], bool] | None = None,
+    progress=None,
 ):
     """Stream AES-CBC/zero IV with PKCS#7 padding to a new target file."""
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -77,6 +78,8 @@ def crypto_file(
                     dst.write(transform.update(pad.update(block)))
                 else:
                     dst.write(pad.update(transform.update(block)))
+                if progress:
+                    progress(len(block))
             if encrypt:
                 dst.write(transform.update(pad.finalize()) + transform.finalize())
             else:

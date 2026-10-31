@@ -437,11 +437,11 @@ class BackupSession(SessionOverlay):
                 return Metadata(row[0])
         return None
 
-    def extract_file(self, token, target: Path, *, cancel=None):
+    def extract_file(self, token, target: Path, *, cancel=None, progress=None):
         with self.lock:
-            return self._extract_entry(self.get(token), target, cancel=cancel)
+            return self._extract_entry(self.get(token), target, cancel=cancel, progress=progress)
 
-    def _extract_entry(self, entry, target: Path, *, cancel=None, use_cache=True):
+    def _extract_entry(self, entry, target: Path, *, cancel=None, use_cache=True, progress=None):
         if entry.kind != "file":
             raise BackupError("只能导出普通文件；链接和特殊条目仅供浏览")
         if target.is_symlink():
@@ -449,7 +449,7 @@ class BackupSession(SessionOverlay):
         cached = Path(entry.staged) if entry.staged else self.cache_path(entry.token)
         if use_cache and cached.is_file():
             if cached.resolve() != target.resolve():
-                copy_file(cached, target, cancel)
+                copy_file(cached, target, cancel, progress=progress)
         else:
             src = self.payload_path(entry.original_id)
             if self.encrypted:
@@ -457,13 +457,13 @@ class BackupSession(SessionOverlay):
                 wrapped = metadata.get("EncryptionKey")
                 if not wrapped:
                     if entry.size == 0 and src.stat().st_size == 0:
-                        copy_file(src, target, cancel)
+                        copy_file(src, target, cancel, progress=progress)
                         return target
                     raise BackupError("文件缺少加密密钥")
                 _, key = self.keybag.unwrap(wrapped)
-                crypto_file(src, target, key, encrypt=False, cancel=cancel)
+                crypto_file(src, target, key, encrypt=False, cancel=cancel, progress=progress)
             else:
-                copy_file(src, target, cancel)
+                copy_file(src, target, cancel, progress=progress)
         if entry.mtime:
             os.utime(target, (entry.mtime, entry.mtime))
         return target
