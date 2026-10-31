@@ -196,7 +196,7 @@ class BackupSession(SessionOverlay):
             self.encrypted = bool(self.manifest.get("IsEncrypted"))
             self.source_stamp = self._stamp()
             self.manifest_path = self.workspace / "Manifest.db"
-            self._progress("解锁并读取备份清单…", 0, 0)
+            self._progress("正在读取备份…", 0, 0)
             if self.encrypted:
                 if not password:
                     raise BackupError("需要备份加密密码")
@@ -293,14 +293,14 @@ class BackupSession(SessionOverlay):
     def _index(self, cancel):
         self.create_entry_table(self.db)
         total = self.db.execute("SELECT COUNT(*) FROM Files").fetchone()[0]
-        self._progress("建立备份索引…", 0, total)
+        self._progress("正在建立备份索引…", 0, total)
         parents = set()
         batch = []
         cursor = self.db.execute("SELECT fileID,domain,relativePath,flags,file FROM Files")
         for count, row in enumerate(cursor, 1):
             if count % 500 == 0:
                 check_cancel(cancel)
-                self._progress("建立备份索引…", count, total)
+                self._progress("正在建立备份索引…", count, total)
             fid, domain, path, flags, blob = row
             safe_path(path)
             if not domain or "/" in domain or "\\" in domain or "\x00" in domain:
@@ -344,7 +344,7 @@ class BackupSession(SessionOverlay):
         self.db.commit()
         self.create_baseline(self.db)
         self.db.commit()
-        self._progress("清单已就绪", total, total)
+        self._progress("正在建立备份索引…", total, total)
 
     def domains(self):
         with self.lock:
@@ -517,7 +517,7 @@ class BackupSession(SessionOverlay):
             for output, destinations in plans:
                 for i, (entry, dest) in enumerate(destinations, 1):
                     check_cancel(cancel)
-                    progress(f"导出：{entry.name}", i, len(destinations))
+                    progress(f"正在导出：{entry.name}", i, len(destinations))
                     validate_destination(dest)
                     if entry.kind == "directory":
                         if dest.exists() and not dest.is_dir():

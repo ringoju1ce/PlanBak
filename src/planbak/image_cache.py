@@ -191,7 +191,7 @@ class ImageCache:
             self.directory.mkdir(parents=True, exist_ok=True)
             path = self.directory / uuid.uuid4().hex
             try:
-                label = f"正在提取图片：{entry.name}"
+                label = f"正在加载文件：{entry.name}"
                 copied = 0
 
                 def advanced(amount):

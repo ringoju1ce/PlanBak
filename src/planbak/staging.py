@@ -225,7 +225,7 @@ class Mutation:
                 pending[token] = PendingChange(token, base, current, tuple(labels), location)
             else:
                 pending.pop(token, None)
-            session._change_progress("更新更改列表…", number, total)
+            session._change_progress("正在更新更改列表…", number, total)
         check_cancel(self.cancel)
         return pending
 
@@ -547,7 +547,7 @@ class SessionOverlay:
                         )
                     )
                     if progress:
-                        progress(f"暂挂添加：{src.name}", 0, 0)
+                        progress(f"正在添加：{src.name}", 0, 0)
                     if is_dir:
                         todo.extend(
                             (child, virtual + "/" + child.name)

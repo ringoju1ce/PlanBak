@@ -1393,7 +1393,7 @@ class MainWindow(QMainWindow):
         dialog = None
         tracked_status = not silent and not dialog_progress
         if tracked_status:
-            self.track_status_job(job, title + "…")
+            self.track_status_job(job, "正在" + title + "…")
         if not silent and dialog_progress:
             dialog = FixedProgressDialog(title, "取消", 0, 0, self)
             self.progress_dialog = dialog
@@ -1832,7 +1832,7 @@ class MainWindow(QMainWindow):
         policy = self.collision_policy() if conflict else "error"
         if policy:
             self.run_task(
-                "添加文件",
+                "添加项目",
                 lambda progress, cancel: self.session.import_paths(
                     paths, domain, parent, collision=policy, progress=progress, cancel=cancel
                 ),
@@ -2137,15 +2137,15 @@ class MainWindow(QMainWindow):
                 source = cached if cached.is_file() else session.payload_path(entry.original_id)
                 total = source.stat().st_size
                 done = 0
-                progress("正在提取文件…", 0, total)
+                progress("正在打开文件…", 0, total)
 
                 def advanced(amount):
                     nonlocal done
                     done += amount
-                    progress("正在提取文件…", done, total)
+                    progress("正在打开文件…", done, total)
 
                 session.extract_file(token, target, cancel=cancel, progress=advanced)
-                progress("正在准备打开文件…", 0, 0)
+                progress("正在打开文件…", 0, 0)
 
             if external:
                 extract()
@@ -2221,7 +2221,7 @@ class MainWindow(QMainWindow):
             if resources["snapshot"]:
                 shutil.rmtree(resources["snapshot"].directory, ignore_errors=True)
 
-        self.run_task("读取并打开文件", prepare, opened, on_done=cleanup)
+        self.run_task("打开文件", prepare, opened, on_done=cleanup)
 
     def database_revision(self, token):
         return tuple(
@@ -2330,7 +2330,7 @@ class MainWindow(QMainWindow):
             if token not in self.hex_viewers:
                 shutil.rmtree(path.parent, ignore_errors=True)
 
-        self.run_task("读取十六进制快照", prepare, opened, on_done=cleanup)
+        self.run_task("打开文件", prepare, opened, on_done=cleanup)
 
     def reload_hex(self, record, *, automatic=False):
         if record.detached:
@@ -2388,7 +2388,7 @@ class MainWindow(QMainWindow):
                 shutil.rmtree(path.parent, ignore_errors=True)
 
         self.run_task(
-            "读取十六进制快照", prepare, loaded, silent=automatic, on_error=failed, on_done=cleanup
+            "重新加载文件", prepare, loaded, silent=automatic, on_error=failed, on_done=cleanup
         )
 
     def check_hex_viewers(self):
@@ -2498,7 +2498,7 @@ class MainWindow(QMainWindow):
             if not retained:
                 shutil.rmtree(path.parent, ignore_errors=True)
 
-        self.run_task("读取 Data 十六进制快照", prepare, opened, on_done=cleanup)
+        self.run_task("打开项目", prepare, opened, on_done=cleanup)
 
     def reload_database(self, record, *, automatic=False):
         if self.task or not self.session or record.viewer.task or record.viewer._closing:
@@ -2551,7 +2551,7 @@ class MainWindow(QMainWindow):
                 shutil.rmtree(directory, ignore_errors=True)
 
         self.run_task(
-            "读取数据库快照",
+            "重新加载文件",
             lambda progress, cancel: prepare_snapshot(
                 session, record.token, directory, cancel=cancel
             ),
@@ -2679,7 +2679,7 @@ class MainWindow(QMainWindow):
                 shutil.rmtree(directory, ignore_errors=True)
 
         if prepared is None:
-            self.run_task("读取 plist", prepare, opened, on_done=cleanup)
+            self.run_task("打开文件", prepare, opened, on_done=cleanup)
         else:
             directory.mkdir(parents=True, exist_ok=True)
             try:
@@ -2892,7 +2892,7 @@ class MainWindow(QMainWindow):
                 self.refresh()
 
             self.run_task(
-                "暂挂外部编辑",
+                "保存外部编辑",
                 lambda progress, cancel: self.session.stage_edit(record.token, record.path, cancel),
                 staged,
             )
@@ -3199,18 +3199,26 @@ class MainWindow(QMainWindow):
                 return False
 
             def copy(progress, cancel):
+                def copy_progress(_text, done, total):
+                    progress("正在复制项目到当前备份…", done, total)
+
                 with tempfile.TemporaryDirectory(
                     prefix=".transfer-", dir=session.workspace
                 ) as directory:
                     paths = borrowed.session.export(
-                        tokens, Path(directory), progress=progress, cancel=cancel
+                        tokens, Path(directory), progress=copy_progress, cancel=cancel
                     )
                     session.import_paths(
-                        paths, domain, parent, collision=policy, progress=progress, cancel=cancel
+                        paths,
+                        domain,
+                        parent,
+                        collision=policy,
+                        progress=copy_progress,
+                        cancel=cancel,
                     )
 
             job = self.run_task(
-                "复制到当前备份", copy, lambda _: self.refresh(), on_done=borrowed.release
+                "复制项目到当前备份", copy, lambda _: self.refresh(), on_done=borrowed.release
             )
             borrowed.started = job is not None
             return borrowed.started
@@ -3243,7 +3251,7 @@ class MainWindow(QMainWindow):
             result.extend(paths)
 
         self.run_task(
-            "准备拖出文件",
+            "导出项目",
             lambda progress, cancel: self.session.export(
                 tokens, target, progress=progress, cancel=cancel
             ),
@@ -3321,7 +3329,7 @@ class MainWindow(QMainWindow):
             for number, path in enumerate(paths, 1):
                 check_cancel(cancel)
                 if path in valid:
-                    progress("清理旧会话缓存…", number, len(paths))
+                    progress("正在清理旧会话缓存…", number, len(paths))
                     shutil.rmtree(path)
 
         self.run_task("清理旧会话缓存", cleanup, on_done=after)
