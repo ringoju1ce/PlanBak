@@ -225,6 +225,30 @@ class FixedMessageBox(FixedDialogMixin, QMessageBox):
             self.setStandardButtons(QMessageBox.StandardButton.Ok)
             self.setEscapeButton(QMessageBox.StandardButton.Ok)
         super().setVisible(visible)
+        if visible:
+            label = self.findChild(QLabel, "qt_msgbox_label")
+            if label and label.text():
+                label.setWordWrap(True)
+                overhead = self.width() - label.width()
+                screen = self.screen()
+                max_width = screen.availableGeometry().width() - 40 if screen else 640
+                text_width = max(
+                    (
+                        label.fontMetrics().horizontalAdvance(line)
+                        for line in label.text().splitlines()
+                    ),
+                    default=0,
+                )
+                target_width = max(
+                    1, min(560, max_width - overhead, max(label.width(), text_width))
+                )
+                target_height = label.heightForWidth(target_width)
+                self.lock_size(
+                    QSize(
+                        self.width() + max(0, target_width - label.width()),
+                        self.height() + max(0, target_height - label.height()),
+                    )
+                )
 
     def showEvent(self, event):
         for label in self.findChildren(QLabel):
