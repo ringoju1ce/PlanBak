@@ -802,8 +802,6 @@ class MainWindow(QMainWindow):
         self.icon_slider.setAccessibleName("图标大小")
         self.icon_slider.valueChanged.connect(self.set_icon_size)
         toolbar.addWidget(self.icon_slider)
-        toolbar.addSeparator()
-        toolbar.addAction(self.extract_action)
         self.set_icon_size(self.icon_slider.value())
         navigation = QToolBar("导航", self)
         navigation.setMovable(False)
