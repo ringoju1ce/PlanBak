@@ -1265,12 +1265,13 @@ class MainWindow(QMainWindow):
             self._status_jobs[job] = (text, done, total)
             self.update_work_status()
 
-    def track_status_job(self, job, initial_text):
+    def track_status_job(self, job, initial_text, *, connect_progress=True):
         """Show any background job through the shared status-bar progress UI."""
         self._status_jobs[job] = (initial_text, 0, 0)
-        job.progress.connect(
-            lambda text, done, total: self.work_progress_changed(job, text, done, total)
-        )
+        if connect_progress:
+            job.progress.connect(
+                lambda text, done, total: self.work_progress_changed(job, text, done, total)
+            )
         self.update_work_status()
 
     def untrack_status_job(self, job):
@@ -1785,9 +1786,7 @@ class MainWindow(QMainWindow):
             self._cancel_open()
             message(self, "无法完成清理", str(exc), QMessageBox.Icon.Warning)
 
-        self.run_task(
-            "关闭备份并清理缓存", cleanup, cleaned, on_error=failed, on_done=release
-        )
+        self.run_task("关闭备份并清理缓存", cleanup, cleaned, on_error=failed, on_done=release)
 
     def clear_opened_files(self, *, clear_images=True):
         if clear_images:

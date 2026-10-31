@@ -59,8 +59,8 @@ class ImageWindows:
             items = [(token, session.get(token).name)]
         cache = self.session_cache()
 
-        def load(current, cancel, *, force=False):
-            return cache.load(current, cancel, force=force)
+        def load(current, cancel, *, force=False, progress=None):
+            return cache.load(current, cancel, force=force, progress=progress)
 
         def accept(viewer, image, region=False):
             allocations = {image.cacheKey(): image.sizeInBytes()}
@@ -75,7 +75,16 @@ class ImageWindows:
                         allocations[current.cacheKey()] = current.sizeInBytes()
             return sum(allocations.values()) <= DISPLAY_BUDGET
 
-        viewer = ImageViewer(items, token, load, accept, owner)
+        viewer = ImageViewer(
+            items,
+            token,
+            load,
+            accept,
+            owner,
+            with_progress=True,
+            on_load_progress=self._image_load_progress,
+            on_load_finished=self._image_load_finished,
+        )
         self.viewers.append(viewer)
 
         def closed(_):
@@ -88,3 +97,11 @@ class ImageWindows:
         viewer.show()
         viewer.canvas.setFocus()
         return viewer
+
+    def _image_load_progress(self, task, text, done, total):
+        if task not in self.owner._status_jobs:
+            self.owner.track_status_job(task, text, connect_progress=False)
+        self.owner.work_progress_changed(task, text, done, total)
+
+    def _image_load_finished(self, task):
+        self.owner.untrack_status_job(task)

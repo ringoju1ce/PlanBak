@@ -280,14 +280,28 @@ class ImageInformationStatus(DocumentStatus):
 class ImageViewer(QMainWindow):
     finished = Signal(int)
     activated = Signal()
+    load_progress = Signal(object, str, object, object)
+    load_finished = Signal(object)
 
-    def __init__(self, items, token, loader, accept_image, parent=None):
+    def __init__(
+        self,
+        items,
+        token,
+        loader,
+        accept_image,
+        parent=None,
+        *,
+        with_progress=False,
+        on_load_progress=None,
+        on_load_finished=None,
+    ):
         super().__init__(None)
         if parent is not None:
             self.setScreen(parent.screen())
         self.items = tuple(items)
         self.index = next(i for i, item in enumerate(self.items) if item[0] == token)
         self.loader, self.accept_image = loader, accept_image
+        self._with_progress = with_progress
         self.task = None
         self.region_task = None
         self._pending_region = self._rendered_region = None
@@ -338,6 +352,10 @@ class ImageViewer(QMainWindow):
         self.canvas.scale_changed.connect(self.update_zoom)
         self._info = ""
         self._information = ""
+        if on_load_progress:
+            self.load_progress.connect(on_load_progress)
+        if on_load_finished:
+            self.load_finished.connect(on_load_finished)
         for sequence, callback in (
             ("Left", lambda: self.navigate(-1)),
             ("Right", lambda: self.navigate(1)),
@@ -424,11 +442,20 @@ class ImageViewer(QMainWindow):
             return
         generation, token, force = self._pending
         self._pending = None
-        task = ViewerTask(lambda cancel: self.loader(token, cancel, force=force), self)
+        if self._with_progress:
+            task = ViewerTask(
+                lambda cancel: self.loader(
+                    token, cancel, force=force, progress=self._reporting_progress
+                ),
+                self,
+            )
+        else:
+            task = ViewerTask(lambda cancel: self.loader(token, cancel, force=force), self)
         self.task = task
 
         def finished():
             self.task = None
+            self.load_finished.emit(task)
             if self._closing:
                 if not self.region_task:
                     self.close()
@@ -456,6 +483,10 @@ class ImageViewer(QMainWindow):
 
         task.finished.connect(finished)
         task.start()
+
+    def _reporting_progress(self, text, done, total):
+        if self.task is not None:
+            self.load_progress.emit(self.task, text, done, total)
 
     def schedule_region(self):
         request = self.canvas.viewport_request()

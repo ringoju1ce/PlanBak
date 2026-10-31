@@ -135,7 +135,7 @@ class ImageCache:
                 )
         return None
 
-    def load(self, token, cancel=None, *, force=False):
+    def load(self, token, cancel=None, *, force=False, progress=None):
         check_cancel(cancel)
         entry, revision = self.source(token, cancel)
         if not force and (hit := self._hit(token, revision, entry)):
@@ -148,7 +148,7 @@ class ImageCache:
                 check_cancel(cancel)
             try:
                 check_cancel(cancel)
-                return self._load(token, revision, cancel, force)
+                return self._load(token, revision, cancel, force, progress)
             finally:
                 self._work.release()
 
@@ -174,7 +174,8 @@ class ImageCache:
                 else:
                     self._loads[token] = (gate, users - 1)
 
-    def _load(self, token, revision, cancel, force):
+    def _load(self, token, revision, cancel, force, progress=None):
+        entry, _ = self.source(token, cancel)
         with self._lock:
             cached = self.files.get(token)
             if cached and (force or cached.revision != revision or not cached.path.is_file()):
@@ -190,9 +191,22 @@ class ImageCache:
             self.directory.mkdir(parents=True, exist_ok=True)
             path = self.directory / uuid.uuid4().hex
             try:
+                label = f"正在提取图片：{entry.name}"
+                copied = 0
+
+                def advanced(amount):
+                    nonlocal copied
+                    copied += amount
+                    if progress:
+                        progress(label, copied, max(1, entry.size))
+
+                if progress:
+                    progress(label, 0, max(1, entry.size))
                 with self.session_lock(cancel):
                     check_cancel(cancel)
-                    self.session.extract_file(token, path, cancel=cancel)
+                    self.session.extract_file(
+                        token, path, cancel=cancel, progress=advanced if progress else None
+                    )
                 check_cancel(cancel)
                 cached = CachedFile(revision, path, path.stat().st_size, users=1)
                 if cached.size > MAX_FILE_BYTES:
