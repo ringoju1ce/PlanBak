@@ -35,6 +35,7 @@ class DocumentToolBar(QToolBar):
         shortcut = (
             QKeySequence(hint).toString(QKeySequence.SequenceFormat.NativeText) if hint else ""
         )
+        action.setProperty("planbak_shortcut_hint", shortcut)
         action.setToolTip(f"{text}（{shortcut}）" if shortcut else text)
         action.triggered.connect(callback)
         self.addAction(action)
@@ -47,6 +48,14 @@ class DocumentToolBar(QToolBar):
         spacer = QWidget(self)
         spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self.addWidget(spacer)
+
+
+def translate_command(button, text):
+    action = button.defaultAction()
+    shortcut = action.property("planbak_shortcut_hint")
+    action.setText(text)
+    action.setToolTip(f"{text} ({shortcut})" if shortcut else text)
+    button.setAccessibleName(text)
 
 
 class DocumentButtonBox(QDialogButtonBox):

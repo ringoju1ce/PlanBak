@@ -32,7 +32,7 @@ from PySide6.QtWidgets import (
 
 from .appearance import marked_background, sync_background, xml_colors
 from .dialogs import FixedDialog
-from .document_ui import DocumentStatus, DocumentToolBar
+from .document_ui import DocumentStatus, DocumentToolBar, translate_command
 
 
 class PlistXmlError(ValueError):
@@ -460,8 +460,7 @@ class XmlPane(QWidget):
             (self.search_button, "Find"),
             (self.tree_button, "Tree Editor"),
         ):
-            button.defaultAction().setText(tr(source))
-            button.setAccessibleName(tr(source))
+            translate_command(button, tr(source))
 
     def ensure_search(self):
         if self.search_dialog is None:

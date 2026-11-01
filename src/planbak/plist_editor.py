@@ -31,7 +31,7 @@ from PySide6.QtWidgets import (
 )
 
 from .dialogs import DocumentWindow, FixedDialog, FixedFileDialog, FixedMessageBox
-from .document_ui import DocumentStatus, DocumentToolBar, document_buttons
+from .document_ui import DocumentStatus, DocumentToolBar, document_buttons, translate_command
 from .i18n import LanguageContext
 from .plist_xml import PlistXmlError, XmlPane, parse_xml
 
@@ -642,8 +642,7 @@ class PlistEditor(DocumentWindow):
             (self.delete_button, "Delete"),
             (self.xml_button, "XML Editor"),
         ):
-            button.defaultAction().setText(tr(source))
-            button.setAccessibleName(tr(source))
+            translate_command(button, tr(source))
         self.tree.setHeaderLabels([tr("Key / Index"), tr("Type"), tr("Value")])
         self.tree.setAccessibleName(tr("plist keys, types, and values"))
         self.save_button.setText(tr("Save"))

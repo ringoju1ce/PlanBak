@@ -517,5 +517,6 @@
   "A backup operation is in progress; try saving later": "备份操作进行中，请稍后再保存",
   "Finish or cancel the current edit dialog before saving the plist": "请先完成或取消当前编辑弹窗，再保存 plist",
   "Exported to {path}": "已导出到 {path}",
-  "The file source is no longer available.": "文件源已不可用。"
+  "The file source is no longer available.": "文件源已不可用。",
+  "Actual size: 100% (1:1 pixels)": "实际大小：100%（像素 1:1）"
 }

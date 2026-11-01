@@ -27,7 +27,7 @@ from PySide6.QtWidgets import (
 
 from .codec import BackupError
 from .dialogs import DocumentWindow
-from .document_ui import DocumentStatus, DocumentToolBar, document_buttons
+from .document_ui import DocumentStatus, DocumentToolBar, document_buttons, translate_command
 from .hex_data import PAGE_SIZE, parse_offset, parse_pattern, read_page, search_bytes
 from .i18n import LanguageContext
 from .viewer_tasks import ViewerTask
@@ -255,10 +255,7 @@ class HexViewer(DocumentWindow):
             (self.find_next_button, "Next"),
             (self.cancel_button, "Cancel Search"),
         ):
-            text = tr(source)
-            button.defaultAction().setText(text)
-            button.defaultAction().setToolTip(text)
-            button.setAccessibleName(text)
+            translate_command(button, tr(source))
         self.address.setPlaceholderText(tr("Offset: decimal or 0x…"))
         self.address.setAccessibleName(tr("Jump to offset"))
         self.address.setToolTip(

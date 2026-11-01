@@ -7,7 +7,7 @@ from PySide6.QtCore import QEvent, QPointF, QRectF, QSignalBlocker, QSize, Qt, Q
 from PySide6.QtGui import QAction, QImage, QPainter
 from PySide6.QtWidgets import QCheckBox, QMainWindow, QSlider, QWidget
 
-from .document_ui import DocumentStatus, DocumentToolBar
+from .document_ui import DocumentStatus, DocumentToolBar, translate_command
 from .i18n import ENGLISH, SIMPLIFIED_CHINESE, LanguageContext
 from .image_metadata import information_text
 from .viewer_tasks import ViewerTask
@@ -411,9 +411,8 @@ class ImageViewer(QMainWindow):
             (self.actual_button, "Actual Size"),
             (self.reload_button, "Reload"),
         ):
-            button.defaultAction().setText(tr(source))
-            button.defaultAction().setToolTip(tr(source))
-            button.setAccessibleName(tr(source))
+            translate_command(button, tr(source))
+        self.actual_button.defaultAction().setToolTip(tr("Actual size: 100% (1:1 pixels)"))
         self.loop_toggle.setText(tr("Loop"))
         self.loop_toggle.setToolTip(tr("Loop through images in this window until it closes"))
         self.zoom_slider.setAccessibleName(tr("Image zoom"))

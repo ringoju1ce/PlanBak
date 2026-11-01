@@ -31,7 +31,7 @@ from PySide6.QtWidgets import (
 )
 
 from .dialogs import DocumentWindow, FixedDialog
-from .document_ui import DocumentStatus, DocumentToolBar, document_buttons
+from .document_ui import DocumentStatus, DocumentToolBar, document_buttons, translate_command
 from .i18n import LanguageContext
 from .pane_focus import BrowserPaneFocus
 from .sqlite_database import PAGE_SIZE, QueryResult, query, quote_identifier, schema
@@ -252,7 +252,7 @@ class SQLiteViewer(DocumentWindow):
             (self.next_button, "Next Page"),
             (self.execute_button, "Run Query"),
         ):
-            button.defaultAction().setText(tr(label))
+            translate_command(button, tr(label))
         for i in range(self.tree.topLevelItemCount()):
             item = self.tree.topLevelItem(i)
             item.setText(
