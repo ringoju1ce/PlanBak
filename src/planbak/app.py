@@ -86,7 +86,7 @@ from .dialogs import FixedMessageBox as QMessageBox
 from .dialogs import FixedProgressDialog
 from .file_opening import identify_file, source_revision
 from .hex_viewer import HexViewer
-from .i18n import LanguageContext
+from .i18n import ENGLISH, SIMPLIFIED_CHINESE, LanguageContext
 from .icons import ApplicationIcons
 from .image_session import ImageWindows
 from .navigation import Location, ViewState, split_domain
@@ -670,6 +670,8 @@ class MainWindow(QMainWindow):
         self._create_actions()
         self._create_toolbar()
         self._create_changes()
+        self.language_context.changed.connect(self.retranslate_main_actions)
+        self.retranslate_main_actions()
         self.panes = BrowserPaneFocus(self.directory_tree, (self.table, self.grid), self)
         self.panes.changed.connect(self.update_actions)
         self.watcher = QFileSystemWatcher(self)
@@ -807,7 +809,7 @@ class MainWindow(QMainWindow):
             self.grid.addAction(action)
         for action in (self.rename_action, self.delete_action):
             self.directory_tree.addAction(action)
-        file_menu = self.menuBar().addMenu("文件")
+        file_menu = self.file_menu = self.menuBar().addMenu("文件")
         file_menu.addActions(
             [
                 self.open_backup_action,
@@ -822,8 +824,9 @@ class MainWindow(QMainWindow):
         )
         file_menu.addSeparator()
         file_menu.addAction(self.close_backup_action)
-        file_menu.addAction(self.action("退出", self.close, "Ctrl+Q"))
-        edit_menu = self.menuBar().addMenu("编辑")
+        self.quit_action = self.action("退出", self.close, "Ctrl+Q")
+        file_menu.addAction(self.quit_action)
+        edit_menu = self.edit_menu = self.menuBar().addMenu("编辑")
         edit_menu.addActions(
             [
                 select_all,
@@ -832,7 +835,7 @@ class MainWindow(QMainWindow):
                 self.discard_action,
             ]
         )
-        view_menu = self.menuBar().addMenu("视图")
+        view_menu = self.view_menu = self.menuBar().addMenu("视图")
         self.sidebar_action = QAction("文件夹树", self, checkable=True)
         self.sidebar_action.setShortcut(QKeySequence("F9"))
         self.sidebar_action.toggled.connect(self.toggle_sidebar)
@@ -840,8 +843,53 @@ class MainWindow(QMainWindow):
         self.directory_tree.setVisible(self.sidebar_action.isChecked())
         self.addAction(self.sidebar_action)
         view_menu.addAction(self.sidebar_action)
-        help_menu = self.menuBar().addMenu("帮助")
-        help_menu.addAction(self.action("关于", self.show_about))
+        language_menu = self.menuBar().addMenu("Language")
+        self.language_group = QActionGroup(self)
+        self.language_group.setExclusive(True)
+        self.language_actions = {}
+        for language, name in ((SIMPLIFIED_CHINESE, "简体中文"), (ENGLISH, "English")):
+            action = QAction(name, self, checkable=True)
+            action.setChecked(self.language_context.language == language)
+            action.triggered.connect(
+                lambda _checked, value=language: self.language_context.set_language(value)
+            )
+            self.language_group.addAction(action)
+            language_menu.addAction(action)
+            self.language_actions[language] = action
+        help_menu = self.help_menu = self.menuBar().addMenu("帮助")
+        self.about_action = self.action("关于", self.show_about)
+        help_menu.addAction(self.about_action)
+
+    def retranslate_main_actions(self):
+        tr = self.language_context.translate
+        self.file_menu.setTitle(tr("File"))
+        self.edit_menu.setTitle(tr("Edit"))
+        self.view_menu.setTitle(tr("View"))
+        self.help_menu.setTitle(tr("Help"))
+        self.open_backup_action.setText(tr("Open Backup…"))
+        self.open_new_window_action.setText(tr("Open Backup in New Window…"))
+        self.close_backup_action.setText(tr("Close Backup"))
+        self.create_copy_action.setText(tr("Create Backup Copy…"))
+        self.add_action.setText(tr("Add Files…"))
+        self.add_folder_action.setText(tr("Add Folder…"))
+        self.new_folder_action.setText(tr("New Folder…"))
+        self.open_action.setText(tr("Open"))
+        self.extract_action.setText(tr("Export Items…"))
+        self.rename_action.setText(tr("Rename…"))
+        self.delete_action.setText(tr("Delete"))
+        self.discard_action.setText(tr("Discard All Changes"))
+        self.up_action.setText(tr("Parent Folder"))
+        self.select_all_action.setText(tr("Select All"))
+        self.quit_action.setText(tr("Quit"))
+        self.sidebar_action.setText(tr("Folder Tree"))
+        self.about_action.setText(tr("About"))
+        self.list_action.setText(tr("List"))
+        self.grid_action.setText(tr("Grid"))
+        self.descending.setText(tr("Descending"))
+        self.directories_first.setText(tr("Folders First"))
+        self.language_actions[self.language_context.language].setChecked(True)
+        if hasattr(self, "panes"):
+            self.update_actions()
 
     def show_about(self):
         dialog = AboutDialog(self)
@@ -1107,9 +1155,15 @@ class MainWindow(QMainWindow):
         self.close_backup_action.setEnabled(session is not None and not busy and not copying)
         self.create_copy_action.setEnabled(not busy and not copying and session is not None)
         editable = bool(session and session.editable)
-        self.save_action.setText("应用更改" if editable else "应用更改…")
+        self.save_action.setText(
+            self.language_context.translate("Apply Changes" if editable else "Apply Changes…")
+        )
         self.save_action.setToolTip(
-            "应用更改到当前可编辑副本" if editable else "创建新的备份副本并应用更改"
+            self.language_context.translate(
+                "Apply changes to the editable copy"
+                if editable
+                else "Create a backup copy and apply changes"
+            )
         )
         self.location.setEnabled(not busy) if hasattr(self, "location") else None
         self.open_action.setEnabled(not busy and len(rows) == 1 and rows[0].kind == "file")
