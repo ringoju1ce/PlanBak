@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QEvent, QSize, Qt, Signal
+from PySide6.QtCore import QEvent, QIdentityProxyModel, QSize, Qt, Signal
 from PySide6.QtGui import QPainter, QPalette
 from PySide6.QtWidgets import (
     QDialog,
@@ -370,6 +370,28 @@ class FixedInputDialog(FixedDialogMixin, QInputDialog):
         return result
 
 
+class FileDialogModel(QIdentityProxyModel):
+    """Translate only the filesystem column labels, never file names or paths."""
+
+    def __init__(self, context, parent=None):
+        super().__init__(parent)
+        self.language_context = context
+        context.changed.connect(self.retranslate)
+
+    def retranslate(self):
+        self.headerDataChanged.emit(Qt.Orientation.Horizontal, 0, 3)
+
+    def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):
+        headers = ("Name", "Size", "Type", "Date Modified")
+        if (
+            orientation == Qt.Orientation.Horizontal
+            and role == Qt.ItemDataRole.DisplayRole
+            and 0 <= section < len(headers)
+        ):
+            return self.language_context.translate(headers[section])
+        return super().headerData(section, orientation, role)
+
+
 class FixedFileDialog(FixedDialogMixin, QFileDialog):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -377,6 +399,8 @@ class FixedFileDialog(FixedDialogMixin, QFileDialog):
         self.setOption(QFileDialog.Option.DontUseNativeDialog, True)
         self.lock_size(QSize(760, 480))
         if self.language_context:
+            self._localized_model = FileDialogModel(self.language_context, self)
+            self.setProxyModel(self._localized_model)
             self.language_context.changed.connect(self.retranslate_controls)
 
     def retranslate_controls(self):

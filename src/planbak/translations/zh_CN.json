@@ -531,5 +531,6 @@
   "Unsupported value type": "不支持的值类型",
   "The current format cannot save these values without loss; XML dates support whole seconds only": "当前格式无法无损保存这些值；XML 日期只支持整秒",
   "The original file format cannot save these values without loss": "源文件格式无法无损保存这些值",
-  "Unsupported plist type: {type}": "不支持的 plist 类型：{type}"
+  "Unsupported plist type: {type}": "不支持的 plist 类型：{type}",
+  "Date Modified": "修改时间"
 }
