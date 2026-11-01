@@ -363,5 +363,10 @@
   "BLOB ({count} bytes)": "BLOB ({count} 字节)",
   "\"\" (empty string)": "\"\" （空字符串）",
   "View Cell (Read-only)": "查看单元格（只读）",
-  "Complete cell content": "单元格完整内容"
+  "Complete cell content": "单元格完整内容",
+  "Back": "后退",
+  "Forward": "前进",
+  "Create New Folder": "新建文件夹",
+  "List View": "列表视图",
+  "Detail View": "详细信息视图"
 }

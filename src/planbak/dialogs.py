@@ -395,6 +395,18 @@ class FixedFileDialog(FixedDialogMixin, QFileDialog):
             else "Open"
         )
         self.setLabelText(QFileDialog.DialogLabel.Accept, tr(accept))
+        for name, source in (
+            ("backButton", "Back"),
+            ("forwardButton", "Forward"),
+            ("toParentButton", "Parent Folder"),
+            ("newFolderButton", "Create New Folder"),
+            ("listModeButton", "List View"),
+            ("detailModeButton", "Detail View"),
+        ):
+            button = self.findChild(QToolButton, name)
+            if button:
+                button.setToolTip(tr(source))
+                button.setAccessibleName(tr(source))
 
     def showEvent(self, event):
         self.retranslate_controls()
@@ -408,6 +420,17 @@ class FixedFileDialog(FixedDialogMixin, QFileDialog):
         accepted = dialog.exec() == QDialog.DialogCode.Accepted
         paths = dialog.selectedFiles() if accepted else []
         result = paths[0] if paths else ""
+        dialog.deleteLater()
+        return result
+
+    @classmethod
+    def getOpenFileName(cls, parent, caption="", directory="", filter=""):
+        dialog = cls(parent, caption, directory, filter)
+        dialog.setFileMode(QFileDialog.FileMode.ExistingFile)
+        dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptOpen)
+        accepted = dialog.exec() == QDialog.DialogCode.Accepted
+        paths = dialog.selectedFiles() if accepted else []
+        result = (paths[0] if paths else "", dialog.selectedNameFilter() if accepted else "")
         dialog.deleteLater()
         return result
 
