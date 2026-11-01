@@ -233,6 +233,14 @@ class SQLiteViewer(DocumentWindow):
     def retranslate(self):
         tr = self.language_context.translate
         self.update_title()
+        for toolbar, source in (
+            (self.toolbar, "SQLite actions"),
+            (self.pages, "Query result pages"),
+            (self.query_bar, "SQL query actions"),
+        ):
+            toolbar.setWindowTitle(tr(source))
+            toolbar.setAccessibleName(tr(source))
+        self.update_structure()
         self.tree.setHeaderLabels([tr("Tables and Views"), tr("Type")])
         self.tree.setAccessibleName(tr("Database tables and views"))
         self.table.setAccessibleName(tr("Read-only query results"))
@@ -360,15 +368,30 @@ class SQLiteViewer(DocumentWindow):
         self.object_name = item.data(0, Qt.ItemDataRole.UserRole)
         self.mode, self.offset, self.sort_column = "table", 0, None
         self.sync_sort_indicator()
-        self.structure.setPlainText(
-            "\n\n".join(
-                sql or f"-- {name}：由 SQLite 自动创建"
-                for name, kind, sql, table in self.objects
-                if table == self.object_name
-            )
-        )
+        self.update_structure()
         self.tabs.setCurrentIndex(0)
         self.run_query()
+
+    def update_structure(self):
+        if not self.object_name:
+            return
+        tr = self.language_context.translate
+        content = "\n\n".join(
+            sql or tr("-- {name}: created automatically by SQLite", name=name)
+            for name, kind, sql, table in self.objects
+            if table == self.object_name
+        )
+        if self.structure.toPlainText() != content:
+            cursor = self.structure.textCursor()
+            position, anchor = cursor.position(), cursor.anchor()
+            vertical = self.structure.verticalScrollBar().value()
+            self.structure.setPlainText(content)
+            cursor = self.structure.textCursor()
+            limit = self.structure.document().characterCount() - 1
+            cursor.setPosition(min(anchor, limit))
+            cursor.setPosition(min(position, limit), cursor.MoveMode.KeepAnchor)
+            self.structure.setTextCursor(cursor)
+            self.structure.verticalScrollBar().setValue(vertical)
 
     def sync_sort_indicator(self, *, applied=False):
         header = self.table.horizontalHeader()

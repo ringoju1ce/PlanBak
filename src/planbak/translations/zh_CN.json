@@ -518,5 +518,9 @@
   "Finish or cancel the current edit dialog before saving the plist": "请先完成或取消当前编辑弹窗，再保存 plist",
   "Exported to {path}": "已导出到 {path}",
   "The file source is no longer available.": "文件源已不可用。",
-  "Actual size: 100% (1:1 pixels)": "实际大小：100%（像素 1:1）"
+  "Actual size: 100% (1:1 pixels)": "实际大小：100%（像素 1:1）",
+  "SQLite actions": "SQLite 操作",
+  "Query result pages": "查询结果分页",
+  "SQL query actions": "SQL 查询操作",
+  "-- {name}: created automatically by SQLite": "-- {name}：由 SQLite 自动创建"
 }
