@@ -985,8 +985,12 @@ class PlistEditor(DocumentWindow):
             affected = sum(count(node) for node in nodes)
             answer = FixedMessageBox.question(
                 self,
-                "删除条目",
-                f"删除选中的 {len(items)} 个项目？共影响 {affected} 个节点（包含子项目）。",
+                self.language_context.translate("Delete Items"),
+                self.language_context.translate(
+                    "Delete {count} selected items? This affects {affected} nodes including children.",
+                    count=len(items),
+                    affected=affected,
+                ),
                 FixedMessageBox.StandardButton.Yes | FixedMessageBox.StandardButton.No,
                 FixedMessageBox.StandardButton.No,
             )
@@ -1005,7 +1009,9 @@ class PlistEditor(DocumentWindow):
         node = self.selected_node()
         if not node or node.kind != "Data":
             return
-        path, _ = FixedFileDialog.getOpenFileName(self, "导入 Data")
+        path, _ = FixedFileDialog.getOpenFileName(
+            self, self.language_context.translate("Import Data")
+        )
         if path:
             try:
                 node.value = Path(path).read_bytes()
@@ -1017,7 +1023,9 @@ class PlistEditor(DocumentWindow):
         node = self.selected_node()
         if not node or node.kind != "Data":
             return
-        path, _ = FixedFileDialog.getSaveFileName(self, "导出 Data")
+        path, _ = FixedFileDialog.getSaveFileName(
+            self, self.language_context.translate("Export Data")
+        )
         if path:
             try:
                 Path(path).write_bytes(node.value)
@@ -1035,13 +1043,13 @@ class PlistEditor(DocumentWindow):
     def show_error(self, exc):
         box = FixedMessageBox(
             FixedMessageBox.Icon.Warning,
-            "无法完成 plist 操作",
+            self.language_context.translate("Unable to Complete plist Operation"),
             "",
             FixedMessageBox.StandardButton.Ok,
             self,
         )
         box.setTextFormat(Qt.TextFormat.PlainText)
-        box.setText(str(exc))
+        box.setText(self.language_context.error(exc))
         box.exec()
         box.deleteLater()
 
@@ -1087,13 +1095,17 @@ class PlistEditor(DocumentWindow):
         if self.dirty and not self._skip_prompt:
             box = FixedMessageBox(
                 FixedMessageBox.Icon.Question,
-                "未保存的更改",
-                "放弃未保存的更改？",
+                self.language_context.translate("Unsaved Changes"),
+                self.language_context.translate("Discard unsaved changes?"),
                 FixedMessageBox.StandardButton.Ok | FixedMessageBox.StandardButton.Cancel,
                 self,
             )
-            box.button(FixedMessageBox.StandardButton.Ok).setText("确定")
-            box.button(FixedMessageBox.StandardButton.Cancel).setText("取消")
+            box.button(FixedMessageBox.StandardButton.Ok).setText(
+                self.language_context.translate("OK")
+            )
+            box.button(FixedMessageBox.StandardButton.Cancel).setText(
+                self.language_context.translate("Cancel")
+            )
             box.setDefaultButton(FixedMessageBox.StandardButton.Cancel)
             answer = box.exec()
             box.deleteLater()

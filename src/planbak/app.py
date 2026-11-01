@@ -2316,13 +2316,19 @@ class MainWindow(QMainWindow):
             if dirty:
                 box = QMessageBox(
                     QMessageBox.Icon.Question,
-                    "放弃此更改",
-                    "相关编辑副本中有未保存的修改。丢弃这些编辑并放弃所选更改？",
+                    self.language_context.translate("Discard This Change"),
+                    self.language_context.translate(
+                        "Related editor copies have unsaved changes. Discard those edits and this change?"
+                    ),
                     QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel,
                     self,
                 )
-                box.button(QMessageBox.StandardButton.Discard).setText("丢弃编辑并还原")
-                box.button(QMessageBox.StandardButton.Cancel).setText("取消")
+                box.button(QMessageBox.StandardButton.Discard).setText(
+                    self.language_context.translate("Discard Edits and Revert")
+                )
+                box.button(QMessageBox.StandardButton.Cancel).setText(
+                    self.language_context.translate("Cancel")
+                )
                 box.setDefaultButton(QMessageBox.StandardButton.Cancel)
                 if box.exec() != QMessageBox.StandardButton.Discard:
                     return
@@ -2698,8 +2704,8 @@ class MainWindow(QMainWindow):
                 accept = (
                     QMessageBox.question(
                         record.viewer,
-                        "源文件已更改",
-                        "重新加载更新版本？",
+                        self.language_context.translate("Source File Changed"),
+                        self.language_context.translate("Reload the updated version?"),
                         QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                         QMessageBox.StandardButton.No,
                     )
@@ -2859,8 +2865,8 @@ class MainWindow(QMainWindow):
                 accept = (
                     QMessageBox.question(
                         record.viewer,
-                        "数据库已更改",
-                        "重新加载更新版本？",
+                        self.language_context.translate("Database Changed"),
+                        self.language_context.translate("Reload the updated version?"),
                         QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                         QMessageBox.StandardButton.No,
                     )
@@ -2957,15 +2963,22 @@ class MainWindow(QMainWindow):
                 if current_digest != record.source_digest and current != data:
                     box = QMessageBox(
                         QMessageBox.Icon.Question,
-                        "plist 文件已更改",
-                        "备份中的文件已有更新。请选择重新加载，或确认用当前编辑覆盖更新版本。",
+                        self.language_context.translate("plist File Changed"),
+                        self.language_context.translate(
+                            "The backup file has changed. Reload it or confirm that your edits should overwrite the updated version."
+                        ),
                         parent=editor,
                     )
-                    reload_button = box.addButton("重新加载", QMessageBox.ButtonRole.AcceptRole)
-                    overwrite = box.addButton(
-                        "覆盖更新版本", QMessageBox.ButtonRole.DestructiveRole
+                    reload_button = box.addButton(
+                        self.language_context.translate("Reload"), QMessageBox.ButtonRole.AcceptRole
                     )
-                    cancel_button = box.addButton("取消", QMessageBox.ButtonRole.RejectRole)
+                    overwrite = box.addButton(
+                        self.language_context.translate("Overwrite Updated Version"),
+                        QMessageBox.ButtonRole.DestructiveRole,
+                    )
+                    cancel_button = box.addButton(
+                        self.language_context.translate("Cancel"), QMessageBox.ButtonRole.RejectRole
+                    )
                     box.setDefaultButton(cancel_button)
                     box.exec()
                     record.observed_digest = current_digest
@@ -3115,12 +3128,16 @@ class MainWindow(QMainWindow):
                     rec.editor.set_source_state()
                     return
                 rec.editor.set_source_state(conflict=True)
-                text = "这份 plist 的内容已更改，是否重新加载更新版本？"
+                text = self.language_context.translate(
+                    "This plist has changed. Reload the updated version?"
+                )
                 if rec.editor.dirty:
-                    text += "\n重新加载将丢弃编辑器中未保存的修改。"
+                    text += self.language_context.translate(
+                        "\nReloading will discard unsaved changes in the editor."
+                    )
                 answer = QMessageBox.question(
                     rec.editor,
-                    "plist 文件已更改",
+                    self.language_context.translate("plist File Changed"),
                     text,
                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                     QMessageBox.StandardButton.No,
@@ -3182,8 +3199,10 @@ class MainWindow(QMainWindow):
             if stamp == (None,):
                 choice = QMessageBox.question(
                     self,
-                    "临时文件已被删除",
-                    "停止跟踪此副本？不会删除备份中的文件。",
+                    self.language_context.translate("Temporary File Deleted"),
+                    self.language_context.translate(
+                        "Stop tracking this copy? The file in the backup will not be deleted."
+                    ),
                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 )
                 if choice == QMessageBox.StandardButton.Yes:
@@ -3212,12 +3231,29 @@ class MainWindow(QMainWindow):
             return
 
     def review_external(self, record, fingerprint, stamp):
-        box = QMessageBox(QMessageBox.Icon.Question, "检测到外部编辑", "", parent=self)
+        box = QMessageBox(
+            QMessageBox.Icon.Question,
+            self.language_context.translate("External Edit Detected"),
+            "",
+            parent=self,
+        )
         box.setTextFormat(Qt.TextFormat.PlainText)
-        box.setText(f"{record.path.name} 已修改。是否将新内容暂挂到备份会话？")
-        stage = box.addButton("暂挂更改", QMessageBox.ButtonRole.AcceptRole)
-        ignore = box.addButton("忽略本次修改", QMessageBox.ButtonRole.DestructiveRole)
-        box.addButton("稍后处理", QMessageBox.ButtonRole.RejectRole)
+        box.setText(
+            self.language_context.translate(
+                "{name} has changed. Stage the new contents in this backup session?",
+                name=record.path.name,
+            )
+        )
+        stage = box.addButton(
+            self.language_context.translate("Stage Changes"), QMessageBox.ButtonRole.AcceptRole
+        )
+        ignore = box.addButton(
+            self.language_context.translate("Ignore This Change"),
+            QMessageBox.ButtonRole.DestructiveRole,
+        )
+        box.addButton(
+            self.language_context.translate("Decide Later"), QMessageBox.ButtonRole.RejectRole
+        )
         box.exec()
         if box.clickedButton() == stage:
 
