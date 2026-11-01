@@ -532,5 +532,13 @@
   "The current format cannot save these values without loss; XML dates support whole seconds only": "当前格式无法无损保存这些值；XML 日期只支持整秒",
   "The original file format cannot save these values without loss": "源文件格式无法无损保存这些值",
   "Unsupported plist type: {type}": "不支持的 plist 类型：{type}",
-  "Date Modified": "修改时间"
+  "Date Modified": "修改时间",
+  "The backup output cannot be inside a session temporary folder": "备份输出不能位于会话临时文件夹内",
+  "The destination already exists; choose a new folder name": "保存目标已存在，请选择一个新的文件夹名称",
+  "The save location cannot overlap the original backup": "保存位置不能与原备份重叠",
+  "There is not enough disk space to create the backup copy": "目标磁盘空间不足以创建备份副本",
+  "The original backup changed during copying; the copy was not published": "复制期间原备份发生变化，副本未发布",
+  "The destination was created by another process; the existing folder was not overwritten": "保存目标已被创建，未覆盖现有文件夹",
+  "Enter a valid folder path": "请输入有效的文件夹路径",
+  "The folder does not exist": "文件夹不存在"
 }

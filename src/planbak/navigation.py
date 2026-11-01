@@ -69,7 +69,7 @@ class Location:
             if domain in domains:
                 safe_path(path)
                 return cls(domain, path)
-        raise BackupError("请输入有效的文件夹路径")
+        raise BackupError("请输入有效的文件夹路径", english="Enter a valid folder path")
 
 
 RowIdentity = tuple[str, ...]

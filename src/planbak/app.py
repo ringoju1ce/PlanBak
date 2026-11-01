@@ -1483,7 +1483,7 @@ class MainWindow(QMainWindow):
             if location.domain:
                 entry = self.session.at(location.domain, location.path)
                 if not entry or entry.kind != "directory":
-                    raise BackupError("文件夹不存在")
+                    raise BackupError("文件夹不存在", english="The folder does not exist")
         except BackupError as exc:
             message(self, "文件夹不存在", exc, QMessageBox.Icon.Warning)
             return
