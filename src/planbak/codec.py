@@ -28,9 +28,10 @@ MAX_METADATA_DEPTH = 128
 class BackupError(Exception):
     """An actionable backup/operation error suitable for display."""
 
-    def __init__(self, message, *, english=None):
+    def __init__(self, message, *, english=None, values=None):
         super().__init__(message)
         self.translation_source = english
+        self.translation_values = values or {}
 
 
 class Cancelled(BackupError):
@@ -180,7 +181,11 @@ class Keybag:
             raise BackupError("文件加密密钥无效", english="Invalid file encryption key")
         clas = struct.unpack_from("<I", wrapped)[0]
         if clas not in self.keys:
-            raise BackupError(f"缺少保护类别 {clas} 的密钥")
+            raise BackupError(
+                f"缺少保护类别 {clas} 的密钥",
+                english="Missing key for protection class {class_id}",
+                values={"class_id": clas},
+            )
         try:
             return clas, aes_key_unwrap(self.keys[clas], wrapped[4:])
         except InvalidUnwrap as exc:
@@ -188,7 +193,11 @@ class Keybag:
 
     def new_key(self, clas: int) -> tuple[bytes, bytes]:
         if clas not in self.keys:
-            raise BackupError(f"不能为保护类别 {clas} 创建文件")
+            raise BackupError(
+                f"不能为保护类别 {clas} 创建文件",
+                english="Cannot create a file for protection class {class_id}",
+                values={"class_id": clas},
+            )
         key = os.urandom(32)
         return key, struct.pack("<I", clas) + aes_key_wrap(self.keys[clas], key)
 

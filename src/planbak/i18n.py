@@ -60,4 +60,8 @@ class LanguageContext(QObject):
 
     def error(self, error: Exception) -> str:
         source = getattr(error, "translation_source", None)
-        return self.translate(source) if source else str(error)
+        return (
+            self.translate(source, **getattr(error, "translation_values", {}))
+            if source
+            else str(error)
+        )

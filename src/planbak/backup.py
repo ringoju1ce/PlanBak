@@ -119,19 +119,29 @@ def detect_backups(root: Path) -> list[Path]:
 
 def load_plist(path: Path):
     if path.is_symlink() or path.stat().st_size > 64 * 1024 * 1024:
-        raise BackupError(f"元数据文件无效或过大：{path.name}")
+        raise BackupError(
+            f"元数据文件无效或过大：{path.name}",
+            english="Metadata file is invalid or too large: {name}",
+            values={"name": path.name},
+        )
     try:
         value = plistlib.loads(path.read_bytes())
         if not isinstance(value, dict):
             raise ValueError("expected dictionary")
         return value
     except (ValueError, plistlib.InvalidFileException) as exc:
-        raise BackupError(f"无法读取 {path.name}") from exc
+        raise BackupError(
+            f"无法读取 {path.name}", english="Unable to read {name}", values={"name": path.name}
+        ) from exc
 
 
 def copy_file(src: Path, dst: Path, cancel=None, *, progress=None):
     if src.is_symlink() or not src.is_file():
-        raise BackupError(f"拒绝读取链接或特殊文件：{src.name}")
+        raise BackupError(
+            f"拒绝读取链接或特殊文件：{src.name}",
+            english="Refusing to read link or special file: {name}",
+            values={"name": src.name},
+        )
     dst.parent.mkdir(parents=True, exist_ok=True)
     original = src.stat()
     try:
@@ -147,7 +157,11 @@ def copy_file(src: Path, dst: Path, cancel=None, *, progress=None):
             current.st_mtime_ns,
             current.st_ino,
         ):
-            raise BackupError(f"复制期间源文件发生变化，请稍后重试：{src.name}")
+            raise BackupError(
+                f"复制期间源文件发生变化，请稍后重试：{src.name}",
+                english="Source file changed while copying; try again: {name}",
+                values={"name": src.name},
+            )
         shutil.copystat(src, dst)
     except Exception:
         dst.unlink(missing_ok=True)
@@ -481,7 +495,11 @@ class BackupSession(SessionOverlay):
         if not path.is_file():
             path = self.root / fid
         if path.is_symlink() or not path.is_file():
-            raise BackupError(f"缺少或无效的备份数据文件：{fid}")
+            raise BackupError(
+                f"缺少或无效的备份数据文件：{fid}",
+                english="Backup data file is missing or invalid: {file_id}",
+                values={"file_id": fid},
+            )
         if path.resolve().parent not in (self.root, self.root / fid[:2]):
             raise BackupError(
                 "备份数据路径包含文件夹链接", english="The backup data path contains a folder link"
@@ -572,7 +590,11 @@ class BackupSession(SessionOverlay):
                             output = target / f"{root.name} ({n})"
                             n += 1
                     elif collision != "replace":
-                        raise BackupError(f"目标已存在：{output.name}（请选择保留两者或跳过）")
+                        raise BackupError(
+                            f"目标已存在：{output.name}（请选择保留两者或跳过）",
+                            english="Destination already exists: {name} (choose Keep Both or Skip)",
+                            values={"name": output.name},
+                        )
                 entries = sorted(self.subtree(root), key=lambda e: len(e.path))
                 destinations = []
                 # 先检查整个批次，再创建文件夹或替换文件，防止前半批已写入。
@@ -582,7 +604,11 @@ class BackupSession(SessionOverlay):
                     dest = output / suffix if suffix else output
                     validate_destination(dest)
                     if entry.kind not in ("file", "directory"):
-                        raise BackupError(f"不能导出链接或特殊条目：{entry.name}")
+                        raise BackupError(
+                            f"不能导出链接或特殊条目：{entry.name}",
+                            english="Cannot export link or special item: {name}",
+                            values={"name": entry.name},
+                        )
                     destinations.append((entry, dest))
                 reserved.add(output)
                 plans.append((output, destinations))
@@ -594,11 +620,19 @@ class BackupSession(SessionOverlay):
                     validate_destination(dest)
                     if entry.kind == "directory":
                         if dest.exists() and not dest.is_dir():
-                            raise BackupError(f"目标不是文件夹：{dest.name}")
+                            raise BackupError(
+                                f"目标不是文件夹：{dest.name}",
+                                english="Destination is not a folder: {name}",
+                                values={"name": dest.name},
+                            )
                         dest.mkdir(parents=True, exist_ok=True)
                     elif entry.kind == "file":
                         if dest.exists() and not dest.is_file():
-                            raise BackupError(f"不能用文件替换文件夹：{dest.name}")
+                            raise BackupError(
+                                f"不能用文件替换文件夹：{dest.name}",
+                                english="Cannot replace a folder with a file: {name}",
+                                values={"name": dest.name},
+                            )
                         dest.parent.mkdir(parents=True, exist_ok=True)
                         temporary = dest.parent / (".planbak-extract-" + uuid.uuid4().hex)
                         try:
@@ -607,7 +641,11 @@ class BackupSession(SessionOverlay):
                         finally:
                             temporary.unlink(missing_ok=True)
                     else:
-                        raise BackupError(f"不能导出链接或特殊条目：{entry.name}")
+                        raise BackupError(
+                            f"不能导出链接或特殊条目：{entry.name}",
+                            english="Cannot export link or special item: {name}",
+                            values={"name": entry.name},
+                        )
                 exported.append(output)
             return exported
 
@@ -814,7 +852,11 @@ class BackupSession(SessionOverlay):
                         if direct:
                             locations += [self.root / fid[:2] / fid, self.root / fid]
                         if not any(p.is_file() and not p.is_symlink() for p in locations):
-                            raise BackupError(f"输出备份缺少文件数据：{fid}")
+                            raise BackupError(
+                                f"输出备份缺少文件数据：{fid}",
+                                english="Output backup is missing file data: {file_id}",
+                                values={"file_id": fid},
+                            )
                 progress("重新封装并验证清单…", 0, 0)
                 if self.encrypted:
                     crypto_file(

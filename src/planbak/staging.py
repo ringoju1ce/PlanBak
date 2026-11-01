@@ -473,7 +473,11 @@ class SessionOverlay:
                         for entry in self.subtree(existing):
                             work.remove(entry.token)
                     else:
-                        raise BackupError(f"目标已存在：{basename}")
+                        raise BackupError(
+                            f"目标已存在：{basename}",
+                            english="Destination already exists: {name}",
+                            values={"name": basename},
+                        )
                 for entry in self.subtree(root):
                     moved = relocated(entry, target + entry.path[len(root.path) :])
                     # 明确移动/重命名的合成文件夹必须能独立保存为空文件夹。
@@ -514,7 +518,11 @@ class SessionOverlay:
             for source in map(Path, paths):
                 check_cancel(cancel)
                 if source.is_symlink() or not (source.is_file() or source.is_dir()):
-                    raise BackupError(f"不支持导入此文件类型：{source.name}")
+                    raise BackupError(
+                        f"不支持导入此文件类型：{source.name}",
+                        english="Importing this file type is not supported: {name}",
+                        values={"name": source.name},
+                    )
                 safe_path(source.name, root=False)
                 dest = f"{parent}/{source.name}".lstrip("/")
                 existing = self.at(domain, dest)
@@ -531,13 +539,21 @@ class SessionOverlay:
                         for entry in self.subtree(existing):
                             work.remove(entry.token)
                     else:
-                        raise BackupError(f"目标已存在：{source.name}")
+                        raise BackupError(
+                            f"目标已存在：{source.name}",
+                            english="Destination already exists: {name}",
+                            values={"name": source.name},
+                        )
                 todo = [(source, dest)]
                 while todo:
                     check_cancel(cancel)
                     src, virtual = todo.pop()
                     if src.is_symlink() or not (src.is_dir() or src.is_file()):
-                        raise BackupError(f"不支持链接或特殊文件：{src.name}")
+                        raise BackupError(
+                            f"不支持链接或特殊文件：{src.name}",
+                            english="Links or special files are not supported: {name}",
+                            values={"name": src.name},
+                        )
                     safe_path(virtual)
                     is_dir = src.is_dir()
                     kind = "directory" if is_dir else "file"
@@ -684,7 +700,11 @@ class SessionOverlay:
                     continue
                 base_parent = self.baseline_at(entry.domain, entry.parent)
                 if not base_parent or self.find(base_parent.token):
-                    raise BackupError(f"无法还原父文件夹：{entry.parent}")
+                    raise BackupError(
+                        f"无法还原父文件夹：{entry.parent}",
+                        english="Unable to restore parent folder: {path}",
+                        values={"path": entry.parent},
+                    )
                 updates[base_parent.token] = base_parent
                 planned_paths[(base_parent.domain, base_parent.path)] = base_parent
                 queue.append(base_parent)

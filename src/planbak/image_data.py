@@ -131,13 +131,21 @@ def _decode(path, cancel):
         image = reader.read()
         check_cancel(cancel)
         if image.isNull():
-            raise BackupError("无法解码图片：" + reader.errorString())
+            raise BackupError(
+                "无法解码图片：" + reader.errorString(),
+                english="Unable to decode image: {error}",
+                values={"error": reader.errorString()},
+            )
         check_dimensions(image.width(), image.height())
         return DecodedImage(image, bytes(reader.format()).decode("ascii", "replace").upper())
     except Image.DecompressionBombError:
         return large_result(path, cancel, "图片")
     except (OSError, ValueError) as exc:
-        raise BackupError(f"无法读取图片：{exc}") from exc
+        raise BackupError(
+            f"无法读取图片：{exc}",
+            english="Unable to read image: {error}",
+            values={"error": str(exc)},
+        ) from exc
     with source:
         if (
             source.width * source.height > LARGE_PIXEL_THRESHOLD

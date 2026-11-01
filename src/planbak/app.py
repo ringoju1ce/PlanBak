@@ -1880,7 +1880,11 @@ class MainWindow(QMainWindow):
                 for record in external:
                     stamp = self.file_stamp(record.path)
                     if stamp == (None,):
-                        raise BackupError(f"外部编辑文件已被移动或删除：{record.path.name}")
+                        raise BackupError(
+                            f"外部编辑文件已被移动或删除：{record.path.name}",
+                            english="The externally edited file was moved or deleted: {name}",
+                            values={"name": record.path.name},
+                        )
                     self.session.stage_edit(record.token, record.path, cancel)
                     staged = self.session.cached_file(record.token, cancel=cancel)
                     updates.append((record, digest(staged, cancel=cancel), stamp))
