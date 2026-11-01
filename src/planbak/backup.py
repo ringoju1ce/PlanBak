@@ -103,14 +103,17 @@ def detect_backups(root: Path) -> list[Path]:
     if valid(root):
         return [root]
     if not root.is_dir():
-        raise BackupError("请选择存在的备份文件夹")
+        raise BackupError("请选择存在的备份文件夹", english="Choose an existing backup folder")
     result = sorted(
         p
         for p in root.iterdir()
         if p.is_dir() and not p.is_symlink() and valid(p) and (p / "Manifest.db").is_file()
     )
     if not result:
-        raise BackupError("文件夹内没有 iOS 备份（需要 Info.plist、Manifest.plist 和 Manifest.db）")
+        raise BackupError(
+            "文件夹内没有 iOS 备份（需要 Info.plist、Manifest.plist 和 Manifest.db）",
+            english="The folder does not contain an iOS backup (Info.plist, Manifest.plist, and Manifest.db are required)",
+        )
     return result
 
 
@@ -191,19 +194,27 @@ class BackupSession(SessionOverlay):
             self.manifest = load_plist(self.root / "Manifest.plist")
             self.info = load_plist(self.root / "Info.plist")
             if not (self.root / "Manifest.db").is_file():
-                raise BackupError("此版本仅支持 Manifest.db 备份；暂不支持 Manifest.mbdb")
+                raise BackupError(
+                    "此版本仅支持 Manifest.db 备份；暂不支持 Manifest.mbdb",
+                    english="This version supports Manifest.db backups only; Manifest.mbdb is not supported",
+                )
             status_path = self.root / "Status.plist"
             if status_path.exists():
                 status = load_plist(status_path)
                 if status.get("SnapshotState") not in (None, "finished"):
-                    raise BackupError("备份尚未完成，不能安全打开")
+                    raise BackupError(
+                        "备份尚未完成，不能安全打开",
+                        english="The backup is incomplete and cannot be opened safely",
+                    )
             self.encrypted = bool(self.manifest.get("IsEncrypted"))
             self.source_stamp = self._stamp()
             self.manifest_path = self.workspace / "Manifest.db"
             self._progress("正在读取备份…", 0, 0)
             if self.encrypted:
                 if not password:
-                    raise BackupError("需要备份加密密码")
+                    raise BackupError(
+                        "需要备份加密密码", english="The encrypted backup requires a password"
+                    )
                 self.keybag = Keybag(self.manifest["BackupKeyBag"], password)
                 _, self.manifest_key = self.keybag.unwrap(self.manifest["ManifestKey"])
                 crypto_file(
@@ -369,7 +380,9 @@ class BackupSession(SessionOverlay):
     def get(self, token) -> Entry:
         row = self.db.execute("SELECT * FROM EditorEntries WHERE token=?", (token,)).fetchone()
         if row is None:
-            raise BackupError("此文件已经被删除或不再存在")
+            raise BackupError(
+                "此文件已经被删除或不再存在", english="This file was deleted or no longer exists"
+            )
         return Entry.row(row)
 
     def at(self, domain, path):

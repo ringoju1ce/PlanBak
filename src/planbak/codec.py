@@ -123,7 +123,10 @@ class Keybag:
         def number(tag, maximum):
             raw = attrs.get(tag)
             if not isinstance(raw, bytes) or len(raw) != 4:
-                raise BackupError("不支持此备份的密钥派生格式")
+                raise BackupError(
+                    "不支持此备份的密钥派生格式",
+                    english="The backup key derivation format is not supported",
+                )
             count = struct.unpack(">I", raw)[0]
             if not 1 <= count <= maximum:
                 raise BackupError("备份的密钥派生迭代次数超出安全范围")
@@ -147,20 +150,26 @@ class Keybag:
                     clas = struct.unpack(">I", item[b"CLAS"])[0]
                     self.keys[clas] = aes_key_unwrap(derived, item[b"WPKY"])
         except (InvalidUnwrap, ValueError) as exc:
-            raise BackupError("备份密码不正确，或密钥包已损坏") from exc
+            raise BackupError(
+                "备份密码不正确，或密钥包已损坏",
+                english="The backup password is incorrect or the keybag is damaged",
+            ) from exc
         if not self.keys:
-            raise BackupError("备份没有可用的密码保护密钥")
+            raise BackupError(
+                "备份没有可用的密码保护密钥",
+                english="The backup has no usable password-protected key",
+            )
 
     def unwrap(self, wrapped: bytes) -> tuple[int, bytes]:
         if len(wrapped) < 28:
-            raise BackupError("文件加密密钥无效")
+            raise BackupError("文件加密密钥无效", english="Invalid file encryption key")
         clas = struct.unpack_from("<I", wrapped)[0]
         if clas not in self.keys:
             raise BackupError(f"缺少保护类别 {clas} 的密钥")
         try:
             return clas, aes_key_unwrap(self.keys[clas], wrapped[4:])
         except InvalidUnwrap as exc:
-            raise BackupError("文件密钥校验失败") from exc
+            raise BackupError("文件密钥校验失败", english="File key verification failed") from exc
 
     def new_key(self, clas: int) -> tuple[bytes, bytes]:
         if clas not in self.keys:

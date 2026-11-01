@@ -53,7 +53,10 @@ class BackupClaim:
                 # 长任务不能仅因锁年龄被误判失效；QLockFile仍检查死亡进程。
                 lock.setStaleLockTime(0)
                 if not lock.tryLock(0):
-                    raise BackupError("此备份已在另一个窗口或程序实例中打开，请先关闭它。")
+                    raise BackupError(
+                        "此备份已在另一个窗口或程序实例中打开，请先关闭它。",
+                        english="This backup is already open in another window or application instance. Close it first.",
+                    )
                 acquired[key] = lock
                 created.append(lock)
         except BaseException:

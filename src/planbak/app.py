@@ -109,6 +109,44 @@ def human_size(size):
 
 
 def message(parent, title, text, icon=QMessageBox.Icon.Information):
+    tr = parent.language_context.translate
+    titles = {
+        "文件夹不存在": "Folder Not Found",
+        "无法创建备份副本": "Unable to Create Backup Copy",
+        "无法切换副本": "Unable to Switch Copies",
+        "备份已打开": "Backup Already Open",
+        "无法打开备份": "Unable to Open Backup",
+        "无法完成清理": "Unable to Complete Cleanup",
+        "选择目标文件夹": "Choose a Destination Folder",
+        "无法新建文件夹": "Unable to Create Folder",
+        "无法重命名": "Unable to Rename",
+        "无法启动默认应用": "Unable to Open Default Application",
+        "无法应用更改": "Unable to Apply Changes",
+        "应用完成": "Changes Applied",
+        "无法处理拖放项目": "Unable to Handle Dropped Items",
+        "读取备份": "Read Backup",
+        "打开文件": "Open File",
+        "打开项目": "Open Item",
+        "添加项目": "Add Items",
+        "删除项目": "Delete Items",
+        "导出项目": "Export Items",
+        "应用更改": "Apply Changes",
+        "移动项目": "Move Items",
+        "关闭备份并清理缓存": "Close Backup and Clear Cache",
+    }
+    messages = {
+        "此备份已在另一个窗口中打开。": "This backup is already open in another window.",
+        "请先进入可添加项目的文件夹": "Open a folder where items can be added first.",
+        "请将项目拖入可添加项目的文件夹": "Drop items into a folder where they can be added.",
+    }
+    title = tr(titles[title]) if title in titles else title
+    text = (
+        parent.language_context.error(text)
+        if isinstance(text, Exception)
+        else tr(messages[text])
+        if text in messages
+        else text
+    )
     box = QMessageBox(icon, title, "", parent=parent)
     box.setTextFormat(Qt.TextFormat.PlainText)
     box.setText(text)
@@ -1445,7 +1483,7 @@ class MainWindow(QMainWindow):
                 if not entry or entry.kind != "directory":
                     raise BackupError("文件夹不存在")
         except BackupError as exc:
-            message(self, "文件夹不存在", str(exc), QMessageBox.Icon.Warning)
+            message(self, "文件夹不存在", exc, QMessageBox.Icon.Warning)
             return
         self.navigate(location)
 
@@ -1535,9 +1573,9 @@ class MainWindow(QMainWindow):
         )
         target, _ = QFileDialog.getSaveFileName(
             self,
-            "创建备份副本",
+            self.language_context.translate("Create Backup Copy"),
             str(suggested),
-            "备份文件夹 (*)",
+            self.language_context.translate("Backup folder (*)"),
         )
         if not target:
             return
@@ -1546,7 +1584,7 @@ class MainWindow(QMainWindow):
                 Path(target) / session.root.name if container else target, self
             )
         except Exception as exc:
-            message(self, "无法创建备份副本", str(exc), QMessageBox.Icon.Warning)
+            message(self, "无法创建备份副本", exc, QMessageBox.Icon.Warning)
             return
         self._output_claim = claim
         job = Task(
@@ -1570,7 +1608,7 @@ class MainWindow(QMainWindow):
                 QTimer.singleShot(0, self.close)
             else:
                 if job.error and not isinstance(job.error, Cancelled):
-                    message(self, "无法创建备份副本", str(job.error), QMessageBox.Icon.Warning)
+                    message(self, "无法创建备份副本", job.error, QMessageBox.Icon.Warning)
                 if self._copy_pending is None:
                     self._release_output_claim()
                 self.attach_created_copy()
@@ -1592,7 +1630,7 @@ class MainWindow(QMainWindow):
         try:
             claim = self._output_claim or self.manager.reserve(copied.path, self)
         except Exception as exc:
-            message(self, "无法切换副本", str(exc), QMessageBox.Icon.Warning)
+            message(self, "无法切换副本", exc, QMessageBox.Icon.Warning)
             return
 
         def adopted(_):
@@ -1687,11 +1725,11 @@ class MainWindow(QMainWindow):
                     elif on_error:
                         on_error(job.error)
                     else:
-                        message(self, title, str(job.error), QMessageBox.Icon.Critical)
+                        message(self, title, job.error, QMessageBox.Icon.Critical)
                 elif callback:
                     callback(job.result)
             except Exception as exc:
-                message(self, title, str(exc), QMessageBox.Icon.Critical)
+                message(self, title, exc, QMessageBox.Icon.Critical)
             finally:
                 if on_done:
                     on_done()
@@ -1924,7 +1962,7 @@ class MainWindow(QMainWindow):
                 path, self, shared=self._backup_claim if relocated else None
             )
         except Exception as exc:
-            message(self, "无法打开备份", str(exc), QMessageBox.Icon.Warning)
+            message(self, "无法打开备份", exc, QMessageBox.Icon.Warning)
             return
         self._opening_claim = claim
         self._transitioning = True
@@ -1961,7 +1999,7 @@ class MainWindow(QMainWindow):
             encrypted = load_plist(path / "Manifest.plist").get("IsEncrypted", False)
         except Exception as exc:
             self._cancel_open()
-            message(self, "无法打开备份", str(exc), QMessageBox.Icon.Warning)
+            message(self, "无法打开备份", exc, QMessageBox.Icon.Warning)
             return
         if encrypted:
             dialog = PasswordDialog(self)
@@ -2054,7 +2092,7 @@ class MainWindow(QMainWindow):
 
         def failed(exc):
             self._cancel_open()
-            message(self, "无法完成清理", str(exc), QMessageBox.Icon.Warning)
+            message(self, "无法完成清理", exc, QMessageBox.Icon.Warning)
 
         self.run_task("关闭备份并清理缓存", cleanup, cleaned, on_error=failed, on_done=release)
 
@@ -2131,7 +2169,7 @@ class MainWindow(QMainWindow):
                 self.session.new_directory(self.domain, self.path, name)
                 self.refresh()
             except BackupError as exc:
-                message(self, "无法新建文件夹", str(exc), QMessageBox.Icon.Warning)
+                message(self, "无法新建文件夹", exc, QMessageBox.Icon.Warning)
 
     def rename_selected(self):
         if self.sidebar_active():
@@ -2194,7 +2232,7 @@ class MainWindow(QMainWindow):
                             self._latest_view_states[location] = state
                 self.refresh(focus_browser=focus_browser)
             except BackupError as exc:
-                message(self, "无法重命名", str(exc), QMessageBox.Icon.Warning)
+                message(self, "无法重命名", exc, QMessageBox.Icon.Warning)
 
     def delete_selected(self):
         if self.sidebar_active():
@@ -3229,7 +3267,10 @@ class MainWindow(QMainWindow):
                 else session.root.parent / (session.root.name + "-edited")
             )
             target, _ = QFileDialog.getSaveFileName(
-                self, "创建备份副本并应用更改", suggested, "备份文件夹 (*)"
+                self,
+                self.language_context.translate("Create Backup Copy and Apply Changes"),
+                suggested,
+                self.language_context.translate("Backup folder (*)"),
             )
             if not target:
                 if on_cancel:
@@ -3247,7 +3288,7 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             if claim:
                 self._release_output_claim()
-            message(self, "无法应用更改", str(exc), QMessageBox.Icon.Warning)
+            message(self, "无法应用更改", exc, QMessageBox.Icon.Warning)
             if on_cancel:
                 on_cancel()
             return
@@ -3261,9 +3302,13 @@ class MainWindow(QMainWindow):
             completed[0] = True
             self.refresh()
             if not quiet:
-                text = f"更改已应用到：\n{destination}"
+                text = self.language_context.translate(
+                    "Changes applied to:\n{path}", path=destination
+                )
                 if not direct:
-                    text += f"\n\n原备份保留在：\n{source_root}"
+                    text += self.language_context.translate(
+                        "\n\nOriginal backup preserved at:\n{path}", path=source_root
+                    )
                 message(self, "应用完成", text)
             if after:
                 after()
@@ -3456,7 +3501,7 @@ class MainWindow(QMainWindow):
                 )
                 return True
             except (ValueError, KeyError, TypeError, BackupError) as exc:
-                message(self, "无法处理拖放项目", str(exc), QMessageBox.Icon.Warning)
+                message(self, "无法处理拖放项目", exc, QMessageBox.Icon.Warning)
                 return False
         paths = [url.toLocalFile() for url in mime.urls() if url.isLocalFile()]
         if paths:
