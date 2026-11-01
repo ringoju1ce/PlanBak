@@ -858,8 +858,10 @@ class MainWindow(QMainWindow):
         self.up_action = self.action("上层文件夹", self.up, "Backspace", "go-up")
         select_all = self.action("全选", self.select_all, "Ctrl+A")
         self.select_all_action = select_all
-        enter = self.action("打开 / 进入", self.activate_selection, "Return")
-        clear = self.action("清除选择", lambda: self.active_view().clearSelection(), "Escape")
+        enter = self.enter_action = self.action("打开 / 进入", self.activate_selection, "Return")
+        clear = self.clear_action = self.action(
+            "清除选择", lambda: self.active_view().clearSelection(), "Escape"
+        )
         for action in (
             select_all,
             enter,
@@ -952,6 +954,15 @@ class MainWindow(QMainWindow):
         self.grid_action.setText(tr("Grid"))
         self.descending.setText(tr("Descending"))
         self.directories_first.setText(tr("Folders First"))
+        self.enter_action.setText(tr("Open / Enter"))
+        self.clear_action.setText(tr("Clear Selection"))
+        self.directory_tree.setAccessibleName(tr("Backup folder tree"))
+        for toolbar, source in (
+            (self.file_toolbar, "File actions"),
+            (self.navigation_toolbar, "Navigation"),
+        ):
+            toolbar.setWindowTitle(tr(source))
+            toolbar.setAccessibleName(tr(source))
         self.language_actions[self.language_context.language].setChecked(True)
         self.changes_dock.setWindowTitle(tr("Changes"))
         self.changes_list.setAccessibleName(tr("Changes"))
@@ -991,7 +1002,7 @@ class MainWindow(QMainWindow):
         dialog.deleteLater()
 
     def _create_toolbar(self):
-        toolbar = QToolBar("文件操作", self)
+        toolbar = self.file_toolbar = QToolBar("文件操作", self)
         toolbar.setMovable(False)
         self.addToolBar(toolbar)
         add_button = QToolButton()
@@ -1040,7 +1051,7 @@ class MainWindow(QMainWindow):
         self.icon_slider.valueChanged.connect(self.set_icon_size)
         toolbar.addWidget(self.icon_slider)
         self.set_icon_size(self.icon_slider.value())
-        navigation = QToolBar("导航", self)
+        navigation = self.navigation_toolbar = QToolBar("导航", self)
         navigation.setMovable(False)
         self.addToolBarBreak()
         self.addToolBar(navigation)

@@ -556,5 +556,10 @@
   "Save External Edits": "保存外部编辑",
   "Copy Items to This Backup": "复制项目到当前备份",
   "Clean Old Session Cache": "清理旧会话缓存",
-  "All Files (*)": "所有文件 (*)"
+  "All Files (*)": "所有文件 (*)",
+  "Open / Enter": "打开 / 进入",
+  "Clear Selection": "清除选择",
+  "Backup folder tree": "备份文件夹树",
+  "File actions": "文件操作",
+  "Navigation": "导航"
 }
