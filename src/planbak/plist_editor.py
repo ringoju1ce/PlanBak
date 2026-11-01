@@ -557,6 +557,7 @@ class PlistEditor(DocumentWindow):
         self._xml_snapshot = None
         self._xml_cache = ""
         self.xml_reason = ""
+        self._xml_error = None
         layout = QVBoxLayout(self)
         action_bar = DocumentToolBar("plist 树形编辑操作", self)
         for label, method, attribute, icon, hint in (
@@ -630,6 +631,8 @@ class PlistEditor(DocumentWindow):
     def retranslate(self):
         tr = self.language_context.translate
         self.xml.retranslate()
+        if isinstance(self._xml_error, PlistXmlError):
+            self.xml.error.setText(self._xml_error.localized(tr))
         self.tree_actions.setWindowTitle(tr("plist tree editing"))
         self.tree_actions.setAccessibleName(tr("plist tree editing"))
         for button, source in (
@@ -703,6 +706,7 @@ class PlistEditor(DocumentWindow):
         self.xml_button.defaultAction().setToolTip(self.xml_reason or "使用 XML 编辑此 plist")
 
     def xml_changed(self):
+        self._xml_error = None
         self.update_actions()
         self.contents_changed.emit()
 
@@ -717,7 +721,12 @@ class PlistEditor(DocumentWindow):
             if not same_value(plistlib.loads(data), value):
                 raise ValueError("源文件格式无法无损保存这些值")
         except Exception as exc:
-            self.xml.error.setText(str(exc))
+            self._xml_error = exc
+            self.xml.error.setText(
+                exc.localized(self.language_context.translate)
+                if isinstance(exc, PlistXmlError)
+                else str(exc)
+            )
             if isinstance(exc, PlistXmlError):
                 self.xml.code.show_error(exc.line, exc.column)
             return False

@@ -37,8 +37,42 @@ from .document_ui import DocumentStatus, DocumentToolBar
 
 class PlistXmlError(ValueError):
     def __init__(self, message, line=1, column=1):
-        self.line, self.column = line, column
+        self.line, self.column, self.message = line, column, message
         super().__init__(f"第 {line} 行，第 {column} 列：{message}")
+
+    def localized(self, translate):
+        known = {
+            "XML 编辑模式使用 UTF-8 编码，请修改 encoding 声明": "XML editing uses UTF-8; change the encoding declaration",
+            "根元素必须是唯一的 plist": "The root element must be a single plist",
+            "plist 必须且只能包含一个值": "A plist must contain exactly one value",
+            "字典键后必须是有效的值": "A dictionary key must be followed by a valid value",
+            "字典中的值必须有对应的 key": "A dictionary value must have a key",
+            "数组中必须是有效的 plist 值": "Arrays must contain valid plist values",
+            "此值不能包含子元素": "This value cannot contain child elements",
+            "不支持的元素属性": "Unsupported element attributes",
+            "此元素不能包含文本值": "This element cannot contain text",
+            "plist 必须包含一个值": "A plist must contain a value",
+            "字典键缺少对应的值": "A dictionary key is missing its value",
+            "不支持自定义或外部 XML 实体": "Custom or external XML entities are not supported",
+        }
+        message = self.message
+        if message in known:
+            message = translate(known[message])
+        elif message.startswith("不支持的 plist XML 元素："):
+            message = translate(
+                "Unsupported plist XML element: {tag}", tag=message.split("：", 1)[1]
+            )
+        elif message.startswith("字典中存在重复键："):
+            message = translate("Duplicate dictionary key: {key}", key=message.split("：", 1)[1])
+        elif message.startswith("无效的 ") and " 值：" in message:
+            tag, detail = message[len("无效的 ") :].split(" 值：", 1)
+            message = translate("Invalid {tag} value: {error}", tag=tag, error=detail)
+        return translate(
+            "Line {line}, column {column}: {message}",
+            line=self.line,
+            column=self.column,
+            message=message,
+        )
 
 
 def parse_xml(text):
