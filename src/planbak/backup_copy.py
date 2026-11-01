@@ -92,7 +92,7 @@ class CopiedBackup:
     path: Path
 
 
-def copy_backup(source, destination, stamp, progress, cancel=None):
+def copy_backup(source, destination, stamp, progress, cancel=None, *, container=False):
     from .backup import copy_file
 
     destination = output_location(source, destination)
@@ -108,6 +108,7 @@ def copy_backup(source, destination, stamp, progress, cancel=None):
     if shutil.disk_usage(destination.parent).free < total:
         raise BackupError("目标磁盘空间不足以创建备份副本")
     work = Path(tempfile.mkdtemp(prefix=".planbak-save-", dir=destination.parent))
+    backup = work / source.name if container else work
     done = 0
 
     def advanced(amount):
@@ -116,18 +117,20 @@ def copy_backup(source, destination, stamp, progress, cancel=None):
         progress("正在创建备份副本…", done, max(1, total))
 
     try:
+        if container:
+            backup.mkdir()
         progress("正在创建备份副本…", 0, max(1, total))
         for path in files:
             check_cancel(cancel)
-            copy_file(path, work / path.relative_to(source), cancel, progress=advanced)
+            copy_file(path, backup / path.relative_to(source), cancel, progress=advanced)
         check_cancel(cancel)
-        if backup_stamp(source) != stamp or backup_stamp(work) != stamp:
+        if backup_stamp(source) != stamp or backup_stamp(backup) != stamp:
             raise BackupError("复制期间原备份发生变化，副本未发布")
-        write_marker(work)
+        write_marker(backup)
         if destination.exists() or destination.is_symlink():
             raise BackupError("保存目标已被创建，未覆盖现有文件夹")
         work.rename(destination)
-        return CopiedBackup(source, stamp, destination)
+        return CopiedBackup(source, stamp, destination / source.name if container else destination)
     finally:
         if work.exists():
             shutil.rmtree(work)

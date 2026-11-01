@@ -57,6 +57,8 @@ from PySide6.QtWidgets import (
     QSplitter,
     QStackedWidget,
     QTableView,
+    QTableWidget,
+    QTableWidgetItem,
     QToolBar,
     QToolButton,
     QVBoxLayout,
@@ -169,6 +171,59 @@ class PasswordDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
         self.lock_size(QSize(380, 180))
+
+
+class BackupChoiceDialog(QDialog):
+    def __init__(self, candidates, parent=None):
+        super().__init__(parent)
+        self.candidates = candidates
+        self.setWindowTitle("选择备份")
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel("请选择要打开的备份："))
+        self.table = QTableWidget(len(candidates), 3, self)
+        self.table.setHorizontalHeaderLabels(["设备名称", "备份日期", "文件夹名称"])
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.verticalHeader().hide()
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        for row, path in enumerate(candidates):
+            try:
+                info = load_plist(path / "Info.plist")
+            except (OSError, BackupError):
+                info = {}
+            name = info.get("Device Name") or info.get("Display Name") or "未知"
+            date = info.get("Last Backup Date")
+            for metadata in ("Status.plist", "Manifest.plist"):
+                if isinstance(date, datetime):
+                    break
+                try:
+                    date = load_plist(path / metadata).get("Date")
+                except (OSError, BackupError):
+                    date = None
+            values = (
+                str(name),
+                date.strftime("%Y-%m-%d %H:%M:%S") if isinstance(date, datetime) else "未知",
+                path.name,
+            )
+            for column, value in enumerate(values):
+                item = QTableWidgetItem(value)
+                item.setToolTip(value)
+                self.table.setItem(row, column, item)
+        self.table.selectRow(0)
+        self.table.cellDoubleClicked.connect(lambda *_: self.accept())
+        layout.addWidget(self.table)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+        self.lock_size(QSize(680, 360))
+
+    def selected_path(self):
+        row = self.table.currentRow()
+        return self.candidates[row] if row >= 0 else None
 
 
 @dataclass(frozen=True)
@@ -487,6 +542,7 @@ class MainWindow(QMainWindow):
         self._close_after_transfer = False
         self.settings = QSettings("PlanBak", "PlanBak")
         self.session = None
+        self._backup_container = None
         self.domain = None
         self.path = ""
         self.domain_group = None
@@ -1288,23 +1344,31 @@ class MainWindow(QMainWindow):
         ):
             return
         session = self.session
+        container = self._backup_container is not None
+        suggested = (
+            self._backup_container.parent / (self._backup_container.name + "-copy")
+            if container
+            else session.root.parent / (session.root.name + "-copy")
+        )
         target, _ = QFileDialog.getSaveFileName(
             self,
             "创建备份副本",
-            str(session.root.parent / (session.root.name + "-copy")),
+            str(suggested),
             "备份文件夹 (*)",
         )
         if not target:
             return
         try:
-            claim = self.manager.reserve(target, self)
+            claim = self.manager.reserve(
+                Path(target) / session.root.name if container else target, self
+            )
         except Exception as exc:
             message(self, "无法创建备份副本", str(exc), QMessageBox.Icon.Warning)
             return
         self._output_claim = claim
         job = Task(
             lambda progress, cancel: session.create_copy(
-                Path(target), progress=progress, cancel=cancel
+                Path(target), progress=progress, cancel=cancel, container=container
             ),
             self,
         )
@@ -1350,6 +1414,8 @@ class MainWindow(QMainWindow):
 
         def adopted(_):
             self._adopt_claim(claim)
+            if self._backup_container is not None:
+                self._backup_container = copied.path.parent
             self.refresh(focus_browser=False)
 
         def finished():
@@ -1596,7 +1662,7 @@ class MainWindow(QMainWindow):
         if path:
             self.open_path(Path(path), new_window=new_window)
 
-    def open_path(self, path, *, new_window=False):
+    def open_path(self, path, *, new_window=False, _container=None):
         if (
             self.task
             or self._exit_requested
@@ -1608,19 +1674,20 @@ class MainWindow(QMainWindow):
         ):
             return
         try:
-            candidates = detect_backups(Path(path))
+            selected_directory = Path(path).expanduser().resolve()
+            candidates = detect_backups(selected_directory)
+            container = (
+                _container
+                if _container is not None
+                else (selected_directory if candidates[0] != selected_directory else None)
+            )
             if len(candidates) > 1:
-                selected, ok = QInputDialog.getItem(
-                    self,
-                    "选择备份",
-                    "此文件夹包含多个备份：",
-                    [p.name for p in candidates],
-                    0,
-                    False,
-                )
-                if not ok:
+                dialog = BackupChoiceDialog(candidates, self)
+                accepted = dialog.exec() == QDialog.DialogCode.Accepted
+                path = dialog.selected_path() if accepted else None
+                dialog.deleteLater()
+                if path is None:
                     return
-                path = next(p for p in candidates if p.name == selected)
             else:
                 path = candidates[0]
             path = Path(path).resolve()
@@ -1632,6 +1699,8 @@ class MainWindow(QMainWindow):
                 and path != self.session.root
             )
             if owner is not None and not relocated:
+                if owner is self and not new_window and self.session and path == self.session.root:
+                    self._backup_container = container
                 if owner.isMinimized():
                     owner.setWindowState(owner.windowState() & ~Qt.WindowState.WindowMinimized)
                 owner.show()
@@ -1646,7 +1715,7 @@ class MainWindow(QMainWindow):
                 window = MainWindow(self.manager)
                 window.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
                 window.show()
-                window.open_path(path)
+                window.open_path(path, _container=container)
                 return
             # 外部移动后目录身份不变，旧会话仍指向旧路径。重新打开必须
             # 完整清理并解锁/建索引，身份锁在新旧占用之间连续共享。
@@ -1661,7 +1730,7 @@ class MainWindow(QMainWindow):
         self.update_actions()
 
         def proceed():
-            self._clear_backup(lambda: self._load_backup(path, claim))
+            self._clear_backup(lambda: self._load_backup(path, claim, container))
 
         self.confirm_leave(
             proceed, cancelled=self._cancel_open, purpose="关闭当前备份并打开所选备份"
@@ -1685,7 +1754,7 @@ class MainWindow(QMainWindow):
         if self._output_claim is claim:
             self._output_claim = None
 
-    def _load_backup(self, path, claim):
+    def _load_backup(self, path, claim, container=None):
         password = ""
         try:
             encrypted = load_plist(path / "Manifest.plist").get("IsEncrypted", False)
@@ -1710,6 +1779,7 @@ class MainWindow(QMainWindow):
                 session.close()
                 raise
             self.session = session
+            self._backup_container = container
             self._transitioning = False
             self.navigate(Location())
 
@@ -1759,6 +1829,7 @@ class MainWindow(QMainWindow):
         self.clear_opened_files(clear_images=False)
         self.clear_navigation_state()
         self.session = None
+        self._backup_container = None
         self.domain, self.path, self.domain_group = None, "", None
         self.refresh()
         self.panes.activate(self.active_view(), focus=True)
@@ -2923,8 +2994,13 @@ class MainWindow(QMainWindow):
             return
         target = None
         direct = session.editable
+        container = self._backup_container is not None
         if not direct:
-            suggested = str(session.root.parent / (session.root.name + "-edited"))
+            suggested = str(
+                self._backup_container.parent / (self._backup_container.name + "-copy")
+                if container
+                else session.root.parent / (session.root.name + "-edited")
+            )
             target, _ = QFileDialog.getSaveFileName(
                 self, "创建备份副本并应用更改", suggested, "备份文件夹 (*)"
             )
@@ -2936,7 +3012,9 @@ class MainWindow(QMainWindow):
         claim = None
         try:
             if not direct:
-                claim = self.manager.reserve(target, self)
+                claim = self.manager.reserve(
+                    Path(target) / session.root.name if container else target, self
+                )
                 self._output_claim = claim
             token = session.begin_apply()  # 在线程启动/弹窗事件循环之前关闭数据层暂挂入口。
         except Exception as exc:
@@ -2951,6 +3029,8 @@ class MainWindow(QMainWindow):
         def saved(destination):
             if claim:
                 self._adopt_claim(claim)
+                if container:
+                    self._backup_container = destination.parent
             completed[0] = True
             self.refresh()
             if not quiet:
@@ -2976,7 +3056,11 @@ class MainWindow(QMainWindow):
         self.run_task(
             "应用更改",
             lambda progress, cancel: session.save(
-                Path(target) if target else None, progress=progress, cancel=cancel, _token=token
+                Path(target) if target else None,
+                progress=progress,
+                cancel=cancel,
+                _token=token,
+                container=container,
             ),
             saved,
             dialog_progress=True,

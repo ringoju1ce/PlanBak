@@ -104,9 +104,13 @@ def detect_backups(root: Path) -> list[Path]:
         return [root]
     if not root.is_dir():
         raise BackupError("请选择存在的备份文件夹")
-    result = sorted(p for p in root.iterdir() if p.is_dir() and not p.is_symlink() and valid(p))
+    result = sorted(
+        p
+        for p in root.iterdir()
+        if p.is_dir() and not p.is_symlink() and valid(p) and (p / "Manifest.db").is_file()
+    )
     if not result:
-        raise BackupError("文件夹内没有 iOS 备份（需要 Info.plist 和 Manifest.plist）")
+        raise BackupError("文件夹内没有 iOS 备份（需要 Info.plist、Manifest.plist 和 Manifest.db）")
     return result
 
 
@@ -261,7 +265,7 @@ class BackupSession(SessionOverlay):
             if self._applying is token:
                 self._applying = None
 
-    def create_copy(self, destination, *, progress=None, cancel=None):
+    def create_copy(self, destination, *, progress=None, cancel=None, container=False):
         with self._state_lock:
             if self._applying is not None or self._copying or self._transfers:
                 raise BackupError("已有保存或副本任务进行中")
@@ -271,7 +275,14 @@ class BackupSession(SessionOverlay):
             with self.lock:
                 source, stamp = self.root, self.source_stamp
             destination = output_location(source, destination, workspace=self.workspace)
-            return copy_backup(source, destination, stamp, progress or (lambda *a: None), cancel)
+            return copy_backup(
+                source,
+                destination,
+                stamp,
+                progress or (lambda *a: None),
+                cancel,
+                container=container,
+            )
         finally:
             with self._state_lock:
                 self._copying = False
@@ -558,17 +569,25 @@ class BackupSession(SessionOverlay):
     def estimate_save_bytes(self):
         return sum(p.stat().st_size for p in self.root.rglob("*") if p.is_file())
 
-    def save(self, destination: Path | None = None, *, progress=None, cancel=None, _token=None):
+    def save(
+        self,
+        destination: Path | None = None,
+        *,
+        progress=None,
+        cancel=None,
+        _token=None,
+        container=False,
+    ):
         token = _token if _token is not None else self.begin_apply()
         try:
             with self._state_lock:
                 if token is not self._applying:
                     raise BackupError("无效的保存状态")
-            return self._save(destination, progress=progress, cancel=cancel)
+            return self._save(destination, progress=progress, cancel=cancel, container=container)
         finally:
             self.end_apply(token)
 
-    def _save(self, destination, *, progress=None, cancel=None):
+    def _save(self, destination, *, progress=None, cancel=None, container=False):
         """Prepare and validate output, then publish a copy or update a marked backup."""
         with self.lock:
             progress = progress or (lambda *a: None)
@@ -598,10 +617,13 @@ class BackupSession(SessionOverlay):
             extra = self.manifest_path.stat().st_size * 2
             if shutil.disk_usage(destination.parent).free < required + extra:
                 raise BackupError("目标磁盘空间不足以创建独立备份副本")
-            work = Path(tempfile.mkdtemp(prefix=".planbak-save-", dir=destination.parent))
+            temporary = Path(tempfile.mkdtemp(prefix=".planbak-save-", dir=destination.parent))
+            work = temporary / self.root.name if container and not direct else temporary
             out_db_path = self.workspace / (uuid.uuid4().hex + ".db")
             saved_db = None
             try:
+                if work != temporary:
+                    work.mkdir()
                 files = (
                     []
                     if direct
@@ -794,7 +816,9 @@ class BackupSession(SessionOverlay):
                         ) from exc
                 else:
                     write_marker(work)
-                    work.rename(destination)
+                    temporary.rename(destination)
+                    if container:
+                        destination = destination / self.root.name
                 new_stamp = backup_stamp(destination)
                 old_db, old_path = self.db, self.manifest_path
                 self.db, saved_db = saved_db, None
@@ -809,8 +833,8 @@ class BackupSession(SessionOverlay):
                 old_path.unlink(missing_ok=True)
                 return destination
             finally:
-                if work.exists():
-                    shutil.rmtree(work)
+                if temporary.exists():
+                    shutil.rmtree(temporary)
                 if saved_db is not None:
                     saved_db.close()
                 if self.manifest_path != out_db_path:
