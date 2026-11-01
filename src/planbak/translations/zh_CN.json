@@ -359,5 +359,9 @@
   "Copying backup to output folder…": "复制备份到独立输出文件夹…",
   "Repacking and verifying manifest…": "重新封装并验证清单…",
   "Establishing the new save baseline…": "建立新的保存基线…",
-  "Writing: {name}": "写入：{name}"
+  "Writing: {name}": "写入：{name}",
+  "BLOB ({count} bytes)": "BLOB ({count} 字节)",
+  "\"\" (empty string)": "\"\" （空字符串）",
+  "View Cell (Read-only)": "查看单元格（只读）",
+  "Complete cell content": "单元格完整内容"
 }

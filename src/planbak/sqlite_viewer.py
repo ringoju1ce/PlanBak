@@ -38,13 +38,20 @@ from .sqlite_database import PAGE_SIZE, QueryResult, query, quote_identifier, sc
 from .viewer_tasks import ViewerTask
 
 
-def cell_text(value, limit=512):
+def cell_text(value, limit=512, translate=None):
     if value is None:
         return "NULL"
     if isinstance(value, bytes):
-        text = f"BLOB ({len(value)} 字节)  " + value[: limit // 2].hex(" ")
+        prefix = (
+            translate("BLOB ({count} bytes)", count=len(value))
+            if translate
+            else f"BLOB ({len(value)} 字节)"
+        )
+        text = prefix + "  " + value[: limit // 2].hex(" ")
     elif isinstance(value, str):
-        text = value if value else '"" （空字符串）'
+        text = (
+            value if value else (translate('"" (empty string)') if translate else '"" （空字符串）')
+        )
     else:
         text = str(value)
     return text[:limit] + ("…" if len(text) > limit else "")
@@ -82,9 +89,13 @@ class ResultModel(QAbstractTableModel):
             return None
         value = self.result.rows[index.row()][index.column()]
         if role == Qt.ItemDataRole.DisplayRole:
-            return cell_text(value)
+            return cell_text(value, translate=self.parent().language_context.translate)
         if role == Qt.ItemDataRole.ToolTipRole:
-            return "<qt><pre>" + escape(cell_text(value, 4096)) + "</pre></qt>"
+            return (
+                "<qt><pre>"
+                + escape(cell_text(value, 4096, self.parent().language_context.translate))
+                + "</pre></qt>"
+            )
         return None
 
     def sort(self, column, order=Qt.SortOrder.AscendingOrder):
@@ -248,6 +259,11 @@ class SQLiteViewer(DocumentWindow):
                 1, tr("Table" if item.data(1, Qt.ItemDataRole.UserRole) == "table" else "View")
             )
         self.update_page_label()
+        if self.model.rowCount() and self.model.columnCount():
+            self.model.dataChanged.emit(
+                self.model.index(0, 0),
+                self.model.index(self.model.rowCount() - 1, self.model.columnCount() - 1),
+            )
         self.set_status(self._status_source, **self._status_values)
 
     def update_page_label(self):
@@ -423,20 +439,31 @@ class SQLiteViewer(DocumentWindow):
             return
         value = self.model.result.rows[index.row()][index.column()]
         dialog = FixedDialog(self)
-        dialog.setWindowTitle("查看单元格（只读）")
+        dialog.setWindowTitle(self.language_context.translate("View Cell (Read-only)"))
         layout = QVBoxLayout(dialog)
         text = QPlainTextEdit()
         text.setReadOnly(True)
-        text.setAccessibleName("单元格完整内容")
-        text.setPlainText(cell_text(value, 1024 * 1024))
+        text.setAccessibleName(self.language_context.translate("Complete cell content"))
+        text.setPlainText(cell_text(value, 1024 * 1024, self.language_context.translate))
         layout.addWidget(text)
         buttons = document_buttons(QDialogButtonBox.StandardButton.Close, dialog)
-        buttons.button(QDialogButtonBox.StandardButton.Close).setText("关闭")
+        close_button = buttons.button(QDialogButtonBox.StandardButton.Close)
+        close_button.setText(self.language_context.translate("Close"))
+
+        def retranslate_dialog():
+            tr = self.language_context.translate
+            dialog.setWindowTitle(tr("View Cell (Read-only)"))
+            text.setAccessibleName(tr("Complete cell content"))
+            text.setPlainText(cell_text(value, 1024 * 1024, tr))
+            close_button.setText(tr("Close"))
+
+        self.language_context.changed.connect(retranslate_dialog)
         buttons.rejected.connect(dialog.reject)
         layout.addWidget(buttons)
         dialog.lock_size(QSize(760, 460))
         self.panes.activate(self.table, focus=True)
         dialog.exec()
+        self.language_context.changed.disconnect(retranslate_dialog)
 
         def restore():
             if (
