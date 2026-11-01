@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from PySide6.QtCore import QAbstractItemModel, QModelIndex, QSize, Qt, Signal
+from PySide6.QtCore import QAbstractItemModel, QModelIndex, QObject, QSize, Qt, Signal
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QAbstractItemView, QApplication, QHeaderView, QStyle, QTreeView
 
@@ -86,6 +86,23 @@ class DirectoryTreeModel(QAbstractItemModel):
         if not node:
             return None
         if role == Qt.ItemDataRole.DisplayRole:
+            if node is self.root and self.session:
+                name = next(
+                    (
+                        self.session.info.get(key).strip()
+                        for key in ("Device Name", "Display Name")
+                        if isinstance(self.session.info.get(key), str)
+                        and self.session.info.get(key).strip()
+                    ),
+                    None,
+                )
+                context = getattr(QObject.parent(self).window(), "language_context", None)
+                if context:
+                    return (
+                        context.translate("{name}'s Backup", name=name)
+                        if name
+                        else context.translate("Backup")
+                    )
             return node.name
         if role == Qt.ItemDataRole.ToolTipRole:
             return node.location.address

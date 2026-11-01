@@ -6,6 +6,8 @@ from PySide6.QtCore import QAbstractListModel, QModelIndex, Qt
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QStyle
 
+from .staging import full_path
+
 
 class PendingChangesModel(QAbstractListModel):
     def __init__(self, parent=None):
@@ -38,7 +40,20 @@ class PendingChangesModel(QAbstractListModel):
             return None
         change = self.rows[index.row()]
         if role == Qt.ItemDataRole.DisplayRole:
-            return change.title
+            tr = self.parent().language_context.translate
+            labels = {
+                "建立文件夹": "Create Folder",
+                "添加": "Add",
+                "删除文件夹": "Delete Folder",
+                "删除": "Delete",
+                "重命名文件夹": "Rename Folder",
+                "重命名": "Rename",
+                "修改": "Modify",
+            }
+            path = full_path(change.after or change.before)
+            if any(label.startswith("重命名") for label in change.labels):
+                path = f"{full_path(change.before)} → {full_path(change.after)}"
+            return f"{tr(', ').join(tr(labels[label]) for label in change.labels)}　{path}"
         if role == Qt.ItemDataRole.ToolTipRole:
             return "<qt>" + html.escape(change.tooltip) + "</qt>"
         if role == Qt.ItemDataRole.UserRole:

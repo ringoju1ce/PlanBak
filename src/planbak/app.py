@@ -319,7 +319,9 @@ class BrowserModel(QAbstractTableModel):
 
     def headerData(self, section, orientation, role):
         if orientation == Qt.Orientation.Horizontal and role == Qt.ItemDataRole.DisplayRole:
-            return self.headers[section]
+            return self.parent().language_context.translate(
+                ("Name", "Type", "Size", "Modified", "Status")[section]
+            )
         return None
 
     @staticmethod
@@ -342,7 +344,15 @@ class BrowserModel(QAbstractTableModel):
             if index.column() == 0:
                 return row.name
             if index.column() == 1:
-                return self.type_label(row)
+                if row.kind in ("domain", "group", "directory"):
+                    return self.parent().language_context.translate("Folder")
+                if row.kind == "parent":
+                    return self.parent().language_context.translate("Parent Folder")
+                if row.kind == "special":
+                    return self.parent().language_context.translate("Link / Special Item")
+                return Path(row.name).suffix.lstrip(
+                    "."
+                ).upper() or self.parent().language_context.translate("File")
             if index.column() == 2:
                 return human_size(entry.size) if entry and entry.kind == "file" else ""
             if index.column() == 3:
@@ -355,7 +365,11 @@ class BrowserModel(QAbstractTableModel):
                 except (ValueError, OverflowError, OSError):
                     return ""
             if index.column() == 4:
-                return "已暂挂" if entry and entry.token in self.pending_tokens else ""
+                return (
+                    self.parent().language_context.translate("Changed")
+                    if entry and entry.token in self.pending_tokens
+                    else ""
+                )
         if role == Qt.ItemDataRole.DecorationRole and index.column() == 0:
             if row.kind == "domain":
                 application_icon = self.application_icons.for_directory(row.domain, row.path)
@@ -380,7 +394,10 @@ class BrowserModel(QAbstractTableModel):
             if row.kind == "group":
                 return f"/{row.name}"
             return f"{row.domain}/{row.path}" + (
-                "\n修改在保存前只暂挂于当前会话"
+                "\n"
+                + self.parent().language_context.translate(
+                    "Changes remain in this session until applied"
+                )
                 if entry and entry.token in self.pending_tokens
                 else ""
             )
@@ -748,9 +765,9 @@ class MainWindow(QMainWindow):
             return
         tree.setCurrentIndex(index)
         menu = QMenu(self)
-        open_action = menu.addAction("打开")
-        delete_action = menu.addAction("删除")
-        rename_action = menu.addAction("重命名")
+        open_action = menu.addAction(self.language_context.translate("Open"))
+        delete_action = menu.addAction(self.language_context.translate("Delete"))
+        rename_action = menu.addAction(self.language_context.translate("Rename"))
         mutable = bool(node.entry and node.entry.path)
         delete_action.setEnabled(mutable)
         rename_action.setEnabled(mutable)
@@ -888,6 +905,35 @@ class MainWindow(QMainWindow):
         self.descending.setText(tr("Descending"))
         self.directories_first.setText(tr("Folders First"))
         self.language_actions[self.language_context.language].setChecked(True)
+        self.changes_dock.setWindowTitle(tr("Changes"))
+        self.changes_list.setAccessibleName(tr("Changes"))
+        self.apply_changes_button.setText(tr("Apply Changes"))
+        self.discard_button.setText(tr("Discard All Changes"))
+        self.icon_label.setText(" " + tr("Icon") + " ")
+        self.icon_slider.setAccessibleName(tr("Icon size"))
+        self.location.setAccessibleName(tr("Folder path"))
+        self.sort_combo.setToolTip(tr("Sort by"))
+        self.work_progress.setAccessibleName(tr("Background task progress"))
+        self.backup_status.setAccessibleName(tr("Backup status"))
+        for i, title in enumerate(("Name", "Type", "Size", "Modified", "Status")):
+            self.sort_combo.setItemText(i, tr(title))
+        self.model.headerDataChanged.emit(Qt.Orientation.Horizontal, 0, 4)
+        if self.model.visible_count:
+            self.model.dataChanged.emit(
+                self.model.index(0, 0), self.model.index(self.model.visible_count - 1, 4)
+            )
+        root_model = self.directory_tree.directory_model
+        root_index = root_model.index(0, 0)
+        if root_index.isValid():
+            root_model.dataChanged.emit(root_index, root_index)
+        if self.changes_model.visible_count:
+            self.changes_model.dataChanged.emit(
+                self.changes_model.index(0, 0),
+                self.changes_model.index(self.changes_model.visible_count - 1, 0),
+            )
+        if hasattr(self, "panes"):
+            self.update_backup_summary()
+            self.update_work_status()
         if hasattr(self, "panes"):
             self.update_actions()
 
@@ -936,7 +982,8 @@ class MainWindow(QMainWindow):
         header.setSectionsClickable(True)
         header.setSortIndicatorShown(True)
         header.sectionClicked.connect(self.sort_by_column)
-        toolbar.addWidget(QLabel(" 图标 "))
+        self.icon_label = QLabel(" 图标 ")
+        toolbar.addWidget(self.icon_label)
         self.icon_slider = QSlider(Qt.Orientation.Horizontal)
         self.icon_slider.setRange(24, 128)
         self.icon_slider.setValue(self.settings.value("icons", 48, type=int))
@@ -971,7 +1018,7 @@ class MainWindow(QMainWindow):
         self.apply_changes_button = QPushButton("应用更改")
         self.apply_changes_button.clicked.connect(self.save_action.trigger)
         layout.addWidget(self.apply_changes_button)
-        discard = QPushButton("放弃所有更改")
+        discard = self.discard_button = QPushButton("放弃所有更改")
         discard.clicked.connect(self.discard)
         layout.addWidget(discard)
         self.changes_dock.setWidget(container)
@@ -1298,15 +1345,28 @@ class MainWindow(QMainWindow):
         self.restore_view_state(state, focus=navigating and focus_browser)
         self.directory_tree.sync(self.session, location)
         self.changes_model.set_changes(self.session.changes if self.session else ())
+        self.update_backup_summary()
+        self.update_actions()
+        self.update_work_status()
+
+        QTimer.singleShot(0, self.check_plist_editors)
+
+    def update_backup_summary(self):
+        tr = self.language_context.translate
         if self.session:
             device = self.session.info.get("Device Name", self.session.root.name)
             dirty = self.session.dirty
-            category = "可编辑副本" if self.session.editable else "原始备份"
+            category = tr("Editable Copy") if self.session.editable else tr("Original Backup")
             self.setWindowTitle(f"{'* ' if dirty else ''}{device} · {category} — PlanBak")
             self.backup_status.setText(
-                f"{device} · {category} · {'加密' if self.session.encrypted else '未加密'} · "
-                f"{len(rows) - (0 if location.is_root else 1)} 个项目 · "
-                f"{len(self.session.changes)} 个已更改项目"
+                tr(
+                    "{device} · {category} · {encryption} · {items} items · {changes} changed items",
+                    device=device,
+                    category=category,
+                    encryption=tr("Encrypted") if self.session.encrypted else tr("Unencrypted"),
+                    items=len(self.model.rows) - (0 if self.current_location().is_root else 1),
+                    changes=len(self.session.changes),
+                )
             )
             self.backup_status.setToolTip(f"{self.backup_status.text()}\n{self.session.root}")
             self.statusBar().setToolTip("")
@@ -1317,12 +1377,8 @@ class MainWindow(QMainWindow):
         else:
             self.setWindowTitle("PlanBak")
             self.changes_dock.hide()
-            self.backup_status.setText("从“文件 → 打开备份”打开 iOS 备份")
+            self.backup_status.setText(tr("Open an iOS backup from File → Open Backup"))
             self.backup_status.setToolTip("")
-        self.update_actions()
-        self.update_work_status()
-
-        QTimer.singleShot(0, self.check_plist_editors)
 
     def set_view(self, grid):
         outgoing = self.remember_view_state()
@@ -1396,10 +1452,45 @@ class MainWindow(QMainWindow):
     def update_work_status(self):
         self.statusBar().clearMessage()
         if not self._status_jobs:
-            self.work_label.setText("就绪")
+            self.work_label.setText(self.language_context.translate("Ready"))
             self.work_progress.hide()
             return
         text, done, total = next(reversed(self._status_jobs.values()))
+        progress_sources = {
+            "正在读取备份…": "Reading backup…",
+            "正在建立备份索引…": "Building backup index…",
+            "正在创建备份副本…": "Creating backup copy…",
+            "正在打开文件…": "Opening file…",
+            "正在向其他备份复制项目…": "Copying items to another backup…",
+            "正在复制项目到当前备份…": "Copying items to this backup…",
+            "正在清理旧会话缓存…": "Cleaning old session cache…",
+        }
+        operations = {
+            "切换到备份副本": "Switching to backup copy",
+            "应用外部编辑": "Applying external edits",
+            "读取备份": "Reading backup",
+            "关闭备份并清理缓存": "Closing backup and clearing cache",
+            "添加项目": "Adding items",
+            "删除项目": "Deleting items",
+            "放弃更改": "Discarding changes",
+            "准备放弃更改": "Preparing to discard changes",
+            "导出项目": "Exporting items",
+            "打开文件": "Opening file",
+            "重新加载文件": "Reloading file",
+            "打开项目": "Opening item",
+            "保存外部编辑": "Saving external edits",
+            "移动项目": "Moving items",
+            "复制项目到当前备份": "Copying items to this backup",
+            "清理旧会话缓存": "Cleaning old session cache",
+        }
+        if text in progress_sources:
+            text = self.language_context.translate(progress_sources[text])
+        elif text.startswith("正在") and text.endswith("…") and text[2:-1] in operations:
+            text = self.language_context.translate(operations[text[2:-1]] + "…")
+        elif text.startswith("正在导出："):
+            text = self.language_context.translate(
+                "Exporting: {name}", name=text[len("正在导出：") :]
+            )
         self.work_label.setText(text)
         self.work_progress.setRange(0, 1000 if total > 0 else 0)
         if total > 0:
@@ -2111,7 +2202,7 @@ class MainWindow(QMainWindow):
         self.changes_list.setCurrentIndex(index)
         token = index.data(Qt.ItemDataRole.UserRole)
         menu = QMenu(self)
-        revert = menu.addAction("放弃此更改")
+        revert = menu.addAction(self.language_context.translate("Discard This Change"))
         if menu.exec(self.changes_list.viewport().mapToGlobal(point)) == revert:
             self.revert_pending(token)
 
@@ -3184,17 +3275,19 @@ class MainWindow(QMainWindow):
             "directory",
             "parent",
         ):
-            action = menu.addAction("打开文件夹")
+            action = menu.addAction(self.language_context.translate("Open Folder"))
             action.triggered.connect(lambda: self.activate(index))
         else:
             menu.addAction(self.open_action)
         menu.addAction(self.extract_action)
         rows = self.selected_rows()
         if len(rows) == 1 and rows[0].kind == "file":
-            hex_action = menu.addAction("以十六进制查看")
+            hex_action = menu.addAction(self.language_context.translate("View as Hexadecimal"))
             hex_action.setEnabled(not self.task)
             hex_action.triggered.connect(self.open_hex)
-            external = menu.addAction("使用系统应用打开")
+            external = menu.addAction(
+                self.language_context.translate("Open with System Application")
+            )
             external.setEnabled(not self.task)
             external.triggered.connect(lambda: self.open_file(external=True))
         menu.addSeparator()
