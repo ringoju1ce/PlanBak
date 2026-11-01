@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
 
 from .dialogs import DocumentWindow, FixedDialog
 from .document_ui import DocumentStatus, DocumentToolBar, document_buttons
+from .i18n import LanguageContext
 from .pane_focus import BrowserPaneFocus
 from .sqlite_database import PAGE_SIZE, QueryResult, query, quote_identifier, schema
 from .viewer_tasks import ViewerTask
@@ -95,6 +96,9 @@ class SQLiteViewer(DocumentWindow):
 
     def __init__(self, snapshot, name, parent=None):
         super().__init__(parent)
+        if self.language_context is None:
+            self.language_context = LanguageContext(parent=self)
+        self._status_source, self._status_values = None, {}
         self.snapshot = snapshot
         self.name = name
         self.task = None
@@ -113,7 +117,7 @@ class SQLiteViewer(DocumentWindow):
         self.setWindowTitle(f"{name} — SQLite 查看器（只读）")
         self.setModal(False)
         layout = QVBoxLayout(self)
-        toolbar = DocumentToolBar("SQLite 操作", self)
+        toolbar = self.toolbar = DocumentToolBar("SQLite 操作", self)
         self.reload_button = toolbar.command("重新加载", self.reload_requested, icon="view-refresh")
         self.cancel_button = toolbar.command("取消查询", self.cancel_query, icon="process-stop")
         toolbar.stretch()
@@ -149,7 +153,7 @@ class SQLiteViewer(DocumentWindow):
         self.table.doubleClicked.connect(self.show_cell)
         self.table.horizontalHeader().setDefaultSectionSize(160)
         page_layout.addWidget(self.table)
-        pages = DocumentToolBar("查询结果分页", self)
+        pages = self.pages = DocumentToolBar("查询结果分页", self)
         self.previous_button = pages.command(
             "上一页", lambda: self.load_page(-PAGE_SIZE), icon="go-previous"
         )
@@ -170,13 +174,14 @@ class SQLiteViewer(DocumentWindow):
         sql_page = QWidget()
         sql_layout = QVBoxLayout(sql_page)
         sql_layout.setContentsMargins(0, 0, 0, 0)
-        sql_layout.addWidget(QLabel("输入单条只读 SELECT / WITH 查询；结果显示在“数据”中。"))
+        self.sql_hint = QLabel("输入单条只读 SELECT / WITH 查询；结果显示在“数据”中。")
+        sql_layout.addWidget(self.sql_hint)
         self.code = QPlainTextEdit()
         self.code.setAccessibleName("只读 SQL 查询")
         self.code.setFont(QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont))
         self.code.setPlaceholderText("SELECT * FROM sqlite_schema;")
         sql_layout.addWidget(self.code)
-        query_bar = DocumentToolBar("SQL 查询操作", self)
+        query_bar = self.query_bar = DocumentToolBar("SQL 查询操作", self)
         self.execute_button = query_bar.command("执行查询", self.execute_sql, hint="Ctrl+Return")
         sql_layout.addWidget(query_bar)
         self.tabs.addTab(sql_page, "SQL 查询")
@@ -186,7 +191,8 @@ class SQLiteViewer(DocumentWindow):
         self.status = DocumentStatus(details=False)
         layout.addWidget(self.status)
         buttons = document_buttons(QDialogButtonBox.StandardButton.Close, self)
-        buttons.button(QDialogButtonBox.StandardButton.Close).setText("关闭")
+        self.close_button = buttons.button(QDialogButtonBox.StandardButton.Close)
+        self.close_button.setText("关闭")
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
         action = QAction(self)
@@ -196,7 +202,67 @@ class SQLiteViewer(DocumentWindow):
         self.panes = BrowserPaneFocus(self.tree, (self.table, self.structure, self.code), self)
         self.setMinimumSize(720, 480)
         self.resize(1080, 720)
+        self.language_context.changed.connect(self.retranslate)
+        self.retranslate()
         self.load_schema()
+
+    def update_title(self):
+        self.setWindowTitle(
+            self.language_context.translate("{name} — SQLite Viewer (Read-only)", name=self.name)
+        )
+
+    def set_status(self, source=None, **values):
+        self._status_source, self._status_values = source, values
+        values = {
+            k: self.language_context.error(v) if isinstance(v, Exception) else v
+            for k, v in values.items()
+        }
+        self.status.setText(self.language_context.translate(source, **values) if source else "")
+
+    def retranslate(self):
+        tr = self.language_context.translate
+        self.update_title()
+        self.tree.setHeaderLabels([tr("Tables and Views"), tr("Type")])
+        self.tree.setAccessibleName(tr("Database tables and views"))
+        self.table.setAccessibleName(tr("Read-only query results"))
+        self.structure.setAccessibleName(tr("Table structure and index SQL"))
+        self.code.setAccessibleName(tr("Read-only SQL query"))
+        self.tabs.setTabText(0, tr("Data"))
+        self.tabs.setTabText(1, tr("Structure and Indexes"))
+        self.tabs.setTabText(2, tr("SQL Query"))
+        self.sql_hint.setText(
+            tr("Enter a single read-only SELECT / WITH query; results appear under Data.")
+        )
+        self.close_button.setText(tr("Close"))
+        for button, label in (
+            (self.reload_button, "Reload"),
+            (self.cancel_button, "Cancel Query"),
+            (self.previous_button, "Previous Page"),
+            (self.next_button, "Next Page"),
+            (self.execute_button, "Run Query"),
+        ):
+            button.defaultAction().setText(tr(label))
+        for i in range(self.tree.topLevelItemCount()):
+            item = self.tree.topLevelItem(i)
+            item.setText(
+                1, tr("Table" if item.data(1, Qt.ItemDataRole.UserRole) == "table" else "View")
+            )
+        self.update_page_label()
+        self.set_status(self._status_source, **self._status_values)
+
+    def update_page_label(self):
+        result = self.model.result
+        if not self.object_name and self.mode == "table":
+            self.page_label.setText(self.language_context.translate("Up to 200 rows per page"))
+        else:
+            start = self.offset + 1 if result.rows else 0
+            self.page_label.setText(
+                self.language_context.translate(
+                    "Rows {start}–{end} · Up to 200 rows per page",
+                    start=start,
+                    end=self.offset + len(result.rows),
+                )
+            )
 
     def update_controls(self):
         busy = self.task is not None
@@ -212,7 +278,7 @@ class SQLiteViewer(DocumentWindow):
             return
         task = ViewerTask(function, self)
         self.task = task
-        self.status.setText("正在读取…")
+        self.set_status("Reading…")
         self.update_controls()
 
         def finished():
@@ -228,9 +294,9 @@ class SQLiteViewer(DocumentWindow):
                 self.update_controls()
                 return
             if task.cancelled.is_set():
-                self.status.setText("查询已取消")
+                self.set_status("Query canceled")
             elif task.error:
-                self.status.setText(f"无法读取：{task.error}")
+                self.set_status("Unable to read: {error}", error=task.error)
             else:
                 callback(task.result)
             self.update_controls()
@@ -250,13 +316,19 @@ class SQLiteViewer(DocumentWindow):
             self.tree.clear()
             for name, kind, sql, table in objects:
                 if kind in ("table", "view"):
-                    item = QTreeWidgetItem([name, "表" if kind == "table" else "视图"])
+                    item = QTreeWidgetItem(
+                        [
+                            name,
+                            self.language_context.translate("Table" if kind == "table" else "View"),
+                        ]
+                    )
+                    item.setData(1, Qt.ItemDataRole.UserRole, kind)
                     item.setData(0, Qt.ItemDataRole.UserRole, name)
                     item.setToolTip(0, "<qt><pre>" + escape(name) + "</pre></qt>")
                     self.tree.addTopLevelItem(item)
-            self.status.clear()
+            self.set_status()
             self.model.set_result(QueryResult([], [], False))
-            self.page_label.setText("每页最多 200 行")
+            self.update_page_label()
 
         self.start(lambda cancel: schema(self.snapshot.path, cancel), loaded)
 
@@ -307,7 +379,7 @@ class SQLiteViewer(DocumentWindow):
             return
         self.sql = self.code.toPlainText().strip()
         if not self.sql:
-            self.status.setText("请输入只读查询。")
+            self.set_status("Enter a read-only query.")
             return
         self.mode, self.offset = "sql", 0
         self.tabs.setCurrentIndex(0)
@@ -328,21 +400,8 @@ class SQLiteViewer(DocumentWindow):
         def loaded(result):
             self.model.set_result(result)
             self.sync_sort_indicator(applied=True)
-            start = self.offset + 1 if result.rows else 0
-            self.page_label.setText(
-                f"第 {start}–{self.offset + len(result.rows)} 行 · 每页最多 200 行"
-            )
-            self.status.setText(
-                " · ".join(
-                    filter(
-                        None,
-                        [
-                            "源文件已更改，当前显示旧快照；可重新加载。" if self.stale else "",
-                            "源文件已不可用，当前显示旧快照。" if not self.available else "",
-                        ],
-                    )
-                )
-            )
+            self.update_page_label()
+            self.set_source_state(available=self.available, stale=self.stale)
 
         self.sync_sort_indicator()
         self.start(
@@ -395,9 +454,13 @@ class SQLiteViewer(DocumentWindow):
     def set_source_state(self, *, available=True, stale=False):
         self.available, self.stale = available, stale
         if not available:
-            self.status.setText("源文件已不可用，当前显示旧快照。")
+            self.set_status("The source file is unavailable; showing the previous snapshot.")
         elif stale:
-            self.status.setText("源文件已更改，当前显示旧快照；可重新加载。")
+            self.set_status(
+                "The source file has changed; showing the previous snapshot. You can reload it."
+            )
+        else:
+            self.set_status()
         self.update_controls()
 
     def replace_snapshot(self, snapshot, name):
@@ -405,7 +468,7 @@ class SQLiteViewer(DocumentWindow):
         self.available, self.stale = True, False
         self.object_name, self.offset = None, 0
         self.structure.clear()
-        self.setWindowTitle(f"{name} — SQLite 查看器（只读）")
+        self.update_title()
         self.load_schema()
 
     def reject(self):

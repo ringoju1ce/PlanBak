@@ -2705,7 +2705,7 @@ class MainWindow(QMainWindow):
             record.revision = revision
             if record.token in self.database_viewers:
                 record.viewer.set_source_state(stale=True)
-                record.viewer.status.setText(f"无法重新加载数据库：{exc}")
+                record.viewer.set_status("Unable to reload database: {error}", error=exc)
 
         def cleanup():
             if record.snapshot.directory != directory:
@@ -2738,10 +2738,10 @@ class MainWindow(QMainWindow):
                 continue
             if record.viewer.name != entry.name:
                 record.viewer.name = entry.name
-                record.viewer.setWindowTitle(f"{entry.name} — SQLite 查看器（只读）")
+                record.viewer.update_title()
             if not record.viewer.available:
                 record.viewer.set_source_state(stale=record.viewer.stale)
-                record.viewer.status.setText("源文件已恢复可用。")
+                record.viewer.set_status("The source file is available again.")
             if revision != record.revision:
                 self.reload_database(record, automatic=True)
                 return True
