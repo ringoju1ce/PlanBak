@@ -548,5 +548,12 @@
   "Modified file metadata exceeds the application’s 8 MiB limit; changes were not applied and the backup and staged content were preserved": "修改后的文件元数据超过程序的 8 MiB 资源上限；未应用更改，备份与暂挂内容均保留",
   "Applying changes did not complete and the current copy may be partially written; create a new copy from the original backup.": "应用更改未完成，当前副本可能已部分写入；请从原备份重新创建副本。",
   "The source image changed while being read; open it again.": "图片源文件在读取时发生变化，请重新打开。",
-  "Restore path is occupied: {path}; resolve changes at that path first": "还原路径已被占用：{path}；请先处理该路径上的更改"
+  "Restore path is occupied: {path}; resolve changes at that path first": "还原路径已被占用：{path}；请先处理该路径上的更改",
+  "Switch to Backup Copy": "切换到备份副本",
+  "Apply External Edits": "应用外部编辑",
+  "Prepare to Discard Changes": "准备放弃更改",
+  "Reload File": "重新加载文件",
+  "Save External Edits": "保存外部编辑",
+  "Copy Items to This Backup": "复制项目到当前备份",
+  "Clean Old Session Cache": "清理旧会话缓存"
 }

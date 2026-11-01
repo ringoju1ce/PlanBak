@@ -134,6 +134,14 @@ def message(parent, title, text, icon=QMessageBox.Icon.Information):
         "应用更改": "Apply Changes",
         "移动项目": "Move Items",
         "关闭备份并清理缓存": "Close Backup and Clear Cache",
+        "切换到备份副本": "Switch to Backup Copy",
+        "应用外部编辑": "Apply External Edits",
+        "准备放弃更改": "Prepare to Discard Changes",
+        "放弃更改": "Discard Changes",
+        "重新加载文件": "Reload File",
+        "保存外部编辑": "Save External Edits",
+        "复制项目到当前备份": "Copy Items to This Backup",
+        "清理旧会话缓存": "Clean Old Session Cache",
     }
     messages = {
         "此备份已在另一个窗口中打开。": "This backup is already open in another window.",
