@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
 
 from .dialogs import DocumentWindow, FixedDialog, FixedFileDialog, FixedMessageBox
 from .document_ui import DocumentStatus, DocumentToolBar, document_buttons
+from .i18n import LanguageContext
 from .plist_xml import PlistXmlError, XmlPane, parse_xml
 
 TYPES = (
@@ -459,6 +460,8 @@ class PlistEditor(DocumentWindow):
 
     def __init__(self, document, name, save_callback, parent=None):
         super().__init__(parent)
+        if self.language_context is None:
+            self.language_context = LanguageContext(parent=self)
         self.document, self.name, self.save_callback = document, name, save_callback
         self._skip_prompt = False
         self._data_identity = uuid.uuid4().hex
@@ -519,7 +522,8 @@ class PlistEditor(DocumentWindow):
         self.save_button = buttons.button(QDialogButtonBox.StandardButton.Save)
         self.save_button.setText("保存")
         self.save_button.setToolTip("保存（Ctrl+S）")
-        buttons.button(QDialogButtonBox.StandardButton.Close).setText("关闭")
+        self.close_button = buttons.button(QDialogButtonBox.StandardButton.Close)
+        self.close_button.setText("关闭")
         self.save_button.clicked.connect(self.save_document)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
@@ -534,9 +538,49 @@ class PlistEditor(DocumentWindow):
             action.setShortcutContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
             action.triggered.connect(method)
             target.addAction(action)
+        self.language_context.changed.connect(self.retranslate)
         self.rebuild()
+        self.retranslate()
         self.setMinimumSize(QSize(640, 420))
         self.resize(QSize(940, 650))
+
+    def retranslate(self):
+        tr = self.language_context.translate
+        self.tree_actions.setWindowTitle(tr("plist tree editing"))
+        self.tree_actions.setAccessibleName(tr("plist tree editing"))
+        for button, source in (
+            (self.add_button, "Add"),
+            (self.edit_button, "Edit"),
+            (self.delete_button, "Delete"),
+            (self.xml_button, "XML Editor"),
+        ):
+            button.defaultAction().setText(tr(source))
+            button.setAccessibleName(tr(source))
+        self.tree.setHeaderLabels([tr("Key / Index"), tr("Type"), tr("Value")])
+        self.tree.setAccessibleName(tr("plist keys, types, and values"))
+        self.save_button.setText(tr("Save"))
+        self.save_button.setToolTip(tr("Save (Ctrl+S)"))
+        self.close_button.setText(tr("Close"))
+        root = self.tree.topLevelItem(0)
+        if root:
+            root.setText(0, tr("(Root)"))
+
+            def update_item(item):
+                node = item.data(0, Qt.ItemDataRole.UserRole)
+                item.setText(2, self.node_preview(node))
+                for i in range(item.childCount()):
+                    update_item(item.child(i))
+
+            update_item(root)
+        self.set_source_state(available=self._available, conflict=self._conflict)
+
+    def node_preview(self, node):
+        tr = self.language_context.translate
+        if node.container:
+            return tr("{count} items", count=len(node.children))
+        if node.kind == "Data":
+            return tr("{count} bytes", count=len(node.value))
+        return node.preview[:160].replace("\n", " ↵ ")
 
     @property
     def dirty(self):
@@ -670,8 +714,8 @@ class PlistEditor(DocumentWindow):
             self.tree.setCurrentItem(item)
             item.setSelected(True)
         menu = QMenu(self)
-        edit = menu.addAction("编辑")
-        delete = menu.addAction("删除")
+        edit = menu.addAction(self.language_context.translate("Edit"))
+        delete = menu.addAction(self.language_context.translate("Delete"))
         edit.setEnabled(len(self.tree.selectedItems()) == 1)
         delete.setEnabled(bool(self.deletion_roots()))
         data_actions = {}
@@ -679,11 +723,11 @@ class PlistEditor(DocumentWindow):
         if node and node.kind == "Data":
             menu.addSeparator()
             for title, callback in (
-                ("以十六进制查看", self.view_data_hex),
-                ("导入 Data…", self.import_data),
-                ("导出 Data…", self.export_data),
+                ("View as Hexadecimal", self.view_data_hex),
+                ("Import Data…", self.import_data),
+                ("Export Data…", self.export_data),
             ):
-                action = menu.addAction(title)
+                action = menu.addAction(self.language_context.translate(title))
                 action.setEnabled(not self._busy)
                 data_actions[action] = callback
         chosen = menu.exec(self.tree.viewport().mapToGlobal(point))
@@ -695,7 +739,7 @@ class PlistEditor(DocumentWindow):
             data_actions[chosen]()
 
     def make_item(self, node, label, parent=None):
-        item = QTreeWidgetItem([label, node.kind, node.preview[:160].replace("\n", " ↵ ")])
+        item = QTreeWidgetItem([label, node.kind, self.node_preview(node)])
         item.setData(0, Qt.ItemDataRole.UserRole, node)
         item.setChildIndicatorPolicy(
             QTreeWidgetItem.ChildIndicatorPolicy.ShowIndicator
@@ -727,7 +771,7 @@ class PlistEditor(DocumentWindow):
         if self.tree.topLevelItemCount():
             collect(self.tree.topLevelItem(0))
         self.tree.clear()
-        root = self.make_item(self.document.root, "(根)")
+        root = self.make_item(self.document.root, self.language_context.translate("(Root)"))
 
         def restore(item):
             node = item.data(0, Qt.ItemDataRole.UserRole)
@@ -753,8 +797,15 @@ class PlistEditor(DocumentWindow):
         self.edit_button.defaultAction().setEnabled(node is not None)
         self.delete_button.defaultAction().setEnabled(bool(self.deletion_roots()))
         self.save_button.setEnabled(self.dirty and not self._busy and self._available)
+        tr = self.language_context.translate
+        kind = tr("Binary") if self.document.format == plistlib.FMT_BINARY else "XML"
         self.setWindowTitle(
-            f"{'* ' if self.dirty else ''}{self.name} — plist 编辑器 ({'二进制' if self.document.format == plistlib.FMT_BINARY else 'XML'})"
+            tr(
+                "{dirty}{name} — plist Editor ({format})",
+                dirty="* " if self.dirty else "",
+                name=self.name,
+                format=kind,
+            )
         )
 
     def set_busy(self, busy):
@@ -765,9 +816,13 @@ class PlistEditor(DocumentWindow):
         self._available, self._conflict = available, conflict
         extra = ""
         if not available:
-            extra = "\n源文件已被删除或替换；撤销删除后可继续保存。"
+            extra = self.language_context.translate(
+                "The source file was deleted or replaced; undo the deletion to save."
+            )
         elif conflict:
-            extra = "\n备份中的文件已有更新；保存前将要求确认覆盖。"
+            extra = self.language_context.translate(
+                "The backup file has changed; you will be asked before overwriting it."
+            )
         self.status.setText(extra.strip())
         self.update_actions()
 
