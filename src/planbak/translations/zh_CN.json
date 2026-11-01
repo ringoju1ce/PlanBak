@@ -495,7 +495,7 @@
   "Destination is not a folder: {name}": "目标不是文件夹：{name}",
   "Cannot replace a folder with a file: {name}": "不能用文件替换文件夹：{name}",
   "Output backup is missing file data: {file_id}": "输出备份缺少文件数据：{file_id}",
-  "Unable to read image: {error}": "无法读取图片：{exc}",
+  "Unable to read image: {error}": "无法读取图片：{error}",
   "The externally edited file was moved or deleted: {name}": "外部编辑文件已被移动或删除：{name}",
   "Unable to decode image: {error}": "无法解码图片：{error}",
   "Status and Details": "状态与说明",
