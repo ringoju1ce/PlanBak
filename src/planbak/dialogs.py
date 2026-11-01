@@ -64,6 +64,14 @@ class DialogTitleBar(QWidget):
         self.close_button.clicked.connect(dialog.close)
         layout.addWidget(self.close_button)
         dialog.windowTitleChanged.connect(self.title.setText)
+        if dialog.language_context:
+            dialog.language_context.changed.connect(self.retranslate)
+            self.retranslate()
+
+    def retranslate(self):
+        text = self.window().language_context.translate("Close")
+        self.close_button.setAccessibleName(text)
+        self.close_button.setToolTip(text)
 
     def changeEvent(self, event):
         super().changeEvent(event)
@@ -222,6 +230,38 @@ class FixedMessageBox(FixedDialogMixin, QMessageBox):
         self.setWindowTitle(title)
         self.setText(text)
         self.setStandardButtons(buttons)
+        self._translated_standard_buttons = {}
+        if self.language_context:
+            self.language_context.changed.connect(self._translate_standard_buttons)
+
+    def _translate_standard_buttons(self):
+        if not self.language_context:
+            return
+        labels = {
+            QMessageBox.StandardButton.Ok: "OK",
+            QMessageBox.StandardButton.Cancel: "Cancel",
+            QMessageBox.StandardButton.Yes: "Yes",
+            QMessageBox.StandardButton.No: "No",
+            QMessageBox.StandardButton.Save: "Save",
+            QMessageBox.StandardButton.Discard: "Discard",
+            QMessageBox.StandardButton.Close: "Close",
+            QMessageBox.StandardButton.Retry: "Retry",
+        }
+        for standard, source in labels.items():
+            button = self.button(standard)
+            if not button:
+                continue
+            previous = self._translated_standard_buttons.get(standard)
+            if previous is None:
+                probe = QMessageBox()
+                probe.setStandardButtons(standard)
+                if button.text() != probe.button(standard).text():
+                    continue
+            elif button.text() != previous:
+                continue
+            translated = self.language_context.translate(source)
+            button.setText(translated)
+            self._translated_standard_buttons[standard] = translated
 
     def setVisible(self, visible):
         # QMessageBox resolves Escape/close before delivering showEvent.
@@ -229,6 +269,8 @@ class FixedMessageBox(FixedDialogMixin, QMessageBox):
         if visible and not self.buttons():
             self.setStandardButtons(QMessageBox.StandardButton.Ok)
             self.setEscapeButton(QMessageBox.StandardButton.Ok)
+        if visible:
+            self._translate_standard_buttons()
         super().setVisible(visible)
         if visible:
             label = self.findChild(QLabel, "qt_msgbox_label")

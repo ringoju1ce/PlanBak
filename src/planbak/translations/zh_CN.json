@@ -283,5 +283,9 @@
   "Skip": "跳过",
   "Delete Items": "删除项目",
   "Delete {names}?\nThis affects {count} files and folders. You can discard this change before applying changes to the backup copy.": "删除 {names}？\n共影响 {count} 个文件和文件夹。保存备份副本前可以在更改列表中放弃此更改。",
-  "The changes you made will not be applied.": "所做的改动不会被应用"
+  "The changes you made will not be applied.": "所做的改动不会被应用",
+  "Yes": "是",
+  "No": "否",
+  "Discard": "放弃",
+  "Retry": "重试"
 }
