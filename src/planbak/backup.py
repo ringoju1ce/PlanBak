@@ -814,7 +814,8 @@ class BackupSession(SessionOverlay):
                         if len(blob) > MAX_METADATA_BYTES:
                             raise BackupError(
                                 "修改后的文件元数据超过程序的 8 MiB 资源上限；"
-                                "未应用更改，备份与暂挂内容均保留"
+                                "未应用更改，备份与暂挂内容均保留",
+                                english="Modified file metadata exceeds the application’s 8 MiB limit; changes were not applied and the backup and staged content were preserved",
                             )
                         out_db.execute(
                             "INSERT INTO Files(fileID,domain,relativePath,flags,file) VALUES(?,?,?,?,?)",
@@ -956,7 +957,8 @@ class BackupSession(SessionOverlay):
                         os.replace(work / "Manifest.db", destination / "Manifest.db")
                     except OSError as exc:
                         raise BackupError(
-                            "应用更改未完成，当前副本可能已部分写入；请从原备份重新创建副本。"
+                            "应用更改未完成，当前副本可能已部分写入；请从原备份重新创建副本。",
+                            english="Applying changes did not complete and the current copy may be partially written; create a new copy from the original backup.",
                         ) from exc
                 else:
                     write_marker(work)

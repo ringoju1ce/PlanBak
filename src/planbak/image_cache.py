@@ -96,7 +96,10 @@ class ImageCache:
         with self.token_lock(token, cancel), self.session_lock(cancel):
             _, current = self.source(token, cancel)
             if current != revision:
-                raise BackupError("图片源文件在读取时发生变化，请重新打开。")
+                raise BackupError(
+                    "图片源文件在读取时发生变化，请重新打开。",
+                    english="The source image changed while being read; open it again.",
+                )
             size = path.stat().st_size
             if size > MAX_FILE_BYTES:
                 raise BackupError(

@@ -713,7 +713,9 @@ class SessionOverlay:
                     occupant = self.at(entry.domain, entry.path)
                     if occupant and occupant.token != key and occupant.token not in updates:
                         raise BackupError(
-                            f"还原路径已被占用：{full_path(entry)}；请先处理该路径上的更改"
+                            f"还原路径已被占用：{full_path(entry)}；请先处理该路径上的更改",
+                            english="Restore path is occupied: {path}; resolve changes at that path first",
+                            values={"path": full_path(entry)},
                         )
             return RevertPlan(self.signature, updates, reset, locations)
 

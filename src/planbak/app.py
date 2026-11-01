@@ -2127,7 +2127,10 @@ class MainWindow(QMainWindow):
                 cache.clear()
             session.close()
             if session.workspace.exists():
-                raise BackupError("未能完全清理会话临时文件夹，请检查文件占用或权限")
+                raise BackupError(
+                    "未能完全清理会话临时文件夹，请检查文件占用或权限",
+                    english="The session temporary folder could not be fully cleared; check file usage and permissions",
+                )
 
         def cleaned(_):
             release()
@@ -3610,7 +3613,10 @@ class MainWindow(QMainWindow):
     def borrow_transfer(self, session_id):
         source = self.manager.window_for_session(session_id)
         if source is None or source is self:
-            raise BackupError("来源备份会话已关闭，或不属于当前程序；请先导出项目再添加。")
+            raise BackupError(
+                "来源备份会话已关闭，或不属于当前程序；请先导出项目再添加。",
+                english="The source backup session is closed or belongs to another application; export items before adding them.",
+            )
         if (
             source.task
             or source.copy_task
@@ -3619,7 +3625,10 @@ class MainWindow(QMainWindow):
             or source._readonly_closing
             or source.force_close
         ):
-            raise BackupError("来源备份正在处理其他操作，请稍后复制")
+            raise BackupError(
+                "来源备份正在处理其他操作，请稍后复制",
+                english="The source backup is busy; try copying again later",
+            )
         session = source.session
         token = session.begin_transfer()
         source._outgoing_transfers += 1
@@ -3635,7 +3644,7 @@ class MainWindow(QMainWindow):
                 or not tokens
                 or any(not isinstance(t, str) for t in tokens)
             ):
-                raise BackupError("无效的拖放项目列表")
+                raise BackupError("无效的拖放项目列表", english="Invalid list of dropped items")
             source = borrowed.source
             source._status_jobs[borrowed.token] = ("正在向其他备份复制项目…", 0, 0)
             source.update_actions()

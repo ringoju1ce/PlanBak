@@ -540,5 +540,13 @@
   "The original backup changed during copying; the copy was not published": "复制期间原备份发生变化，副本未发布",
   "The destination was created by another process; the existing folder was not overwritten": "保存目标已被创建，未覆盖现有文件夹",
   "Enter a valid folder path": "请输入有效的文件夹路径",
-  "The folder does not exist": "文件夹不存在"
+  "The folder does not exist": "文件夹不存在",
+  "The source backup session is closed or belongs to another application; export items before adding them.": "来源备份会话已关闭，或不属于当前程序；请先导出项目再添加。",
+  "The source backup is busy; try copying again later": "来源备份正在处理其他操作，请稍后复制",
+  "The session temporary folder could not be fully cleared; check file usage and permissions": "未能完全清理会话临时文件夹，请检查文件占用或权限",
+  "Invalid list of dropped items": "无效的拖放项目列表",
+  "Modified file metadata exceeds the application’s 8 MiB limit; changes were not applied and the backup and staged content were preserved": "修改后的文件元数据超过程序的 8 MiB 资源上限；未应用更改，备份与暂挂内容均保留",
+  "Applying changes did not complete and the current copy may be partially written; create a new copy from the original backup.": "应用更改未完成，当前副本可能已部分写入；请从原备份重新创建副本。",
+  "The source image changed while being read; open it again.": "图片源文件在读取时发生变化，请重新打开。",
+  "Restore path is occupied: {path}; resolve changes at that path first": "还原路径已被占用：{path}；请先处理该路径上的更改"
 }
