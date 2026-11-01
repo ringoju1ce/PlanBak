@@ -508,7 +508,7 @@ class PlistEditor(DocumentWindow):
         self.tree.itemDoubleClicked.connect(self.edit_node)
         self.pages = QStackedWidget()
         self.pages.addWidget(self.tree)
-        self.xml = XmlPane()
+        self.xml = XmlPane(self)
         self.pages.addWidget(self.xml)
         self.xml.code.textChanged.connect(self.xml_changed)
         self.xml.tree_requested.connect(lambda: self.switch_mode(0))
@@ -546,6 +546,7 @@ class PlistEditor(DocumentWindow):
 
     def retranslate(self):
         tr = self.language_context.translate
+        self.xml.retranslate()
         self.tree_actions.setWindowTitle(tr("plist tree editing"))
         self.tree_actions.setAccessibleName(tr("plist tree editing"))
         for button, source in (

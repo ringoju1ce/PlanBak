@@ -325,8 +325,12 @@ class XmlSearchDialog(FixedDialog):
         self.replace_field.setPlaceholderText("替换为")
         self.replace_field.setAccessibleName("替换文本")
         row.addWidget(self.replace_field, 1)
-        for label, method in (("替换", pane.replace_one), ("全部替换", pane.replace_all)):
-            button = QPushButton(label)
+        for label, method in (
+            ("replace_button", pane.replace_one),
+            ("replace_all_button", pane.replace_all),
+        ):
+            button = QPushButton()
+            setattr(self, label, button)
             button.setAutoDefault(False)
             button.clicked.connect(method)
             row.addWidget(button)
@@ -343,7 +347,23 @@ class XmlSearchDialog(FixedDialog):
         self.save_action.setShortcutContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
         self.save_action.triggered.connect(pane.save_requested)
         self.addAction(self.save_action)
+        self.language_context.changed.connect(self.retranslate)
+        self.retranslate()
         self.lock_size(QSize(640, 190))
+
+    def retranslate(self):
+        tr = self.language_context.translate
+        self.setWindowTitle(tr("Find and Replace"))
+        self.find_field.setPlaceholderText(tr("Find (plain text)"))
+        self.find_field.setAccessibleName(tr("Find text"))
+        self.replace_field.setPlaceholderText(tr("Replace with"))
+        self.replace_field.setAccessibleName(tr("Replacement text"))
+        self.case_sensitive.setText(tr("Case sensitive"))
+        self.previous_button.setText(tr("Previous"))
+        self.next_button.setText(tr("Next"))
+        self.replace_button.setText(tr("Replace"))
+        self.replace_all_button.setText(tr("Replace All"))
+        self.parentWidget().refresh_matches()
 
 
 class XmlPane(QWidget):
@@ -352,6 +372,7 @@ class XmlPane(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.language_context = parent.language_context
         self.search_dialog = None
         self._replacing = False
         self.search_actions = []
@@ -360,7 +381,7 @@ class XmlPane(QWidget):
         self.code = XmlTextEdit()
         self.code.setAccessibleName("plist XML 内容")
         self.code.palette_changed.connect(self.refresh_matches)
-        toolbar = DocumentToolBar("XML 编辑操作", self)
+        toolbar = self.toolbar = DocumentToolBar("XML 编辑操作", self)
         self.undo_button = toolbar.command(
             "撤销", self.code.undo, icon="edit-undo", hint=QKeySequence.StandardKey.Undo
         )
@@ -392,6 +413,20 @@ class XmlPane(QWidget):
             )
             self.addAction(action)
             self.search_actions.append(action)
+
+    def retranslate(self):
+        tr = self.language_context.translate
+        self.toolbar.setWindowTitle(tr("XML editing"))
+        self.toolbar.setAccessibleName(tr("XML editing"))
+        self.code.setAccessibleName(tr("plist XML content"))
+        for button, source in (
+            (self.undo_button, "Undo"),
+            (self.redo_button, "Redo"),
+            (self.search_button, "Find"),
+            (self.tree_button, "Tree Editor"),
+        ):
+            button.defaultAction().setText(tr(source))
+            button.setAccessibleName(tr(source))
 
     def ensure_search(self):
         if self.search_dialog is None:
@@ -487,7 +522,13 @@ class XmlPane(QWidget):
                 )
                 selections.append(selection)
         self.code.set_search_selections(selections)
-        dialog.result.setText(f"{count}{'+' if count == 1000 else ''} 处匹配" if query else "")
+        dialog.result.setText(
+            self.language_context.translate(
+                "{count} matches", count=f"{count}{'+' if count == 1000 else ''}"
+            )
+            if query
+            else ""
+        )
 
     def find(self, backwards=False):
         query = self.find_field.text()
@@ -503,7 +544,7 @@ class XmlPane(QWidget):
             found = self.code.find(query, self.flags(backwards))
         self.refresh_matches()
         if not found:
-            self.result.setText("未找到")
+            self.result.setText(self.language_context.translate("Not found"))
         if self.search_dialog.isVisible():
             self.find_field.setFocus()
         return found
@@ -543,4 +584,6 @@ class XmlPane(QWidget):
             cursor.endEditBlock()
             self._replacing = False
         self.refresh_matches()
-        self.result.setText(f"已替换 {count} 处")
+        self.result.setText(
+            self.language_context.translate("Replaced {count} matches", count=count)
+        )

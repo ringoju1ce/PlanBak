@@ -165,5 +165,22 @@
   "The backup file has changed; you will be asked before overwriting it.": "备份中的文件已有更新；保存前将要求确认覆盖。",
   "View as Hexadecimal": "以十六进制查看",
   "Import Data…": "导入 Data…",
-  "Export Data…": "导出 Data…"
+  "Export Data…": "导出 Data…",
+  "Find and Replace": "搜索与替换",
+  "Find (plain text)": "查找（纯文本）",
+  "Find text": "查找文本",
+  "Replace with": "替换为",
+  "Replacement text": "替换文本",
+  "Case sensitive": "区分大小写",
+  "Replace": "替换",
+  "Replace All": "全部替换",
+  "XML editing": "XML 编辑操作",
+  "plist XML content": "plist XML 内容",
+  "Undo": "撤销",
+  "Redo": "重做",
+  "Find": "搜索",
+  "Tree Editor": "树形编辑器",
+  "{count} matches": "{count} 处匹配",
+  "Not found": "未找到",
+  "Replaced {count} matches": "已替换 {count} 处"
 }
