@@ -151,38 +151,54 @@ class Task(QThread):
 class PasswordDialog(QDialog):
     def __init__(self, parent):
         super().__init__(parent)
-        self.setWindowTitle("解锁加密备份")
+        if self.language_context is None:
+            self.language_context = LanguageContext(parent=self)
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel("输入这份备份的加密密码："))
+        self.prompt = QLabel(self)
+        layout.addWidget(self.prompt)
         self.password = QLineEdit()
         self.password.setEchoMode(QLineEdit.EchoMode.Password)
-        self.password.setAccessibleName("备份加密密码")
         layout.addWidget(self.password)
-        reveal = QCheckBox("显示密码")
-        reveal.toggled.connect(
+        self.reveal = QCheckBox(self)
+        self.reveal.toggled.connect(
             lambda enabled: self.password.setEchoMode(
                 QLineEdit.EchoMode.Normal if enabled else QLineEdit.EchoMode.Password
             )
         )
-        layout.addWidget(reveal)
+        layout.addWidget(self.reveal)
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
+        self.ok_button = buttons.button(QDialogButtonBox.StandardButton.Ok)
+        self.cancel_button = buttons.button(QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+        self.language_context.changed.connect(self.retranslate)
+        self.retranslate()
         self.lock_size(QSize(380, 180))
+
+    def retranslate(self):
+        tr = self.language_context.translate
+        self.setWindowTitle(tr("Unlock Encrypted Backup"))
+        self.prompt.setText(tr("Enter the password for this backup:"))
+        self.password.setAccessibleName(tr("Backup password"))
+        self.reveal.setText(tr("Show password"))
+        self.ok_button.setText(tr("OK"))
+        self.cancel_button.setText(tr("Cancel"))
 
 
 class BackupChoiceDialog(QDialog):
     def __init__(self, candidates, parent=None):
         super().__init__(parent)
+        if self.language_context is None:
+            self.language_context = LanguageContext(parent=self)
         self.candidates = candidates
-        self.setWindowTitle("选择备份")
+        self._rows = []
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel("请选择要打开的备份："))
+        self.prompt = QLabel(self)
+        layout.addWidget(self.prompt)
         self.table = QTableWidget(len(candidates), 3, self)
-        self.table.setHorizontalHeaderLabels(["设备名称", "备份日期", "文件夹名称"])
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -193,7 +209,7 @@ class BackupChoiceDialog(QDialog):
                 info = load_plist(path / "Info.plist")
             except (OSError, BackupError):
                 info = {}
-            name = info.get("Device Name") or info.get("Display Name") or "未知"
+            name = info.get("Device Name") or info.get("Display Name") or None
             date = info.get("Last Backup Date")
             for metadata in ("Status.plist", "Manifest.plist"):
                 if isinstance(date, datetime):
@@ -202,25 +218,45 @@ class BackupChoiceDialog(QDialog):
                     date = load_plist(path / metadata).get("Date")
                 except (OSError, BackupError):
                     date = None
-            values = (
-                str(name),
-                date.strftime("%Y-%m-%d %H:%M:%S") if isinstance(date, datetime) else "未知",
-                path.name,
+            self._rows.append(
+                (
+                    str(name) if name is not None else None,
+                    date.strftime("%Y-%m-%d %H:%M:%S") if isinstance(date, datetime) else None,
+                    path.name,
+                )
             )
-            for column, value in enumerate(values):
-                item = QTableWidgetItem(value)
-                item.setToolTip(value)
-                self.table.setItem(row, column, item)
+            for column in range(3):
+                self.table.setItem(row, column, QTableWidgetItem())
         self.table.selectRow(0)
         self.table.cellDoubleClicked.connect(lambda *_: self.accept())
         layout.addWidget(self.table)
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
+        self.ok_button = buttons.button(QDialogButtonBox.StandardButton.Ok)
+        self.cancel_button = buttons.button(QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+        self.language_context.changed.connect(self.retranslate)
+        self.retranslate()
         self.lock_size(QSize(680, 360))
+
+    def retranslate(self):
+        tr = self.language_context.translate
+        self.setWindowTitle(tr("Choose Backup"))
+        self.prompt.setText(tr("Choose a backup to open:"))
+        self.table.setHorizontalHeaderLabels(
+            [tr("Device Name"), tr("Backup Date"), tr("Folder Name")]
+        )
+        for row, values in enumerate(self._rows):
+            for column, value in enumerate(values):
+                item = self.table.item(row, column)
+                text = value if value is not None else tr("Unknown")
+                item.setText(text)
+                item.setToolTip(text)
+        self.ok_button.setText(tr("OK"))
+        self.cancel_button.setText(tr("Cancel"))
 
     def selected_path(self):
         row = self.table.currentRow()

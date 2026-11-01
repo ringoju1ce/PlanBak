@@ -1,4 +1,24 @@
 {
   "English": "English",
-  "Simplified Chinese": "简体中文"
+  "Simplified Chinese": "简体中文",
+  "About PlanBak": "关于 PlanBak",
+  "Version {version}": "版本 {version}",
+  "iOS backup browser and editor": "iOS 备份浏览与编辑工具",
+  "Browse local backups like a file manager, manage files and folders, and copy items between backup windows.": "以文件管理器的方式浏览本地备份，管理文件与文件夹，在多个备份窗口之间复制项目。",
+  "Built-in plist editor and SQLite, image, and hexadecimal viewers.": "内置 plist 编辑器、SQLite 查看器、图片查看器和十六进制查看器。",
+  "Supports encrypted and unencrypted backups. Changes are kept in the session until applied to an editable copy, preserving the original backup.": "支持加密与未加密备份。更改先保存在会话中，应用更改时写入可编辑副本，保留原始备份。",
+  "Built with Python and Qt": "基于 Python 与 Qt 构建",
+  "Close": "关闭",
+  "Choose Backup": "选择备份",
+  "Choose a backup to open:": "请选择要打开的备份：",
+  "Device Name": "设备名称",
+  "Backup Date": "备份日期",
+  "Folder Name": "文件夹名称",
+  "Unknown": "未知",
+  "OK": "确定",
+  "Cancel": "取消",
+  "Unlock Encrypted Backup": "解锁加密备份",
+  "Enter the password for this backup:": "输入这份备份的加密密码：",
+  "Backup password": "备份加密密码",
+  "Show password": "显示密码"
 }
