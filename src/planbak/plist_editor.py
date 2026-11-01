@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
-from PySide6.QtCore import QDate, QRegularExpression, QSize, Qt, QTime, Signal
+from PySide6.QtCore import QDate, QLocale, QRegularExpression, QSize, Qt, QTime, Signal
 from PySide6.QtGui import QAction, QFontDatabase, QKeySequence, QRegularExpressionValidator
 from PySide6.QtWidgets import (
     QComboBox,
@@ -279,7 +279,11 @@ class DateValue(QWidget):
         layout.addRow("小数秒（六位）：0.", self.fraction)
         self.form = layout
 
-    def retranslate(self, tr):
+    def retranslate(self, tr, language):
+        locale = QLocale(language)
+        self.date.setLocale(locale)
+        self.time.setLocale(locale)
+        self.date.calendarWidget().setLocale(locale)
         for widget, text in (
             (self.date, "Date (UTC):"),
             (self.time, "Time (UTC):"),
@@ -416,7 +420,7 @@ class ValueDialog(FixedDialog):
         self.setWindowTitle(tr("Edit plist Item"))
         self.form.labelForField(self.key_field).setText(tr("Key:"))
         self.form.labelForField(self.type_field).setText(tr("Type:"))
-        self.date_field.retranslate(tr)
+        self.date_field.retranslate(tr, self.language_context.language)
         self.data_preview.setAccessibleName(tr("Data ASCII preview (read-only)"))
         self.data_note.setText(
             tr(
