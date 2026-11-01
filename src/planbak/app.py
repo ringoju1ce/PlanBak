@@ -1758,26 +1758,42 @@ class MainWindow(QMainWindow):
         if not self.session.dirty and not external:
             continuation()
             return
-        save_description = (
-            "应用更改到当前可编辑副本" if self.session.editable else "创建备份副本并应用更改"
+        tr = self.language_context.translate
+        save_description = tr(
+            "apply changes to the editable copy"
+            if self.session.editable
+            else "create a backup copy and apply changes"
         )
+        if exiting:
+            description = tr(
+                "There are unsaved changes.\nChoose Apply Changes to {action} and remain in the app; choose Discard Changes to clear temporary files and exit.",
+                action=save_description,
+            )
+        else:
+            destination = tr(
+                {
+                    "切换备份": "switch backups",
+                    "关闭当前备份并打开所选备份": "close the current backup and open the selected backup",
+                    "关闭此备份": "close this backup",
+                }.get(purpose, purpose)
+            )
+            description = tr(
+                "There are unsaved changes.\nChoose Apply Changes to {action}, then {purpose}; choose Discard Changes to clear the session and {purpose}.",
+                action=save_description,
+                purpose=destination,
+            )
         box = QMessageBox(
             QMessageBox.Icon.Question,
-            "未保存更改",
-            (
-                f"当前有未保存的更改。\n选择“应用更改”将{save_description}并留在应用中；选择“放弃更改”会清理临时文件并退出。"
-                if exiting
-                else f"当前有未保存的更改。\n选择“应用更改”将{save_description}，成功后{purpose}；"
-                f"选择“放弃更改”将清理当前会话并{purpose}。"
-            ),
+            tr("Unsaved Changes"),
+            description,
             QMessageBox.StandardButton.Save
             | QMessageBox.StandardButton.Discard
             | QMessageBox.StandardButton.Cancel,
             self,
         )
-        box.button(QMessageBox.StandardButton.Save).setText("应用更改")
-        box.button(QMessageBox.StandardButton.Discard).setText("放弃更改")
-        box.button(QMessageBox.StandardButton.Cancel).setText("取消")
+        box.button(QMessageBox.StandardButton.Save).setText(tr("Apply Changes"))
+        box.button(QMessageBox.StandardButton.Discard).setText(tr("Discard Changes"))
+        box.button(QMessageBox.StandardButton.Cancel).setText(tr("Cancel"))
         box.setDefaultButton(QMessageBox.StandardButton.Cancel)
         result = box.exec()
         if result == QMessageBox.StandardButton.Save:
@@ -1841,7 +1857,9 @@ class MainWindow(QMainWindow):
             or self._readonly_closing
         ):
             return
-        path = QFileDialog.getExistingDirectory(self, "打开备份")
+        path = QFileDialog.getExistingDirectory(
+            self, self.language_context.translate("Open Backup")
+        )
         if path:
             self.open_path(Path(path), new_window=new_window)
 
@@ -2049,28 +2067,39 @@ class MainWindow(QMainWindow):
         self.opened.clear()
 
     def add_files(self):
-        paths, _ = QFileDialog.getOpenFileNames(self, "添加文件到当前备份文件夹")
+        paths, _ = QFileDialog.getOpenFileNames(
+            self, self.language_context.translate("Add Files to Backup Folder")
+        )
         if paths:
             self.import_paths(paths, self.domain, self.path)
 
     def add_folder(self):
-        path = QFileDialog.getExistingDirectory(self, "添加整个文件夹到当前备份文件夹")
+        path = QFileDialog.getExistingDirectory(
+            self, self.language_context.translate("Add Folder to Backup Folder")
+        )
         if path:
             self.import_paths([path], self.domain, self.path)
 
     def collision_policy(self, *, exporting=False):
         box = QMessageBox(
             QMessageBox.Icon.Question,
-            "名称冲突",
-            "目标包含同名项目，请选择处理方式。该选择应用于本次操作的全部同名项目。",
+            self.language_context.translate("Name Conflict"),
+            self.language_context.translate(
+                "The destination contains items with the same names. Choose how to handle all conflicts in this operation."
+            ),
             parent=self,
         )
         replace = box.addButton(
-            "替换 / 合并" if exporting else "替换", QMessageBox.ButtonRole.AcceptRole
+            self.language_context.translate("Replace / Merge" if exporting else "Replace"),
+            QMessageBox.ButtonRole.AcceptRole,
         )
-        both = box.addButton("保留两者", QMessageBox.ButtonRole.ActionRole)
-        skip = box.addButton("跳过", QMessageBox.ButtonRole.ActionRole)
-        box.addButton("取消", QMessageBox.ButtonRole.RejectRole)
+        both = box.addButton(
+            self.language_context.translate("Keep Both"), QMessageBox.ButtonRole.ActionRole
+        )
+        skip = box.addButton(
+            self.language_context.translate("Skip"), QMessageBox.ButtonRole.ActionRole
+        )
+        box.addButton(self.language_context.translate("Cancel"), QMessageBox.ButtonRole.RejectRole)
         box.exec()
         return {replace: "replace", both: "keep_both", skip: "skip"}.get(box.clickedButton())
 
@@ -2092,7 +2121,11 @@ class MainWindow(QMainWindow):
             )
 
     def new_folder(self):
-        name, ok = QInputDialog.getText(self, "新建文件夹", "名称：")
+        name, ok = QInputDialog.getText(
+            self,
+            self.language_context.translate("New Folder"),
+            self.language_context.translate("Name:"),
+        )
         if ok and name:
             try:
                 self.session.new_directory(self.domain, self.path, name)
@@ -2115,7 +2148,12 @@ class MainWindow(QMainWindow):
     def rename_entry(self, entry, *, focus_browser=True):
         if self.task or not entry.path:
             return
-        name, ok = QInputDialog.getText(self, "重命名", "新名称：", text=entry.name)
+        name, ok = QInputDialog.getText(
+            self,
+            self.language_context.translate("Rename"),
+            self.language_context.translate("New name:"),
+            text=entry.name,
+        )
         if ok and name:
             try:
                 target = f"{entry.parent}/{name}".lstrip("/")
@@ -2176,14 +2214,18 @@ class MainWindow(QMainWindow):
         count = sum(len(self.session.subtree(e)) for e in self.session.roots(tokens))
         box = QMessageBox(
             QMessageBox.Icon.Question,
-            "删除项目",
+            self.language_context.translate("Delete Items"),
             "",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             self,
         )
         box.setTextFormat(Qt.TextFormat.PlainText)
         box.setText(
-            f"删除 {names[:250]}？\n共影响 {count} 个文件和文件夹。保存备份副本前可以在更改列表中放弃此更改。"
+            self.language_context.translate(
+                "Delete {names}?\nThis affects {count} files and folders. You can discard this change before applying changes to the backup copy.",
+                names=names[:250],
+                count=count,
+            )
         )
         box.setDefaultButton(QMessageBox.StandardButton.No)
         if box.exec() == QMessageBox.StandardButton.Yes:
@@ -2275,8 +2317,8 @@ class MainWindow(QMainWindow):
             and self.session.dirty
             and QMessageBox.question(
                 self,
-                "放弃所有更改",
-                "所做的改动不会被应用",
+                self.language_context.translate("Discard All Changes"),
+                self.language_context.translate("The changes you made will not be applied."),
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No,
             )
@@ -2290,7 +2332,9 @@ class MainWindow(QMainWindow):
         tokens = self.selected_tokens()
         if not tokens:
             return
-        target = QFileDialog.getExistingDirectory(self, "导出到文件夹")
+        target = QFileDialog.getExistingDirectory(
+            self, self.language_context.translate("Export to Folder")
+        )
         if not target:
             return
         conflict = any((Path(target) / self.session.get(t).name).exists() for t in tokens)
