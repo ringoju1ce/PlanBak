@@ -557,6 +557,7 @@ class PlistEditor(DocumentWindow):
         self._xml_snapshot = None
         self._xml_cache = ""
         self.xml_reason = ""
+        self._xml_reason_error = None
         self._xml_error = None
         layout = QVBoxLayout(self)
         action_bar = DocumentToolBar("plist 树形编辑操作", self)
@@ -660,6 +661,7 @@ class PlistEditor(DocumentWindow):
 
             update_item(root)
         self.set_source_state(available=self._available, conflict=self._conflict)
+        self.update_xml_tooltip()
 
     def node_preview(self, node):
         tr = self.language_context.translate
@@ -699,11 +701,34 @@ class PlistEditor(DocumentWindow):
                 raise ValueError("当前值无法无损转换为 XML（日期的小数秒会丢失）")
             self._xml_cache = data.decode("utf-8")
             self.xml_reason = ""
+            self._xml_reason_error = None
         except Exception as exc:
             self._xml_cache = ""
+            self._xml_reason_error = exc
             self.xml_reason = f"无法使用 XML 模式：{exc}"
         self.xml_button.defaultAction().setEnabled(not self.xml_reason)
-        self.xml_button.defaultAction().setToolTip(self.xml_reason or "使用 XML 编辑此 plist")
+        self.update_xml_tooltip()
+
+    def update_xml_tooltip(self):
+        tr = self.language_context.translate
+        error = self._xml_reason_error
+        if error is None:
+            self.xml_button.defaultAction().setToolTip(tr("Edit this plist as XML"))
+            return
+        detail = str(error)
+        known = {
+            "此 Date 包含小数秒，XML 日期只支持整秒": "This Date contains fractional seconds; XML dates support whole seconds only",
+            "当前值无法无损转换为 XML（日期的小数秒会丢失）": "The current value cannot be converted to XML without losing fractional seconds",
+        }
+        if detail in known:
+            detail = tr(known[detail])
+        elif detail in ("标准 plist XML 无法表示 UID 类型", "标准 plist XML 无法表示 Null 类型"):
+            detail = tr(
+                "Standard plist XML cannot represent the {type} type", type=detail.split(" ")[-2]
+            )
+        self.xml_button.defaultAction().setToolTip(
+            tr("XML mode is unavailable: {reason}", reason=detail)
+        )
 
     def xml_changed(self):
         self._xml_error = None
@@ -963,10 +988,11 @@ class PlistEditor(DocumentWindow):
         parent_node = self.selected_node()
         if not parent_node or not parent_node.container:
             return
-        key = "新项目"
+        base = self.language_context.translate("New Item")
+        key = base
         n = 1
         while any(child.key == key for child in parent_node.children):
-            key = f"新项目 {n}"
+            key = f"{base} {n}"
             n += 1
         dialog = ValueDialog(
             PlistNode("String", key, ""),

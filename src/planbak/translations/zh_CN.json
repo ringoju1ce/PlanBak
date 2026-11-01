@@ -501,5 +501,11 @@
   "Status and Details": "状态与说明",
   "Details…": "详情…",
   "View full status and details": "查看完整状态与说明",
-  "View and copy full status and details": "查看并复制完整状态与说明"
+  "View and copy full status and details": "查看并复制完整状态与说明",
+  "Edit this plist as XML": "使用 XML 编辑此 plist",
+  "This Date contains fractional seconds; XML dates support whole seconds only": "此 Date 包含小数秒，XML 日期只支持整秒",
+  "The current value cannot be converted to XML without losing fractional seconds": "当前值无法无损转换为 XML（日期的小数秒会丢失）",
+  "Standard plist XML cannot represent the {type} type": "标准 plist XML 无法表示 {type} 类型",
+  "XML mode is unavailable: {reason}": "无法使用 XML 模式：{reason}",
+  "New Item": "新项目"
 }
