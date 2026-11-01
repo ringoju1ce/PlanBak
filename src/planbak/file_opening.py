@@ -17,7 +17,7 @@ def source_revision(session, token):
     path = Path(entry.staged) if entry.staged else session.cache_path(token)
     if not path.is_file():
         if not entry.original_id:
-            raise BackupError("文件源已不可用。")
+            raise BackupError("文件源已不可用。", english="The file source is no longer available.")
         path = session.payload_path(entry.original_id)
     stat = path.stat()
     return (

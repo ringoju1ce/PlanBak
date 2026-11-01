@@ -124,6 +124,7 @@ def message(parent, title, text, icon=QMessageBox.Icon.Information):
         "无法应用更改": "Unable to Apply Changes",
         "应用完成": "Changes Applied",
         "无法处理拖放项目": "Unable to Handle Dropped Items",
+        "外部文件仍在修改": "External File Still Changing",
         "读取备份": "Read Backup",
         "打开文件": "Open File",
         "打开项目": "Open Item",
@@ -138,6 +139,7 @@ def message(parent, title, text, icon=QMessageBox.Icon.Information):
         "此备份已在另一个窗口中打开。": "This backup is already open in another window.",
         "请先进入可添加项目的文件夹": "Open a folder where items can be added first.",
         "请将项目拖入可添加项目的文件夹": "Drop items into a folder where they can be added.",
+        "请先在外部应用中保存文件，然后重试。": "Save the file in the external application, then try again.",
     }
     title = tr(titles[title]) if title in titles else title
     text = (
@@ -1756,7 +1758,9 @@ class MainWindow(QMainWindow):
             try:
                 if job.error:
                     if isinstance(job.error, Cancelled):
-                        self.statusBar().setToolTip("操作已取消")
+                        self.statusBar().setToolTip(
+                            self.language_context.translate("Operation canceled")
+                        )
                     elif on_error:
                         on_error(job.error)
                     else:
@@ -2428,7 +2432,9 @@ class MainWindow(QMainWindow):
                 lambda progress, cancel: self.session.export(
                     tokens, Path(target), collision=policy, progress=progress, cancel=cancel
                 ),
-                lambda _: self.statusBar().setToolTip(f"已导出到 {target}"),
+                lambda _: self.statusBar().setToolTip(
+                    self.language_context.translate("Exported to {path}", path=target)
+                ),
             )
 
     def open_file(self, *, external=False):
@@ -2544,7 +2550,10 @@ class MainWindow(QMainWindow):
                 # 后缀仅用于无法识别内容时解释错误，不决定使用哪个查看器。
                 if kind == "external":
                     if name.endswith(("-wal", "-shm", "-journal")):
-                        raise BackupError("这是数据库的配套文件，请打开对应的主文件。")
+                        raise BackupError(
+                            "这是数据库的配套文件，请打开对应的主文件。",
+                            english="This is a database companion file; open its corresponding main file.",
+                        )
                     if target.suffix.lower() in {
                         ".db",
                         ".sqlite",
@@ -2557,7 +2566,8 @@ class MainWindow(QMainWindow):
                     }:
                         raise BackupError(
                             "内置查看器只支持标准 SQLite；此文件可能使用其他格式或应用自身的加密。"
-                            "可通过右键菜单选择“以十六进制查看”“使用系统应用打开”，或导出项目。"
+                            "可通过右键菜单选择“以十六进制查看”“使用系统应用打开”，或导出项目。",
+                            english="The built-in viewer supports standard SQLite only; this file may use another format or app-specific encryption. Use the context menu to view it as hexadecimal, open it in a system application, or export it.",
                         )
                 if kind != "image":
                     return kind, preparers[kind](source, cancel)
@@ -2575,7 +2585,10 @@ class MainWindow(QMainWindow):
                 message(
                     self,
                     "无法启动默认应用",
-                    f"系统没有成功打开此文件。临时文件位于：\n{target}",
+                    self.language_context.translate(
+                        "The system could not open this file. The temporary file is located at:\n{path}",
+                        path=target,
+                    ),
                     QMessageBox.Icon.Warning,
                 )
 
@@ -2802,7 +2815,11 @@ class MainWindow(QMainWindow):
             or self.task
             or not self.session
         ):
-            self.statusBar().setToolTip("备份操作进行中，请稍后再查看 Data。")
+            self.statusBar().setToolTip(
+                self.language_context.translate(
+                    "A backup operation is in progress; try viewing Data later."
+                )
+            )
             return
         session = self.session
         path = session.workspace / "hex-viewer" / uuid.uuid4().hex / "data.bin"
@@ -2989,9 +3006,15 @@ class MainWindow(QMainWindow):
 
             def stage(data):
                 if self.task or self.session is not session:
-                    raise BackupError("备份操作进行中，请稍后再保存")
+                    raise BackupError(
+                        "备份操作进行中，请稍后再保存",
+                        english="A backup operation is in progress; try saving later",
+                    )
                 if self._focus_owned_modal(focus=False):
-                    raise BackupError("请先完成或取消当前编辑弹窗，再保存 plist")
+                    raise BackupError(
+                        "请先完成或取消当前编辑弹窗，再保存 plist",
+                        english="Finish or cancel the current edit dialog before saving the plist",
+                    )
                 latest = directory / "before-save.plist"
                 try:
                     session.extract_file(token, latest)

@@ -507,5 +507,15 @@
   "The current value cannot be converted to XML without losing fractional seconds": "当前值无法无损转换为 XML（日期的小数秒会丢失）",
   "Standard plist XML cannot represent the {type} type": "标准 plist XML 无法表示 {type} 类型",
   "XML mode is unavailable: {reason}": "无法使用 XML 模式：{reason}",
-  "New Item": "新项目"
+  "New Item": "新项目",
+  "External File Still Changing": "外部文件仍在修改",
+  "Save the file in the external application, then try again.": "请先在外部应用中保存文件，然后重试。",
+  "This is a database companion file; open its corresponding main file.": "这是数据库的配套文件，请打开对应的主文件。",
+  "The built-in viewer supports standard SQLite only; this file may use another format or app-specific encryption. Use the context menu to view it as hexadecimal, open it in a system application, or export it.": "内置查看器只支持标准 SQLite；此文件可能使用其他格式或应用自身的加密。可通过右键菜单选择“以十六进制查看”“使用系统应用打开”，或导出项目。",
+  "The system could not open this file. The temporary file is located at:\n{path}": "系统没有成功打开此文件。临时文件位于：\n{path}",
+  "A backup operation is in progress; try viewing Data later.": "备份操作进行中，请稍后再查看 Data。",
+  "A backup operation is in progress; try saving later": "备份操作进行中，请稍后再保存",
+  "Finish or cancel the current edit dialog before saving the plist": "请先完成或取消当前编辑弹窗，再保存 plist",
+  "Exported to {path}": "已导出到 {path}",
+  "The file source is no longer available.": "文件源已不可用。"
 }
