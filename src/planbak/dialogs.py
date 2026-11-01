@@ -328,6 +328,13 @@ class FixedInputDialog(FixedDialogMixin, QInputDialog):
         super().__init__(*args, **kwargs)
         self.setMinimumWidth(400)
         self.setMaximumWidth(520)
+        if self.language_context:
+            self.language_context.changed.connect(self.retranslate_buttons)
+            self.retranslate_buttons()
+
+    def retranslate_buttons(self):
+        self.setOkButtonText(self.language_context.translate("OK"))
+        self.setCancelButtonText(self.language_context.translate("Cancel"))
 
     def showEvent(self, event):
         if self._locked_size is None:
@@ -369,6 +376,29 @@ class FixedFileDialog(FixedDialogMixin, QFileDialog):
         # Native platform pickers cannot consistently enforce application geometry.
         self.setOption(QFileDialog.Option.DontUseNativeDialog, True)
         self.lock_size(QSize(760, 480))
+        if self.language_context:
+            self.language_context.changed.connect(self.retranslate_controls)
+
+    def retranslate_controls(self):
+        if not self.language_context:
+            return
+        tr = self.language_context.translate
+        self.setLabelText(QFileDialog.DialogLabel.LookIn, tr("Look in:"))
+        self.setLabelText(QFileDialog.DialogLabel.FileName, tr("File name:"))
+        self.setLabelText(QFileDialog.DialogLabel.FileType, tr("Files of type:"))
+        self.setLabelText(QFileDialog.DialogLabel.Reject, tr("Cancel"))
+        accept = (
+            "Save"
+            if self.acceptMode() == QFileDialog.AcceptMode.AcceptSave
+            else "Choose"
+            if self.fileMode() == QFileDialog.FileMode.Directory
+            else "Open"
+        )
+        self.setLabelText(QFileDialog.DialogLabel.Accept, tr(accept))
+
+    def showEvent(self, event):
+        self.retranslate_controls()
+        super().showEvent(event)
 
     @classmethod
     def getExistingDirectory(cls, parent, caption="", directory=""):

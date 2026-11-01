@@ -327,5 +327,9 @@
   "Backup folder (*)": "备份文件夹 (*)",
   "Create Backup Copy and Apply Changes": "创建备份副本并应用更改",
   "Changes applied to:\n{path}": "更改已应用到：\n{path}",
-  "\n\nOriginal backup preserved at:\n{path}": "\n\n原备份保留在：\n{path}"
+  "\n\nOriginal backup preserved at:\n{path}": "\n\n原备份保留在：\n{path}",
+  "Look in:": "查找范围：",
+  "File name:": "文件名：",
+  "Files of type:": "文件类型：",
+  "Choose": "选择"
 }
