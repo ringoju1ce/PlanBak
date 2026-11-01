@@ -86,6 +86,7 @@ from .dialogs import FixedMessageBox as QMessageBox
 from .dialogs import FixedProgressDialog
 from .file_opening import identify_file, source_revision
 from .hex_viewer import HexViewer
+from .i18n import LanguageContext
 from .icons import ApplicationIcons
 from .image_session import ImageWindows
 from .navigation import Location, ViewState, split_domain
@@ -530,8 +531,9 @@ class WindowTransfer:
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, manager=None):
+    def __init__(self, manager=None, *, language=None):
         super().__init__()
+        self.language_context = LanguageContext(language, self)
         self.manager = manager or BackupWindows.current()
         self.manager.windows.add(self)
         self._backup_claim = None
@@ -1712,7 +1714,7 @@ class MainWindow(QMainWindow):
                     )
                 return
             if new_window:
-                window = MainWindow(self.manager)
+                window = MainWindow(self.manager, language=self.language_context.language)
                 window.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
                 window.show()
                 window.open_path(path, _container=container)

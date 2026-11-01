@@ -296,6 +296,7 @@ class ImageViewer(QMainWindow):
         on_load_finished=None,
     ):
         super().__init__(None)
+        self.language_context = getattr(parent, "language_context", None)
         if parent is not None:
             self.setScreen(parent.screen())
         self.items = tuple(items)

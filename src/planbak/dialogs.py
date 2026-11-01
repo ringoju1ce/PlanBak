@@ -109,6 +109,10 @@ class FixedDialogMixin:
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        parent = self.parentWidget()
+        self.language_context = getattr(parent, "language_context", None)
+        if self.language_context is None and parent is not None:
+            self.language_context = getattr(parent.window(), "language_context", None)
         if self.parentWidget() is not None:
             self.setWindowModality(Qt.WindowModality.WindowModal)
         self._locked_size = None
@@ -197,6 +201,7 @@ class DocumentWindow(QDialog):
             | Qt.WindowType.WindowCloseButtonHint
         )
         super().__init__(None, flags)
+        self.language_context = getattr(parent, "language_context", None)
         if parent is not None:
             self.setScreen(parent.screen())
         self.setWindowModality(Qt.WindowModality.NonModal)
