@@ -323,7 +323,7 @@ class SessionOverlay:
         with self.lock:
             entry = self.get(token)
             if entry.kind != "file":
-                raise BackupError("只能打开普通文件")
+                raise BackupError("只能打开普通文件", english="Only regular files can be opened")
             target = self.cache_path(token)
             if not target.exists():
                 temporary = self.workspace / (uuid.uuid4().hex + ".extract")
@@ -381,14 +381,18 @@ class SessionOverlay:
 
         safe_path(name, root=False)
         if "/" in name:
-            raise BackupError("名称不能包含文件夹分隔符")
+            raise BackupError(
+                "名称不能包含文件夹分隔符", english="The name cannot contain folder separators"
+            )
         with self.mutation() as work:
             directory = self.at(domain, parent)
             path = f"{parent}/{name}".lstrip("/")
             if not directory or directory.kind != "directory":
-                raise BackupError("目标文件夹不存在")
+                raise BackupError(
+                    "目标文件夹不存在", english="The destination folder does not exist"
+                )
             if self.at(domain, path):
-                raise BackupError("该名称已存在")
+                raise BackupError("该名称已存在", english="An item with that name already exists")
             token = uuid.uuid4().hex
             work.put(
                 Entry(
@@ -421,19 +425,32 @@ class SessionOverlay:
         with self.mutation() as work:
             destination = self.at(domain, parent)
             if not destination or destination.kind != "directory":
-                raise BackupError("目标文件夹不存在")
+                raise BackupError(
+                    "目标文件夹不存在", english="The destination folder does not exist"
+                )
             roots = self.roots(tokens)
             if name is not None and len(roots) != 1:
-                raise BackupError("重命名只能选中一个项目")
+                raise BackupError(
+                    "重命名只能选中一个项目", english="Select exactly one item to rename"
+                )
             plans = []
             for root in roots:
                 if root.domain != domain:
-                    raise BackupError("目前只支持在同一个备份顶层文件夹内移动")
+                    raise BackupError(
+                        "目前只支持在同一个备份顶层文件夹内移动",
+                        english="Moving is only supported within the same top-level backup folder",
+                    )
                 if root.kind == "directory" and beneath(parent, root.path):
-                    raise BackupError("不能移动到自身或子文件夹")
+                    raise BackupError(
+                        "不能移动到自身或子文件夹",
+                        english="Cannot move an item into itself or its child folder",
+                    )
                 basename = safe_path(name, root=False) if name is not None else root.name
                 if "/" in basename:
-                    raise BackupError("名称不能包含文件夹分隔符")
+                    raise BackupError(
+                        "名称不能包含文件夹分隔符",
+                        english="The name cannot contain folder separators",
+                    )
                 target = f"{parent}/{basename}".lstrip("/")
                 if target == root.path:
                     continue
@@ -449,7 +466,10 @@ class SessionOverlay:
                             number += 1
                     elif collision == "replace":
                         if root.path.startswith(target + "/"):
-                            raise BackupError("不能覆盖包含源项目的上层文件夹")
+                            raise BackupError(
+                                "不能覆盖包含源项目的上层文件夹",
+                                english="Cannot overwrite a parent folder containing the source item",
+                            )
                         for entry in self.subtree(existing):
                             work.remove(entry.token)
                     else:
@@ -469,7 +489,7 @@ class SessionOverlay:
         with self.mutation(cancel=cancel) as work:
             entry = self.get(token)
             if entry.kind != "file":
-                raise BackupError("只能编辑普通文件")
+                raise BackupError("只能编辑普通文件", english="Only regular files can be edited")
             staged, size = work.file(token, source=path)
             work.put(replace(entry, staged=staged, size=size, mtime=int(time.time())))
 
@@ -477,7 +497,7 @@ class SessionOverlay:
         with self.mutation(cancel=cancel) as work:
             entry = self.get(token)
             if entry.kind != "file":
-                raise BackupError("只能编辑普通文件")
+                raise BackupError("只能编辑普通文件", english="Only regular files can be edited")
             staged, size = work.file(token, data=data)
             work.put(replace(entry, staged=staged, size=size, mtime=int(time.time())))
 
@@ -487,7 +507,10 @@ class SessionOverlay:
         with self.mutation(progress=progress, cancel=cancel) as work:
             target = self.at(domain, parent)
             if not target or target.kind != "directory":
-                raise BackupError("请先进入可添加项目的文件夹")
+                raise BackupError(
+                    "请先进入可添加项目的文件夹",
+                    english="Open a folder where items can be added first",
+                )
             for source in map(Path, paths):
                 check_cancel(cancel)
                 if source.is_symlink() or not (source.is_file() or source.is_dir()):
@@ -654,7 +677,10 @@ class SessionOverlay:
                 existing = self.at(entry.domain, entry.parent)
                 if parent or (existing and existing.token not in updates):
                     if (parent or existing).kind != "directory":
-                        raise BackupError("还原目标的父路径不是文件夹")
+                        raise BackupError(
+                            "还原目标的父路径不是文件夹",
+                            english="The parent of the restore destination is not a folder",
+                        )
                     continue
                 base_parent = self.baseline_at(entry.domain, entry.parent)
                 if not base_parent or self.find(base_parent.token):
@@ -674,7 +700,10 @@ class SessionOverlay:
     def revert(self, plan, *, progress=None, cancel=None):
         with self.mutation(progress=progress, cancel=cancel) as work:
             if plan.revision != self.signature:
-                raise BackupError("更改列表已变化，请重新选择要放弃更改的项目")
+                raise BackupError(
+                    "更改列表已变化，请重新选择要放弃更改的项目",
+                    english="The change list has changed; select the change to discard again",
+                )
             for key in plan.updates:
                 check_cancel(cancel)
                 work.remove(key)

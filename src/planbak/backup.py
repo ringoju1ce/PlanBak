@@ -231,7 +231,10 @@ class BackupSession(SessionOverlay):
             self.db.row_factory = sqlite3.Row
             columns = {r[1] for r in self.db.execute("PRAGMA table_info(Files)")}
             if not {"fileID", "domain", "relativePath", "flags", "file"} <= columns:
-                raise BackupError("Manifest.db 的 Files 表结构不受支持")
+                raise BackupError(
+                    "Manifest.db 的 Files 表结构不受支持",
+                    english="The Manifest.db Files table structure is not supported",
+                )
             self._index(cancel)
         except Exception:
             self.close()
@@ -247,14 +250,23 @@ class BackupSession(SessionOverlay):
     def check_changes_allowed(self):
         with self._state_lock:
             if self._transfers:
-                raise BackupError("正在向其他备份复制项目，请稍后再修改")
+                raise BackupError(
+                    "正在向其他备份复制项目，请稍后再修改",
+                    english="Items are being copied to another backup; try editing again later",
+                )
             if self._applying is not None:
-                raise BackupError("正在应用更改，不能新增或放弃暂挂更改")
+                raise BackupError(
+                    "正在应用更改，不能新增或放弃暂挂更改",
+                    english="Changes are being applied; changes cannot be added or discarded now",
+                )
 
     def begin_apply(self):
         with self._state_lock:
             if self._applying is not None or self._copying or self._transfers:
-                raise BackupError("正在应用更改或创建副本，请稍后重试")
+                raise BackupError(
+                    "正在应用更改或创建副本，请稍后重试",
+                    english="Changes are being applied or a copy is being created; try again later",
+                )
             token = object()
             self._applying = token
             return token
@@ -262,7 +274,10 @@ class BackupSession(SessionOverlay):
     def begin_transfer(self):
         with self._state_lock:
             if self._applying is not None or self._copying:
-                raise BackupError("来源备份正在应用更改或创建副本，请稍后复制")
+                raise BackupError(
+                    "来源备份正在应用更改或创建副本，请稍后复制",
+                    english="The source backup is applying changes or creating a copy; try again later",
+                )
             token = object()
             self._transfers.add(token)
             return token
@@ -279,7 +294,10 @@ class BackupSession(SessionOverlay):
     def create_copy(self, destination, *, progress=None, cancel=None, container=False):
         with self._state_lock:
             if self._applying is not None or self._copying or self._transfers:
-                raise BackupError("已有保存或副本任务进行中")
+                raise BackupError(
+                    "已有保存或副本任务进行中",
+                    english="A save or copy operation is already in progress",
+                )
             self._copying = True
         try:
             # 不持有会话锁进行整份复制，允许期间继续浏览、编辑和暂挂。
@@ -304,9 +322,15 @@ class BackupSession(SessionOverlay):
             self.check_changes_allowed()
             check_persistent_location(copied.path, self.workspace)
             if self.root != copied.source or self._stamp() != copied.stamp:
-                raise BackupError("当前备份已改变，未切换到新副本")
+                raise BackupError(
+                    "当前备份已改变，未切换到新副本",
+                    english="The current backup changed; the new copy was not selected",
+                )
             if not read_marker(copied.path) or backup_stamp(copied.path) != copied.stamp:
-                raise BackupError("副本标记或清单已改变，未切换保存位置")
+                raise BackupError(
+                    "副本标记或清单已改变，未切换保存位置",
+                    english="The copy marker or manifest changed; the save location was not switched",
+                )
             self.root = copied.path
             self._protected_roots.add(self.root)
             self.source_stamp = copied.stamp
@@ -326,15 +350,22 @@ class BackupSession(SessionOverlay):
             fid, domain, path, flags, blob = row
             safe_path(path)
             if not domain or "/" in domain or "\\" in domain or "\x00" in domain:
-                raise BackupError("清单包含无效 domain")
+                raise BackupError(
+                    "清单包含无效 domain", english="The manifest contains an invalid domain"
+                )
             if (
                 not isinstance(fid, str)
                 or len(fid) != 40
                 or any(c not in "0123456789abcdef" for c in fid)
             ):
-                raise BackupError("清单包含无效文件 ID")
+                raise BackupError(
+                    "清单包含无效文件 ID", english="The manifest contains an invalid file ID"
+                )
             if blob and len(blob) > MAX_METADATA_BYTES:
-                raise BackupError("清单中的文件元数据过大，拒绝解析")
+                raise BackupError(
+                    "清单中的文件元数据过大，拒绝解析",
+                    english="File metadata in the manifest is too large to parse",
+                )
             meta = Metadata(blob) if blob else None
             mode = meta.get("Mode", 0) if meta else 0
             kind = (
@@ -435,7 +466,10 @@ class BackupSession(SessionOverlay):
         result = []
         for entry in entries:
             if not entry.path:
-                raise BackupError("不能修改此备份的顶层文件夹")
+                raise BackupError(
+                    "不能修改此备份的顶层文件夹",
+                    english="The backup’s top-level folders cannot be modified",
+                )
             if not any(
                 e.domain == entry.domain and entry.path.startswith(e.path + "/") for e in result
             ):
@@ -449,7 +483,9 @@ class BackupSession(SessionOverlay):
         if path.is_symlink() or not path.is_file():
             raise BackupError(f"缺少或无效的备份数据文件：{fid}")
         if path.resolve().parent not in (self.root, self.root / fid[:2]):
-            raise BackupError("备份数据路径包含文件夹链接")
+            raise BackupError(
+                "备份数据路径包含文件夹链接", english="The backup data path contains a folder link"
+            )
         return path
 
     def metadata(self, entry):
@@ -467,9 +503,14 @@ class BackupSession(SessionOverlay):
 
     def _extract_entry(self, entry, target: Path, *, cancel=None, use_cache=True, progress=None):
         if entry.kind != "file":
-            raise BackupError("只能导出普通文件；链接和特殊条目仅供浏览")
+            raise BackupError(
+                "只能导出普通文件；链接和特殊条目仅供浏览",
+                english="Only regular files can be exported; links and special entries are view-only",
+            )
         if target.is_symlink():
-            raise BackupError("导出目标不能是链接")
+            raise BackupError(
+                "导出目标不能是链接", english="The export destination cannot be a link"
+            )
         cached = Path(entry.staged) if entry.staged else self.cache_path(entry.token)
         if use_cache and cached.is_file():
             if cached.resolve() != target.resolve():
@@ -483,7 +524,9 @@ class BackupSession(SessionOverlay):
                     if entry.size == 0 and src.stat().st_size == 0:
                         copy_file(src, target, cancel, progress=progress)
                         return target
-                    raise BackupError("文件缺少加密密钥")
+                    raise BackupError(
+                        "文件缺少加密密钥", english="The file encryption key is missing"
+                    )
                 _, key = self.keybag.unwrap(wrapped)
                 crypto_file(src, target, key, encrypt=False, cancel=cancel, progress=progress)
             else:
@@ -499,12 +542,18 @@ class BackupSession(SessionOverlay):
             def protect(path):
                 resolved = path.resolve()
                 if any(resolved.is_relative_to(root) for root in self._protected_roots):
-                    raise BackupError("导出位置不能与来源备份或当前备份重叠")
+                    raise BackupError(
+                        "导出位置不能与来源备份或当前备份重叠",
+                        english="The export location cannot overlap the source or current backup",
+                    )
 
             def validate_destination(dest):
                 protect(dest)
                 if dest.is_symlink() or any(p.is_symlink() for p in dest.parents if p != target):
-                    raise BackupError("导出目标路径包含链接")
+                    raise BackupError(
+                        "导出目标路径包含链接",
+                        english="The export destination path contains a link",
+                    )
 
             protect(target)
             roots = self.roots(tokens)
@@ -595,7 +644,7 @@ class BackupSession(SessionOverlay):
         try:
             with self._state_lock:
                 if token is not self._applying:
-                    raise BackupError("无效的保存状态")
+                    raise BackupError("无效的保存状态", english="Invalid save state")
             return self._save(destination, progress=progress, cancel=cancel, container=container)
         finally:
             self.end_apply(token)
@@ -608,13 +657,19 @@ class BackupSession(SessionOverlay):
             marker = read_marker(self.root)
             if direct:
                 if not marker:
-                    raise BackupError("没有有效副本标记，必须保存为新的备份副本")
+                    raise BackupError(
+                        "没有有效副本标记，必须保存为新的备份副本",
+                        english="No valid copy marker was found; save to a new backup copy",
+                    )
                 destination = self.root
             else:
                 destination = output_location(self.root, destination, workspace=self.workspace)
             check_persistent_location(destination, self.workspace)
             if self._stamp() != self.source_stamp:
-                raise BackupError("原备份在打开后已改变，请重新打开备份")
+                raise BackupError(
+                    "原备份在打开后已改变，请重新打开备份",
+                    english="The original backup changed after opening; reopen the backup",
+                )
             destination.parent.mkdir(parents=True, exist_ok=True)
             progress("估算备份大小…", 0, 0)
             required = (
@@ -629,7 +684,10 @@ class BackupSession(SessionOverlay):
             )
             extra = self.manifest_path.stat().st_size * 2
             if shutil.disk_usage(destination.parent).free < required + extra:
-                raise BackupError("目标磁盘空间不足以创建独立备份副本")
+                raise BackupError(
+                    "目标磁盘空间不足以创建独立备份副本",
+                    english="There is not enough disk space to create an independent backup copy",
+                )
             temporary = Path(tempfile.mkdtemp(prefix=".planbak-save-", dir=destination.parent))
             work = temporary / self.root.name if container and not direct else temporary
             out_db_path = self.workspace / (uuid.uuid4().hex + ".db")
@@ -706,7 +764,9 @@ class BackupSession(SessionOverlay):
                             if output.exists():
                                 (work / fid).unlink(missing_ok=True)
                         elif entry.kind not in ("directory", "special"):
-                            raise BackupError("无法保存未知条目类型")
+                            raise BackupError(
+                                "无法保存未知条目类型", english="Cannot save an unknown item type"
+                            )
                         flags = {"file": 1, "directory": 2, "special": 4}[entry.kind]
                         if entry.kind == "special" and entry.original_id:
                             flags = self.db.execute(
@@ -734,13 +794,19 @@ class BackupSession(SessionOverlay):
                         "SELECT COUNT(*) FROM EditorEntries WHERE explicit=1"
                     ).fetchone()[0]
                     if out_db.execute("SELECT COUNT(*) FROM Files").fetchone()[0] != expected_count:
-                        raise BackupError("输出清单条目数量不一致")
+                        raise BackupError(
+                            "输出清单条目数量不一致",
+                            english="The output manifest entry count does not match",
+                        )
                     out_db.execute("DROP TABLE EditorEntries")
                     out_db.execute("DROP TABLE EditorBaseline")
                     out_db.commit()
                     result = out_db.execute("PRAGMA integrity_check").fetchone()[0]
                     if result != "ok":
-                        raise BackupError("输出清单完整性检查失败")
+                        raise BackupError(
+                            "输出清单完整性检查失败",
+                            english="The output manifest integrity check failed",
+                        )
                     payload_ids = out_db.execute("SELECT fileID FROM Files WHERE flags=1")
                     for (fid,) in payload_ids:
                         check_cancel(cancel)
@@ -767,7 +833,10 @@ class BackupSession(SessionOverlay):
                         cancel=cancel,
                     )
                     if digest(verify_db, cancel=cancel) != digest(out_db_path, cancel=cancel):
-                        raise BackupError("输出清单加密往返验证失败")
+                        raise BackupError(
+                            "输出清单加密往返验证失败",
+                            english="Encrypted output manifest verification failed",
+                        )
                     verify_db.unlink()
                 else:
                     copy_file(out_db_path, work / "Manifest.db", cancel)
@@ -783,24 +852,41 @@ class BackupSession(SessionOverlay):
                         else:
                             copy_file(payload, plain, cancel)
                         if digest(plain, "sha1", cancel) != expected:
-                            raise BackupError("输出文件校验失败")
+                            raise BackupError(
+                                "输出文件校验失败", english="Output file verification failed"
+                            )
                     finally:
                         plain.unlink(missing_ok=True)
                 check_cancel(cancel)
                 if self._stamp() != self.source_stamp:
-                    raise BackupError("保存期间原备份发生变化，输出未发布")
+                    raise BackupError(
+                        "保存期间原备份发生变化，输出未发布",
+                        english="The original backup changed during saving; the output was not published",
+                    )
                 if not direct and destination.exists():
-                    raise BackupError("保存目标被其他程序创建，输出未覆盖")
+                    raise BackupError(
+                        "保存目标被其他程序创建，输出未覆盖",
+                        english="Another application created the destination; it was not overwritten",
+                    )
                 progress("建立新的保存基线…", 0, 0)
                 saved_db = self.prepare_saved_index(out_db_path, cancel)
                 check_cancel(cancel)
                 if self._stamp() != self.source_stamp:
-                    raise BackupError("保存期间原备份发生变化，输出未发布")
+                    raise BackupError(
+                        "保存期间原备份发生变化，输出未发布",
+                        english="The original backup changed during saving; the output was not published",
+                    )
                 if not direct and destination.exists():
-                    raise BackupError("保存目标被其他程序创建，输出未覆盖")
+                    raise BackupError(
+                        "保存目标被其他程序创建，输出未覆盖",
+                        english="Another application created the destination; it was not overwritten",
+                    )
                 if direct:
                     if read_marker(self.root) != marker:
-                        raise BackupError("副本标记在保存期间发生变化")
+                        raise BackupError(
+                            "副本标记在保存期间发生变化",
+                            english="The copy marker changed during saving",
+                        )
                     # 最后一次取消检查在写入前。开始安装后完成本次写入，不提供日志/回滚。
                     progress("正在应用更改…", 0, 0)
                     payloads = [
@@ -815,7 +901,10 @@ class BackupSession(SessionOverlay):
                     deletes += [destination / p.name for p in payloads]
                     for path in [target for _, target in installs] + deletes:
                         if path.is_symlink() or path.parent.is_symlink():
-                            raise BackupError("副本输出位置不能是链接")
+                            raise BackupError(
+                                "副本输出位置不能是链接",
+                                english="The copy destination cannot be a link",
+                            )
                     try:
                         for payload, target in installs:
                             target.parent.mkdir(parents=True, exist_ok=True)
@@ -856,7 +945,10 @@ class BackupSession(SessionOverlay):
     def close(self):
         with self._state_lock:
             if self._transfers:
-                raise BackupError("正在向其他备份复制项目，暂不能清理来源会话")
+                raise BackupError(
+                    "正在向其他备份复制项目，暂不能清理来源会话",
+                    english="Items are being copied to another backup; the source session cannot be cleared yet",
+                )
         with contextlib.suppress(Exception):
             if self.db is not None:
                 self.db.close()

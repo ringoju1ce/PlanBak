@@ -48,15 +48,25 @@ def file_id(domain: str, path: str) -> str:
 
 def safe_path(path: str, *, root: bool = True) -> str:
     if not isinstance(path, str) or "\x00" in path:
-        raise BackupError("路径包含不受支持的字符")
+        raise BackupError(
+            "路径包含不受支持的字符", english="The path contains unsupported characters"
+        )
     if os.name == "nt" and ("\\" in path or ":" in path):
-        raise BackupError("此 iOS 路径无法安全映射到 Windows 文件系统")
+        raise BackupError(
+            "此 iOS 路径无法安全映射到 Windows 文件系统",
+            english="This iOS path cannot be safely mapped to a Windows filesystem",
+        )
     if path.startswith("/") or any(p in (".", "..") for p in path.split("/")):
-        raise BackupError("路径不能是绝对路径或包含 . / ..")
+        raise BackupError(
+            "路径不能是绝对路径或包含 . / ..",
+            english="The path cannot be absolute or contain . / ..",
+        )
     if not root and not path:
-        raise BackupError("名称不能为空")
+        raise BackupError("名称不能为空", english="The name cannot be empty")
     if path and any(not p for p in path.split("/")):
-        raise BackupError("路径包含空的文件夹名称")
+        raise BackupError(
+            "路径包含空的文件夹名称", english="The path contains an empty folder name"
+        )
     return path
 
 
@@ -102,12 +112,14 @@ class Keybag:
         offset = 0
         while offset < len(data):
             if offset + 8 > len(data):
-                raise BackupError("BackupKeyBag 格式损坏")
+                raise BackupError(
+                    "BackupKeyBag 格式损坏", english="The BackupKeyBag format is damaged"
+                )
             tag = data[offset : offset + 4]
             length = struct.unpack_from(">I", data, offset + 4)[0]
             offset += 8
             if length > len(data) - offset:
-                raise BackupError("BackupKeyBag 长度无效")
+                raise BackupError("BackupKeyBag 长度无效", english="Invalid BackupKeyBag length")
             value = data[offset : offset + length]
             offset += length
             if tag == b"UUID":
@@ -129,7 +141,10 @@ class Keybag:
                 )
             count = struct.unpack(">I", raw)[0]
             if not 1 <= count <= maximum:
-                raise BackupError("备份的密钥派生迭代次数超出安全范围")
+                raise BackupError(
+                    "备份的密钥派生迭代次数超出安全范围",
+                    english="The backup key derivation iteration count is outside the safe range",
+                )
             return count
 
         secret = password.encode("utf-8")
@@ -183,12 +198,18 @@ class Metadata:
 
     def __init__(self, blob: bytes):
         if len(blob) > MAX_METADATA_BYTES:
-            raise BackupError("文件元数据超过程序的 8 MiB 资源上限")
+            raise BackupError(
+                "文件元数据超过程序的 8 MiB 资源上限",
+                english="File metadata exceeds the application’s 8 MiB limit",
+            )
         if blob.startswith(b"bplist00") and len(blob) >= 32:
             # 二进制 plist 尾部已有对象数量；在 plistlib 分配对象前拒绝异常表。
             count = int.from_bytes(blob[-24:-16], "big")
             if count > MAX_METADATA_OBJECTS:
-                raise BackupError("文件元数据的对象数量超过资源上限")
+                raise BackupError(
+                    "文件元数据的对象数量超过资源上限",
+                    english="File metadata contains too many objects",
+                )
         try:
             self.archive = plistlib.loads(blob)
             self.validate_structure()
@@ -199,7 +220,10 @@ class Metadata:
             if not isinstance(self.root, dict):
                 raise ValueError("not MBFile")
         except (ValueError, KeyError, TypeError, IndexError, AttributeError, RecursionError) as exc:
-            raise BackupError("文件元数据不是支持的 MBFile 归档") from exc
+            raise BackupError(
+                "文件元数据不是支持的 MBFile 归档",
+                english="File metadata is not a supported MBFile archive",
+            ) from exc
 
     def validate_structure(self):
         pending = [(self.archive, 1)]
@@ -208,13 +232,19 @@ class Metadata:
         while pending:
             value, depth = pending.pop()
             if depth > MAX_METADATA_DEPTH:
-                raise BackupError("文件元数据的嵌套深度超过资源上限")
+                raise BackupError(
+                    "文件元数据的嵌套深度超过资源上限",
+                    english="File metadata exceeds the nesting limit",
+                )
             if not isinstance(value, (list, dict)) or id(value) in visited:
                 continue
             visited.add(id(value))
             items += len(value) * (2 if isinstance(value, dict) else 1)
             if items > MAX_METADATA_ITEMS:
-                raise BackupError("文件元数据的容器条目数量超过资源上限")
+                raise BackupError(
+                    "文件元数据的容器条目数量超过资源上限",
+                    english="File metadata exceeds the container entry limit",
+                )
             children = value.values() if isinstance(value, dict) else value
             pending.extend((child, depth + 1) for child in children)
 
@@ -257,9 +287,15 @@ class Metadata:
         blob = plistlib.dumps(self.archive, fmt=plistlib.FMT_BINARY, sort_keys=False)
         # 同一约束用于输入和发布，不能生成程序无法重新打开的归档。
         if len(blob) > MAX_METADATA_BYTES:
-            raise BackupError("修改后的文件元数据超过程序的 8 MiB 资源上限，未应用更改")
+            raise BackupError(
+                "修改后的文件元数据超过程序的 8 MiB 资源上限，未应用更改",
+                english="Modified file metadata exceeds the 8 MiB limit; changes were not applied",
+            )
         if int.from_bytes(blob[-24:-16], "big") > MAX_METADATA_OBJECTS:
-            raise BackupError("修改后的文件元数据对象数量超过资源上限，未应用更改")
+            raise BackupError(
+                "修改后的文件元数据对象数量超过资源上限，未应用更改",
+                english="Modified file metadata contains too many objects; changes were not applied",
+            )
         return blob
 
     @classmethod

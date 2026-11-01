@@ -37,7 +37,9 @@ class BackupClaim:
         if shared is not None and (
             shared.manager is not manager or shared.owner() is not owner or shared.released
         ):
-            raise BackupError("不能共享其他会话的备份占用")
+            raise BackupError(
+                "不能共享其他会话的备份占用", english="Cannot share another session’s backup lock"
+            )
         self._acquire(keys, shared=shared)
 
     def _acquire(self, keys, *, shared=None):
@@ -68,7 +70,7 @@ class BackupClaim:
     def promote(self):
         """新输出发布后补充磁盘身份锁，路径锁从创建前一直持有。"""
         if self.released:
-            raise BackupError("备份占用已释放")
+            raise BackupError("备份占用已释放", english="The backup lock has been released")
         _, keys = backup_keys(self.path)
         self._acquire(keys)
 
@@ -99,7 +101,7 @@ class BackupWindows:
         if self.lock_directory.is_symlink() or (
             hasattr(os, "getuid") and self.lock_directory.stat().st_uid != os.getuid()
         ):
-            raise BackupError("备份占用锁目录不安全")
+            raise BackupError("备份占用锁目录不安全", english="The backup lock directory is unsafe")
         self.windows = set()
         self.claims = []
 

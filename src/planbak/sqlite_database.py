@@ -61,12 +61,18 @@ def prepare_snapshot(session, token, directory, *, cancel=None, source=None):
         else:
             session.extract_file(token, main, cancel=cancel)
         if not is_sqlite(main):
-            raise BackupError("此文件不是标准 SQLite，可能使用其他格式或应用自身的加密。")
+            raise BackupError(
+                "此文件不是标准 SQLite，可能使用其他格式或应用自身的加密。",
+                english="This is not a standard SQLite database; it may use another format or app-specific encryption.",
+            )
         files = companions(session, token)
         for other in files[1:]:
             suffix = other.path[len(entry.path) :]
             if suffix == "-journal" and other.size:
-                raise BackupError("数据库含非空回滚日志，暂不支持此恢复状态；请导出项目后处理。")
+                raise BackupError(
+                    "数据库含非空回滚日志，暂不支持此恢复状态；请导出项目后处理。",
+                    english="The database has a non-empty rollback journal; export it to handle this recovery state.",
+                )
             session.extract_file(
                 other.token, incoming / ("database.sqlite" + suffix), cancel=cancel
             )
@@ -86,7 +92,10 @@ def prepare_snapshot(session, token, directory, *, cancel=None, source=None):
         def progress(status, remaining, total):
             check_cancel(cancel)
             if time.monotonic() > deadline:
-                raise BackupError("数据库快照读取超时，可能存在不完整的日志。")
+                raise BackupError(
+                    "数据库快照读取超时，可能存在不完整的日志。",
+                    english="Reading the database snapshot timed out; a journal may be incomplete.",
+                )
 
         # The input is an isolated copy, so recovery/SHM cannot affect the backup.
         with closing(sqlite3.connect(main.as_uri() + "?mode=ro", uri=True, timeout=1)) as src:
@@ -160,13 +169,16 @@ def readonly_authorizer(action, arg1, arg2, database, origin):
 
 def query(path, sql, *, offset=0, cancel=None):
     if offset < 0:
-        raise BackupError("无效的分页位置")
+        raise BackupError("无效的分页位置", english="Invalid page position")
     connection = connect_readonly(path, cancel)
     try:
         connection.set_authorizer(readonly_authorizer)
         cursor = connection.execute(sql)
         if cursor.description is None:
-            raise BackupError("只支持返回结果的只读查询")
+            raise BackupError(
+                "只支持返回结果的只读查询",
+                english="Only read-only queries returning results are supported",
+            )
         # Preserve arbitrary SELECT/CTE syntax without rewriting user SQL.
         remaining = offset
         while remaining:
@@ -185,7 +197,10 @@ def query(path, sql, *, offset=0, cancel=None):
             rows.append(row)
             size += sum(len(value) if isinstance(value, (str, bytes)) else 8 for value in row)
             if size > 16 * 1024 * 1024:
-                raise BackupError("此页数据过大；请缩小查询范围或选择较少的列。")
+                raise BackupError(
+                    "此页数据过大；请缩小查询范围或选择较少的列。",
+                    english="This page is too large; narrow the query or select fewer columns.",
+                )
         return QueryResult(
             [item[0] for item in cursor.description], rows[:PAGE_SIZE], len(rows) > PAGE_SIZE
         )
