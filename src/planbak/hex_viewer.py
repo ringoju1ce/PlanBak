@@ -29,6 +29,7 @@ from .codec import BackupError
 from .dialogs import DocumentWindow
 from .document_ui import DocumentStatus, DocumentToolBar, document_buttons
 from .hex_data import PAGE_SIZE, parse_offset, parse_pattern, read_page, search_bytes
+from .i18n import LanguageContext
 from .viewer_tasks import ViewerTask
 
 
@@ -65,7 +66,13 @@ class HexModel(QAbstractTableModel):
 
     def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):
         if role == Qt.ItemDataRole.DisplayRole and orientation == Qt.Orientation.Horizontal:
-            return "偏移" if section == 0 else "ASCII" if section == 17 else f"{section - 1:02X}"
+            return (
+                self.parent().language_context.translate("Offset")
+                if section == 0
+                else "ASCII"
+                if section == 17
+                else f"{section - 1:02X}"
+            )
         return None
 
     def data(self, index, role=Qt.ItemDataRole.DisplayRole):
@@ -84,7 +91,9 @@ class HexModel(QAbstractTableModel):
             if position is not None:
                 return f"{self.data_bytes[position - self.offset]:02X}"
         if role == Qt.ItemDataRole.ToolTipRole and position is not None:
-            return f"偏移 0x{position:X}（{position}）"
+            return self.parent().language_context.translate(
+                "Offset 0x{position:X} ({position})", position=position
+            )
         if role == Qt.ItemDataRole.BackgroundRole and position is not None and self.match:
             if self.match[0] <= position < self.match[0] + self.match[1]:
                 return QApplication.palette().highlight()
@@ -105,15 +114,17 @@ class HexViewer(DocumentWindow):
 
     def __init__(self, path, name, parent=None):
         super().__init__(parent)
+        if self.language_context is None:
+            self.language_context = LanguageContext(parent=self)
         self.path, self.name = path, name
         self.file_size = path.stat().st_size
         self.offset, self.cursor_offset = 0, 0
         self.task, self.match, self._pattern = None, None, None
         self._closing, self._skip_prompt = False, False
         self.available, self.stale = True, False
-        self.setWindowTitle(f"{name} — 十六进制查看器（只读）")
+        self._status_source, self._status_values = None, {}
         layout = QVBoxLayout(self)
-        toolbar = DocumentToolBar("十六进制导航", self)
+        toolbar = self.toolbar = DocumentToolBar("十六进制导航", self)
         self.previous_button = toolbar.command(
             "上一页", lambda: self.go(max(0, self.offset - PAGE_SIZE)), icon="go-previous"
         )
@@ -134,7 +145,7 @@ class HexViewer(DocumentWindow):
         toolbar.addSeparator()
         self.reload_button = toolbar.command("重新加载", self.reload_requested, icon="view-refresh")
         layout.addWidget(toolbar)
-        search = DocumentToolBar("十六进制搜索", self)
+        search = self.search_toolbar = DocumentToolBar("十六进制搜索", self)
         self.search_mode = QComboBox()
         self.search_mode.setAccessibleName("搜索内容类型")
         self.search_mode.addItems(["十六进制字节", "UTF-8 文本"])
@@ -177,7 +188,7 @@ class HexViewer(DocumentWindow):
         self.status = DocumentStatus(details=False)
         layout.addWidget(self.status)
         buttons = document_buttons(QDialogButtonBox.StandardButton.Close, self)
-        buttons.button(QDialogButtonBox.StandardButton.Close).setText("关闭")
+        self.close_button = buttons.button(QDialogButtonBox.StandardButton.Close)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
         for key, callback in (
@@ -192,7 +203,80 @@ class HexViewer(DocumentWindow):
             (self.table if key == "Ctrl+C" else self).addAction(action)
         self.setMinimumSize(720, 480)
         self.resize(1080, 720)
+        self.language_context.changed.connect(self.retranslate)
         self.go(0)
+        self.retranslate()
+
+    def update_title(self):
+        self.setWindowTitle(
+            self.language_context.translate("{name} — Hex Viewer (Read-only)", name=self.name)
+        )
+
+    def set_status(self, source=None, **values):
+        self._status_source, self._status_values = source, values
+        if source is None:
+            self.status.clear()
+            return
+        values = {
+            key: self.language_context.error(value) if isinstance(value, Exception) else value
+            for key, value in values.items()
+        }
+        self.status.setText(self.language_context.translate(source, **values))
+
+    def update_position_label(self):
+        data = self.model.data_bytes
+        if data:
+            self.position_label.setText(
+                self.language_context.translate(
+                    "Size {size} bytes · Page 0x{start:X}–0x{end:X}",
+                    size=self.file_size,
+                    start=self.offset,
+                    end=self.offset + len(data) - 1,
+                )
+            )
+        else:
+            self.position_label.setText(
+                self.language_context.translate("Size 0 bytes · Empty file")
+            )
+
+    def retranslate(self):
+        tr = self.language_context.translate
+        self.update_title()
+        self.toolbar.setAccessibleName(tr("Hexadecimal navigation"))
+        self.search_toolbar.setAccessibleName(tr("Hexadecimal search"))
+        self.toolbar.setWindowTitle(tr("Hexadecimal navigation"))
+        self.search_toolbar.setWindowTitle(tr("Hexadecimal search"))
+        for button, source in (
+            (self.previous_button, "Previous Page"),
+            (self.next_button, "Next Page"),
+            (self.jump_button, "Go"),
+            (self.reload_button, "Reload"),
+            (self.find_previous_button, "Previous"),
+            (self.find_next_button, "Next"),
+            (self.cancel_button, "Cancel Search"),
+        ):
+            text = tr(source)
+            button.defaultAction().setText(text)
+            button.defaultAction().setToolTip(text)
+            button.setAccessibleName(text)
+        self.address.setPlaceholderText(tr("Offset: decimal or 0x…"))
+        self.address.setAccessibleName(tr("Jump to offset"))
+        self.address.setToolTip(
+            tr("Enter a decimal or 0x-prefixed offset and press Enter; Ctrl+G focuses this field.")
+        )
+        self.search_mode.setAccessibleName(tr("Search type"))
+        self.search_mode.setItemText(0, tr("Hexadecimal bytes"))
+        self.search_mode.setItemText(1, tr("UTF-8 text"))
+        self.search_input.setPlaceholderText(tr("Search (Ctrl+F)"))
+        self.search_input.setAccessibleName(tr("Search text"))
+        self.search_input.setToolTip(
+            tr("Press Enter to find the next match; Ctrl+F focuses this field.")
+        )
+        self.table.setAccessibleName(tr("Hexadecimal bytes and ASCII"))
+        self.close_button.setText(tr("Close"))
+        self.model.headerDataChanged.emit(Qt.Orientation.Horizontal, 0, 17)
+        self.update_position_label()
+        self.set_status(self._status_source, **self._status_values)
 
     def update_controls(self):
         busy = self.task is not None
@@ -214,18 +298,14 @@ class HexViewer(DocumentWindow):
             base = offset // PAGE_SIZE * PAGE_SIZE
             data = read_page(self.path, base)
         except OSError as exc:
-            self.status.setText(f"无法读取：{exc}")
+            self.set_status("Unable to read: {error}", error=exc)
             return
         self.offset, self.cursor_offset = base, offset
         if self.match and offset != self.match[0]:
             self.match = None
         self.model.set_page(base, data, self.match)
         self.address.setText(f"0x{offset:X}")
-        self.position_label.setText(
-            f"大小 {self.file_size} 字节 · 当前页 0x{base:X}–0x{base + len(data) - 1:X}"
-            if data
-            else "大小 0 字节 · 空文件"
-        )
+        self.update_position_label()
         if select and data:
             index = self.model.index((offset - base) // 16, (offset - base) % 16 + 1)
             self.table.setCurrentIndex(index)
@@ -249,7 +329,7 @@ class HexViewer(DocumentWindow):
         try:
             self.go(parse_offset(self.address.text(), self.file_size), select=True)
         except BackupError as exc:
-            self.status.setText(str(exc))
+            self.set_status("{error}", error=exc)
 
     def focus_search(self):
         self.search_input.setFocus()
@@ -265,7 +345,7 @@ class HexViewer(DocumentWindow):
         try:
             pattern = parse_pattern(self.search_input.text(), self.search_mode.currentIndex() == 0)
         except BackupError as exc:
-            self.status.setText(str(exc))
+            self.set_status("{error}", error=exc)
             return
         start = self.cursor_offset
         if pattern == self._pattern and self.match:
@@ -278,7 +358,7 @@ class HexViewer(DocumentWindow):
             self,
         )
         self.task = task
-        self.status.setText("正在搜索…")
+        self.set_status("Searching…")
         self.update_controls()
 
         def finished():
@@ -288,19 +368,22 @@ class HexViewer(DocumentWindow):
                 super(HexViewer, self).reject()
                 return
             if task.cancelled.is_set():
-                self.status.setText("搜索已取消")
+                self.set_status("Search cancelled")
             elif task.error:
-                self.status.setText(f"无法搜索：{task.error}")
+                self.set_status("Unable to search: {error}", error=task.error)
             elif task.result.offset is None:
-                self.status.setText("未找到匹配内容。")
+                self.set_status("No matches found.")
                 self.match = None
                 self.go(self.cursor_offset)
             else:
                 self.match = (task.result.offset, len(pattern))
                 self.go(task.result.offset, select=True)
-                self.status.setText(
-                    f"匹配偏移 0x{task.result.offset:X} · {len(pattern)} 字节"
-                    + (" · 已循环搜索" if task.result.wrapped else "")
+                self.set_status(
+                    "Match at 0x{offset:X} · {count} bytes · Search wrapped"
+                    if task.result.wrapped
+                    else "Match at 0x{offset:X} · {count} bytes",
+                    offset=task.result.offset,
+                    count=len(pattern),
                 )
             self.update_controls()
             task.deleteLater()
@@ -357,11 +440,11 @@ class HexViewer(DocumentWindow):
             self.table.setCurrentIndex(index)
         menu = QMenu(self)
         for title, callback in (
-            ("复制字节", self.copy_bytes),
-            ("复制十六进制", self.copy_hex),
-            ("复制起始偏移", self.copy_offset),
+            ("Copy Bytes", self.copy_bytes),
+            ("Copy Hexadecimal", self.copy_hex),
+            ("Copy Starting Offset", self.copy_offset),
         ):
-            action = menu.addAction(title)
+            action = menu.addAction(self.language_context.translate(title))
             action.setEnabled(bool(self.selected_offsets()))
             action.triggered.connect(callback)
         menu.exec(self.table.viewport().mapToGlobal(point))
@@ -370,18 +453,18 @@ class HexViewer(DocumentWindow):
         self.path, self.name, self.file_size = path, name, path.stat().st_size
         self.match, self._pattern, self.available = None, None, True
         self.stale = False
-        self.setWindowTitle(f"{name} — 十六进制查看器（只读）")
+        self.update_title()
         self.go(min(self.cursor_offset, max(0, self.file_size - 1)), select=True)
-        self.status.setText("已重新加载只读快照。")
+        self.set_status("Read-only snapshot reloaded.")
 
     def set_source_state(self, *, available=True, stale=False):
         self.available, self.stale = available, stale
-        self.status.setText(
-            "源文件已不可用，当前显示旧快照。"
+        self.set_status(
+            "The source file is unavailable; showing the previous snapshot."
             if not available
-            else "源文件已更改，当前显示旧快照；可重新加载。"
+            else "The source file has changed; showing the previous snapshot. You can reload it."
             if stale
-            else ""
+            else None
         )
         self.update_controls()
 

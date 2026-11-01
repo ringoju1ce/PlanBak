@@ -15,9 +15,12 @@ def parse_offset(text, size):
     try:
         value = int(text, 16 if text.lower().startswith("0x") else 10)
     except ValueError:
-        raise BackupError("请输入十进制偏移或以 0x 开头的十六进制偏移。") from None
+        raise BackupError(
+            "请输入十进制偏移或以 0x 开头的十六进制偏移。",
+            english="Enter a decimal offset or a hexadecimal offset beginning with 0x.",
+        ) from None
     if value < 0 or value >= max(1, size):
-        raise BackupError("偏移超出文件范围。")
+        raise BackupError("偏移超出文件范围。", english="The offset is outside the file.")
     return value
 
 
@@ -25,11 +28,16 @@ def parse_pattern(text, hex_mode=True):
     try:
         pattern = bytes.fromhex(text) if hex_mode else text.encode("utf-8")
     except (ValueError, UnicodeError):
-        raise BackupError("请输入完整的十六进制字节，例如 53 51 4C 69。") from None
+        raise BackupError(
+            "请输入完整的十六进制字节，例如 53 51 4C 69。",
+            english="Enter complete hexadecimal bytes, for example 53 51 4C 69.",
+        ) from None
     if not pattern:
-        raise BackupError("请输入搜索内容。")
+        raise BackupError("请输入搜索内容。", english="Enter a search term.")
     if len(pattern) > MAX_PATTERN:
-        raise BackupError("搜索内容最多支持 4096 字节。")
+        raise BackupError(
+            "搜索内容最多支持 4096 字节。", english="Search terms are limited to 4096 bytes."
+        )
     return pattern
 
 
@@ -47,7 +55,7 @@ class SearchResult:
 
 def search_bytes(path, pattern, start=0, *, backwards=False, cancel=None):
     if not pattern or len(pattern) > MAX_PATTERN:
-        raise BackupError("无效的搜索字节。")
+        raise BackupError("无效的搜索字节。", english="Invalid search bytes.")
     size = Path(path).stat().st_size
     if not size:
         return SearchResult(None)

@@ -28,6 +28,10 @@ MAX_METADATA_DEPTH = 128
 class BackupError(Exception):
     """An actionable backup/operation error suitable for display."""
 
+    def __init__(self, message, *, english=None):
+        super().__init__(message)
+        self.translation_source = english
+
 
 class Cancelled(BackupError):
     pass

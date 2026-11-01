@@ -57,3 +57,7 @@ class LanguageContext(QObject):
     def translate(self, source: str, **values: object) -> str:
         text = _catalog(self._language).get(source, source)
         return text.format(**values) if values else text
+
+    def error(self, error: Exception) -> str:
+        source = getattr(error, "translation_source", None)
+        return self.translate(source) if source else str(error)

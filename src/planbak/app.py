@@ -2488,7 +2488,7 @@ class MainWindow(QMainWindow):
             record.revision = revision
             if self.hex_viewers.get(record.token) is record:
                 record.viewer.set_source_state(stale=True)
-                record.viewer.status.setText(f"无法重新加载文件：{exc}")
+                record.viewer.set_status("Unable to reload file: {error}", error=exc)
 
         def cleanup():
             if self.hex_viewers.get(record.token) is not record or record.path != path:
@@ -2514,7 +2514,7 @@ class MainWindow(QMainWindow):
                 continue
             if record.viewer.name != entry.name:
                 record.viewer.name = entry.name
-                record.viewer.setWindowTitle(f"{entry.name} — 十六进制查看器（只读）")
+                record.viewer.update_title()
             if not record.viewer.available:
                 record.viewer.set_source_state(stale=record.viewer.stale)
             if revision != record.revision:
@@ -2556,7 +2556,7 @@ class MainWindow(QMainWindow):
             if token in self.hex_viewers:
                 viewer = self.hex_viewers[token].viewer
                 viewer.name = label
-                viewer.setWindowTitle(f"{label} — 十六进制查看器（只读）")
+                viewer.update_title()
                 viewer.showNormal()
                 viewer.raise_()
                 viewer.activateWindow()
@@ -2564,7 +2564,7 @@ class MainWindow(QMainWindow):
                 return
             viewer = HexViewer(path, label, self)
             viewer.reload_button.defaultAction().setVisible(False)
-            viewer.status.clear()
+            viewer.set_status()
             record = OpenedHex(token, viewer, path, fingerprint, fingerprint, (), detached=True)
             self.hex_viewers[token] = record
             retained = True
