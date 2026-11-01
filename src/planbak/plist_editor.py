@@ -52,6 +52,13 @@ MAX_PLIST_NODES = 100_000
 MAX_PLIST_DEPTH = 128
 
 
+class PlistValidationError(ValueError):
+    def __init__(self, message, *, english, values=None):
+        super().__init__(message)
+        self.translation_source = english
+        self.translation_values = values or {}
+
+
 def validate_structure(value):
     """先测量共享对象图，按展开后的大小限制类型树，而非先分配指数级节点。"""
     measured = {}
@@ -59,12 +66,18 @@ def validate_structure(value):
 
     def measure(current, depth):
         if depth > MAX_PLIST_DEPTH:
-            raise ValueError("plist 嵌套超过 128 层，请导出后处理")
+            raise PlistValidationError(
+                "plist 嵌套超过 128 层，请导出后处理",
+                english="The plist exceeds 128 nesting levels; export it to process it",
+            )
         if not isinstance(current, (dict, list)):
             return 1, 1
         identity = id(current)
         if identity in active:
-            raise ValueError("plist 包含循环引用，无法作为树编辑")
+            raise PlistValidationError(
+                "plist 包含循环引用，无法作为树编辑",
+                english="The plist contains a cycle and cannot be edited as a tree",
+            )
         if identity not in measured:
             active.add(identity)
             nodes, height = 1, 1
@@ -75,13 +88,19 @@ def validate_structure(value):
                     nodes += count
                     height = max(height, levels + 1)
                     if nodes > MAX_PLIST_NODES:
-                        raise ValueError("plist 展开超过 100000 个节点，请导出后处理")
+                        raise PlistValidationError(
+                            "plist 展开超过 100000 个节点，请导出后处理",
+                            english="The plist expands beyond 100,000 nodes; export it to process it",
+                        )
                 measured[identity] = nodes, height
             finally:
                 active.remove(identity)
         nodes, height = measured[identity]
         if depth + height - 1 > MAX_PLIST_DEPTH:
-            raise ValueError("plist 嵌套超过 128 层，请导出后处理")
+            raise PlistValidationError(
+                "plist 嵌套超过 128 层，请导出后处理",
+                english="The plist exceeds 128 nesting levels; export it to process it",
+            )
         return nodes, height
 
     measure(value, 1)
@@ -130,14 +149,20 @@ class PlistNode:
             type(None): "Null",
         }.get(type(value))
         if kind is None:
-            raise ValueError(f"不支持的 plist 类型：{type(value).__name__}")
+            raise PlistValidationError(
+                f"不支持的 plist 类型：{type(value).__name__}",
+                english="Unsupported plist type: {type}",
+                values={"type": type(value).__name__},
+            )
         return cls(kind, key, value)
 
     def to_value(self):
         if self.kind == "Dictionary":
             keys = [child.key for child in self.children]
             if len(set(keys)) != len(keys):
-                raise ValueError("字典中存在重复的键")
+                raise PlistValidationError(
+                    "字典中存在重复的键", english="The dictionary contains duplicate keys"
+                )
             return {child.key: child.to_value() for child in self.children}
         if self.kind == "Array":
             return [child.to_value() for child in self.children]
@@ -180,16 +205,21 @@ def parse_value(kind, text):
     if kind == "Integer":
         value = int(text, 10)
         if not -(2**63) <= value < 2**64:
-            raise ValueError("整数必须介于 -2⁶³ 和 2⁶⁴−1 之间")
+            raise PlistValidationError(
+                "整数必须介于 -2⁶³ 和 2⁶⁴−1 之间",
+                english="The integer must be between -2⁶³ and 2⁶⁴−1",
+            )
         return value
     if kind == "Real":
         value = float(text)
         if not math.isfinite(value):
-            raise ValueError("请输入有限实数")
+            raise PlistValidationError("请输入有限实数", english="Enter a finite real number")
         return value
     if kind == "Boolean":
         if text.lower() not in ("true", "false"):
-            raise ValueError("布尔值只能是 true 或 false")
+            raise PlistValidationError(
+                "布尔值只能是 true 或 false", english="Boolean values must be true or false"
+            )
         return text.lower() == "true"
     if kind == "Date":
         value = datetime.fromisoformat(text.replace("Z", "+00:00"))
@@ -198,7 +228,7 @@ def parse_value(kind, text):
         return value
     if kind == "UID":
         return plistlib.UID(int(text, 10))
-    raise ValueError("不支持的值类型")
+    raise PlistValidationError("不支持的值类型", english="Unsupported value type")
 
 
 class PlistDocument:
@@ -217,7 +247,10 @@ class PlistDocument:
         data = plistlib.dumps(value, fmt=self.format, sort_keys=False)
         # Refuse values that would silently lose precision, e.g. XML fractional dates.
         if not same_value(plistlib.loads(data), value):
-            raise ValueError("当前格式无法无损保存这些值；XML 日期只支持整秒")
+            raise PlistValidationError(
+                "当前格式无法无损保存这些值；XML 日期只支持整秒",
+                english="The current format cannot save these values without loss; XML dates support whole seconds only",
+            )
         return data
 
     def mark_saved(self):
@@ -634,6 +667,8 @@ class PlistEditor(DocumentWindow):
         self.xml.retranslate()
         if isinstance(self._xml_error, PlistXmlError):
             self.xml.error.setText(self._xml_error.localized(tr))
+        elif self._xml_error is not None:
+            self.xml.error.setText(self.language_context.error(self._xml_error))
         self.tree_actions.setWindowTitle(tr("plist tree editing"))
         self.tree_actions.setAccessibleName(tr("plist tree editing"))
         for button, source in (
@@ -743,13 +778,16 @@ class PlistEditor(DocumentWindow):
             # Validate against the original file format before changing the typed tree.
             data = plistlib.dumps(value, fmt=self.document.format, sort_keys=False)
             if not same_value(plistlib.loads(data), value):
-                raise ValueError("源文件格式无法无损保存这些值")
+                raise PlistValidationError(
+                    "源文件格式无法无损保存这些值",
+                    english="The original file format cannot save these values without loss",
+                )
         except Exception as exc:
             self._xml_error = exc
             self.xml.error.setText(
                 exc.localized(self.language_context.translate)
                 if isinstance(exc, PlistXmlError)
-                else str(exc)
+                else self.language_context.error(exc)
             )
             if isinstance(exc, PlistXmlError):
                 self.xml.code.show_error(exc.line, exc.column)

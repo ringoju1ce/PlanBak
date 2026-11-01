@@ -522,5 +522,14 @@
   "SQLite actions": "SQLite 操作",
   "Query result pages": "查询结果分页",
   "SQL query actions": "SQL 查询操作",
-  "-- {name}: created automatically by SQLite": "-- {name}：由 SQLite 自动创建"
+  "-- {name}: created automatically by SQLite": "-- {name}：由 SQLite 自动创建",
+  "The plist exceeds 128 nesting levels; export it to process it": "plist 嵌套超过 128 层，请导出后处理",
+  "The plist contains a cycle and cannot be edited as a tree": "plist 包含循环引用，无法作为树编辑",
+  "The plist expands beyond 100,000 nodes; export it to process it": "plist 展开超过 100000 个节点，请导出后处理",
+  "The dictionary contains duplicate keys": "字典中存在重复的键",
+  "Boolean values must be true or false": "布尔值只能是 true 或 false",
+  "Unsupported value type": "不支持的值类型",
+  "The current format cannot save these values without loss; XML dates support whole seconds only": "当前格式无法无损保存这些值；XML 日期只支持整秒",
+  "The original file format cannot save these values without loss": "源文件格式无法无损保存这些值",
+  "Unsupported plist type: {type}": "不支持的 plist 类型：{type}"
 }
