@@ -453,6 +453,7 @@ class XmlPane(QWidget):
         self.toolbar.setWindowTitle(tr("XML editing"))
         self.toolbar.setAccessibleName(tr("XML editing"))
         self.code.setAccessibleName(tr("plist XML content"))
+        self.error.retranslate()
         for button, source in (
             (self.undo_button, "Undo"),
             (self.redo_button, "Redo"),

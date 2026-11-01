@@ -276,8 +276,8 @@ class ImageInformationStatus(DocumentStatus):
 
     def show_details(self):
         self.show_text_details(
-            self.window().language_context.translate("Image Information"),
-            self.window().image_information(),
+            lambda: self.window().language_context.translate("Image Information"),
+            self.window().image_information,
         )
 
 

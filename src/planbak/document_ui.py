@@ -92,6 +92,14 @@ class DocumentStatus(QWidget):
         self.details_button.setVisible(details)
         self._refresh()
 
+    def retranslate(self):
+        context = getattr(self.window(), "language_context", None)
+        if context:
+            tr = context.translate
+            self.details_button.setText(tr("Details…"))
+            self.details_button.setAccessibleName(tr("View full status and details"))
+            self.details_button.setToolTip(tr("View and copy full status and details"))
+
     def text(self):
         return self._text
 
@@ -134,21 +142,39 @@ class DocumentStatus(QWidget):
             self._refresh()
 
     def show_details(self):
-        self.show_text_details("状态与说明", self.full_text())
+        context = getattr(self.window(), "language_context", None)
+
+        def title():
+            return context.translate("Status and Details") if context else "状态与说明"
+
+        self.show_text_details(title, self.full_text)
 
     def show_text_details(self, title, contents):
         dialog = FixedDialog(self.window())
-        dialog.setWindowTitle(title)
         layout = QVBoxLayout(dialog)
         text = QPlainTextEdit()
-        text.setAccessibleName(title)
         text.setReadOnly(True)
-        text.setPlainText(contents)
         layout.addWidget(text)
         buttons = document_buttons(QDialogButtonBox.StandardButton.Close, dialog)
-        buttons.button(QDialogButtonBox.StandardButton.Close).setText("关闭")
+        close = buttons.button(QDialogButtonBox.StandardButton.Close)
         buttons.rejected.connect(dialog.reject)
         layout.addWidget(buttons)
+        context = dialog.language_context
+
+        def update_text():
+            heading = title() if callable(title) else title
+            body = contents() if callable(contents) else contents
+            dialog.setWindowTitle(heading)
+            text.setAccessibleName(heading)
+            if text.toPlainText() != body:
+                text.setPlainText(body)
+            close.setText(context.translate("Close") if context else "关闭")
+
+        update_text()
+        if context:
+            context.changed.connect(update_text)
         dialog.lock_size(QSize(680, 360))
         dialog.exec()
+        if context:
+            context.changed.disconnect(update_text)
         dialog.deleteLater()

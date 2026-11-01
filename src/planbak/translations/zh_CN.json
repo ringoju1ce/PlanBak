@@ -497,5 +497,9 @@
   "Output backup is missing file data: {file_id}": "输出备份缺少文件数据：{file_id}",
   "Unable to read image: {error}": "无法读取图片：{exc}",
   "The externally edited file was moved or deleted: {name}": "外部编辑文件已被移动或删除：{name}",
-  "Unable to decode image: {error}": "无法解码图片：{error}"
+  "Unable to decode image: {error}": "无法解码图片：{error}",
+  "Status and Details": "状态与说明",
+  "Details…": "详情…",
+  "View full status and details": "查看完整状态与说明",
+  "View and copy full status and details": "查看并复制完整状态与说明"
 }
