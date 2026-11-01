@@ -1525,6 +1525,10 @@ class MainWindow(QMainWindow):
             text = self.language_context.translate(progress_sources[text])
         elif text.startswith("正在") and text.endswith("…") and text[2:-1] in operations:
             text = self.language_context.translate(operations[text[2:-1]] + "…")
+        elif text.startswith("正在加载文件："):
+            text = self.language_context.translate(
+                "Loading file: {name}", name=text[len("正在加载文件：") :]
+            )
         elif text.startswith("正在导出："):
             text = self.language_context.translate(
                 "Exporting: {name}", name=text[len("正在导出：") :]

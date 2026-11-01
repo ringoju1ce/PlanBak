@@ -27,7 +27,9 @@ def to_qimage(image):
     if image.bands == 3:
         image = image.bandjoin(255)
     if image.bands != 4:
-        raise BackupError("无法转换此图片的颜色通道。")
+        raise BackupError(
+            "无法转换此图片的颜色通道。", english="Unable to convert this image’s color channels."
+        )
     data = image.write_to_memory()
     return QImage(
         data, image.width, image.height, image.width * 4, QImage.Format.Format_RGBA8888
@@ -54,7 +56,10 @@ class LargeLease:
         self.source = None
         with source.state_lock:
             if source.closed:
-                raise BackupError("大图缓存已回收，请重新加载。")
+                raise BackupError(
+                    "大图缓存已回收，请重新加载。",
+                    english="The large image cache was released; reload the image.",
+                )
             source.users += 1
             self.source = source
 
@@ -91,7 +96,10 @@ class LargeImage:
         try:
             check_cancel(cancel)
             if self.closed:
-                raise BackupError("大图缓存已回收，请重新加载。")
+                raise BackupError(
+                    "大图缓存已回收，请重新加载。",
+                    english="The large image cache was released; reload the image.",
+                )
             yield
         finally:
             self.lock.release()
@@ -125,12 +133,18 @@ class LargeImage:
             )
             check_cancel(cancel)
             if self.disk_size() > MAX_TILE_BYTES or not self.capacity():
-                raise BackupError("大图分块缓存超过空间预算，请关闭部分图片窗口后重试。")
+                raise BackupError(
+                    "大图分块缓存超过空间预算，请关闭部分图片窗口后重试。",
+                    english="The large image tile cache exceeds its space budget; close some image windows and try again.",
+                )
         except Exception as exc:
             self.tiles.unlink(missing_ok=True)
             check_cancel(cancel)
             if stopped[0]:
-                raise BackupError("大图分块缓存超过空间预算。") from exc
+                raise BackupError(
+                    "大图分块缓存超过空间预算。",
+                    english="The large image tile cache exceeds its space budget.",
+                ) from exc
             raise
 
     def preview(self, cancel):
@@ -202,9 +216,15 @@ def decode_large(path, cancel, format_name=""):
     width, height = image.width, image.height
     loader = image.get("vips-loader") if image.get_typeof("vips-loader") else ""
     if any(kind in loader for kind in ("heif", "gif", "webp")) and width * height > 64_000_000:
-        raise BackupError("此图片编码需要整帧缓冲，超过 6400 万像素的解码内存保护范围。")
+        raise BackupError(
+            "此图片编码需要整帧缓冲，超过 6400 万像素的解码内存保护范围。",
+            english="This image encoding requires a full-frame buffer and exceeds the 64-million-pixel decoding memory limit.",
+        )
     if width * height > MAX_PIXELS or max(width, height) > MAX_EDGE:
-        raise BackupError("图片尺寸超出大图读取范围（10 亿像素或单边 100 万像素）。")
+        raise BackupError(
+            "图片尺寸超出大图读取范围（10 亿像素或单边 100 万像素）。",
+            english="The image exceeds the large-image limit (one billion pixels or one million pixels per side).",
+        )
     preview = pyvips.Image.thumbnail(str(path), PREVIEW_EDGE, height=PREVIEW_EDGE, size="down")
     monitor(preview, cancel)
     result = to_qimage(preview)
@@ -220,13 +240,19 @@ def decode_heif(path, cancel):
     source = pillow_heif.open_heif(path, convert_hdr_to_8bit=True, remove_stride=True)
     width, height = source.size
     if width * height > 64_000_000:
-        raise BackupError("HEIC/HEIF 需要整帧缓冲，超过 6400 万像素的解码内存保护范围。")
+        raise BackupError(
+            "HEIC/HEIF 需要整帧缓冲，超过 6400 万像素的解码内存保护范围。",
+            english="HEIC/HEIF requires a full-frame buffer and exceeds the 64-million-pixel decoding memory limit.",
+        )
     check_cancel(cancel)
     data = source.data
     check_cancel(cancel)
     width, height = source.size
     if width * height > 64_000_000:
-        raise BackupError("HEIC/HEIF 解码后的尺寸超过整帧内存保护范围。")
+        raise BackupError(
+            "HEIC/HEIF 解码后的尺寸超过整帧内存保护范围。",
+            english="The decoded HEIC/HEIF image exceeds the full-frame memory limit.",
+        )
     bands = 4 if source.has_alpha else 3
     image = pyvips.Image.new_from_memory(data, width, height, bands, "uchar").copy(
         interpretation="srgb"

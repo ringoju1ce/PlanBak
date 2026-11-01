@@ -62,9 +62,15 @@ class ImageCache:
         with self.session_lock(cancel):
             entry = self.session.get(token)
             if entry.kind != "file":
-                raise BackupError("此项目已不再是可读取的图片文件。")
+                raise BackupError(
+                    "此项目已不再是可读取的图片文件。",
+                    english="This item is no longer a readable image file.",
+                )
             if entry.size > MAX_FILE_BYTES:
-                raise BackupError("图片文件超过 128 MiB 的预览上限。")
+                raise BackupError(
+                    "图片文件超过 128 MiB 的预览上限。",
+                    english="The image exceeds the 128 MiB preview limit.",
+                )
             return entry, source_revision(self.session, token)
 
     @contextmanager
@@ -93,7 +99,10 @@ class ImageCache:
                 raise BackupError("图片源文件在读取时发生变化，请重新打开。")
             size = path.stat().st_size
             if size > MAX_FILE_BYTES:
-                raise BackupError("图片文件超过 128 MiB 的预览上限。")
+                raise BackupError(
+                    "图片文件超过 128 MiB 的预览上限。",
+                    english="The image exceeds the 128 MiB preview limit.",
+                )
             with self._lock:
                 previous = self.files.get(token)
                 if previous and previous.revision == revision and previous.path.is_file():
@@ -110,7 +119,10 @@ class ImageCache:
                     if not self._trim():
                         self.files.pop(token)
                         target.unlink(missing_ok=True)
-                        raise BackupError("图片文件缓存空间不足，请关闭部分图片窗口。")
+                        raise BackupError(
+                            "图片文件缓存空间不足，请关闭部分图片窗口。",
+                            english="The image file cache is full; close some image windows.",
+                        )
                 finally:
                     cached.users -= 1
 
@@ -210,11 +222,17 @@ class ImageCache:
                 check_cancel(cancel)
                 cached = CachedFile(revision, path, path.stat().st_size, users=1)
                 if cached.size > MAX_FILE_BYTES:
-                    raise BackupError("图片文件超过 128 MiB 的预览上限。")
+                    raise BackupError(
+                        "图片文件超过 128 MiB 的预览上限。",
+                        english="The image exceeds the 128 MiB preview limit.",
+                    )
                 with self._lock:
                     self.files[token] = cached
                     if not self._trim():
-                        raise BackupError("图片文件缓存空间不足，请关闭部分图片窗口。")
+                        raise BackupError(
+                            "图片文件缓存空间不足，请关闭部分图片窗口。",
+                            english="The image file cache is full; close some image windows.",
+                        )
             except BaseException:
                 with self._lock:
                     if cached is not None and self.files.get(token) is cached:
@@ -244,7 +262,10 @@ class ImageCache:
             check_cancel(cancel)
             current, after = self.source(token, cancel)
             if after != revision:
-                raise BackupError("图片源文件在读取时发生变化，请重新加载。")
+                raise BackupError(
+                    "图片源文件在读取时发生变化，请重新加载。",
+                    english="The source image changed while being read; reload it.",
+                )
             result.name = current.name
             result.backup_path = f"/{current.domain}/{current.path}"
             with self._lock:
@@ -253,7 +274,10 @@ class ImageCache:
                 if not self._trim():
                     if lease:
                         lease.release()
-                    raise BackupError("图片分块缓存空间不足，请关闭部分图片窗口。")
+                    raise BackupError(
+                        "图片分块缓存空间不足，请关闭部分图片窗口。",
+                        english="The image tile cache is full; close some image windows.",
+                    )
             return replace(result, image=QImage(result.image), lease=lease)
         finally:
             with self._lock:
