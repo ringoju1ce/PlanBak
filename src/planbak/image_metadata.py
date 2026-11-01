@@ -164,25 +164,36 @@ def read_metadata(path, cancel=None):
         return ImageMetadata(size, error=f"元数据无法读取：{type(exc).__name__}")
 
 
-def information_text(result):
+def information_text(result, translate=None):
+    # Default preserves the original standalone API; viewer supplies its window language.
+    if translate is None:
+        from .i18n import SIMPLIFIED_CHINESE, LanguageContext
+
+        translate = LanguageContext(SIMPLIFIED_CHINESE).translate
+    tr = translate
     metadata = result.metadata
-    lines = [f"文件名称：{result.name or '未命名图片'}"]
+    lines = [tr("File name: {name}", name=result.name or tr("Untitled image"))]
     if result.backup_path:
-        lines.append(f"备份路径：{result.backup_path}")
-    lines.extend((f"格式：{result.format}", f"图片尺寸：{result.width} × {result.height} 像素"))
+        lines.append(tr("Backup path: {path}", path=result.backup_path))
+    lines.extend(
+        (
+            tr("Format: {format}", format=result.format),
+            tr("Image size: {width} × {height} pixels", width=result.width, height=result.height),
+        )
+    )
     if metadata:
         size = metadata.file_size
-        unit = f"（{size / 1024**2:.2f} MiB）" if size >= 1024**2 else ""
-        lines.append(f"文件大小：{size:,} 字节{unit}")
+        unit = f" ({size / 1024**2:.2f} MiB)" if size >= 1024**2 else ""
+        lines.append(tr("File size: {size} bytes{unit}", size=f"{size:,}", unit=unit))
         if metadata.mode:
-            lines.append(f"颜色模式：{metadata.mode}")
+            lines.append(tr("Color mode: {mode}", mode=metadata.mode))
         if metadata.bit_depth:
-            lines.append(f"位深：{metadata.bit_depth} bit")
+            lines.append(tr("Bit depth: {depth} bit", depth=metadata.bit_depth))
     lines.extend(("", "EXIF"))
     if metadata and metadata.exif:
-        lines.extend(f"{name}：{value}" for name, value in metadata.exif)
+        lines.extend(f"{name}: {value}" for name, value in metadata.exif)
     elif not metadata or not metadata.error:
-        lines.append("无 EXIF 信息")
+        lines.append(tr("No EXIF information"))
     if metadata and metadata.error:
         lines.append(metadata.error)
     return "\n".join(lines)

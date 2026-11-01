@@ -8,6 +8,7 @@ from PySide6.QtGui import QAction, QImage, QPainter
 from PySide6.QtWidgets import QCheckBox, QMainWindow, QSlider, QWidget
 
 from .document_ui import DocumentStatus, DocumentToolBar
+from .i18n import ENGLISH, SIMPLIFIED_CHINESE, LanguageContext
 from .image_metadata import information_text
 from .viewer_tasks import ViewerTask
 
@@ -274,7 +275,10 @@ class ImageInformationStatus(DocumentStatus):
         self.details_button.setToolTip("查看图片信息和 EXIF")
 
     def show_details(self):
-        self.show_text_details("图片信息", self.window().image_information())
+        self.show_text_details(
+            self.window().language_context.translate("Image Information"),
+            self.window().image_information(),
+        )
 
 
 class ImageViewer(QMainWindow):
@@ -296,7 +300,11 @@ class ImageViewer(QMainWindow):
         on_load_finished=None,
     ):
         super().__init__(None)
-        self.language_context = getattr(parent, "language_context", None)
+        self.language_context = getattr(parent, "language_context", None) or LanguageContext(
+            parent=self
+        )
+        self._status_source, self._status_values = None, {}
+        self._canvas_source = None
         if parent is not None:
             self.setScreen(parent.screen())
         self.items = tuple(items)
@@ -318,7 +326,7 @@ class ImageViewer(QMainWindow):
         self.setCentralWidget(self.canvas)
         self.canvas.navigate.connect(self.navigate)
         self.canvas.view_changed.connect(self.schedule_region)
-        toolbar = DocumentToolBar("图片查看操作", self)
+        toolbar = self.toolbar = DocumentToolBar("图片查看操作", self)
         self.addToolBar(Qt.ToolBarArea.BottomToolBarArea, toolbar)
         self.previous_button = toolbar.command(
             "上一张", lambda: self.navigate(-1), icon="go-previous", hint="Left"
@@ -352,7 +360,7 @@ class ImageViewer(QMainWindow):
         self.statusBar().addWidget(self.status, 1)
         self.canvas.scale_changed.connect(self.update_zoom)
         self._info = ""
-        self._information = ""
+        self._information = {}
         if on_load_progress:
             self.load_progress.connect(on_load_progress)
         if on_load_finished:
@@ -370,7 +378,60 @@ class ImageViewer(QMainWindow):
         self.setMinimumSize(QSize(560, 380))
         available = self.screen().availableGeometry().size()
         self.resize(QSize(960, 720).boundedTo(available - QSize(60, 80)))
+        self.language_context.changed.connect(self.retranslate)
+        self.retranslate()
         self.request()
+
+    def set_status(self, source, **values):
+        self._status_source, self._status_values = source, values
+        values = {
+            key: self.language_context.error(value) if isinstance(value, Exception) else value
+            for key, value in values.items()
+        }
+        self.status.setText(self.language_context.translate(source, **values))
+
+    def clear_canvas(self, source):
+        self._canvas_source = source
+        self.canvas.clear(self.language_context.translate(source))
+
+    def retranslate(self):
+        tr = self.language_context.translate
+        self.setWindowTitle(tr("{name} — Image Viewer", name=self.items[self.index][1]))
+        self.toolbar.setWindowTitle(tr("Image viewer controls"))
+        self.toolbar.setAccessibleName(tr("Image viewer controls"))
+        self.canvas.setAccessibleName(
+            tr(
+                "Image preview; use arrow keys or the wheel to navigate, Ctrl+wheel to zoom, and drag to pan"
+            )
+        )
+        for button, source in (
+            (self.previous_button, "Previous Image"),
+            (self.next_button, "Next Image"),
+            (self.fit_button, "Fit to Window"),
+            (self.actual_button, "Actual Size"),
+            (self.reload_button, "Reload"),
+        ):
+            button.defaultAction().setText(tr(source))
+            button.defaultAction().setToolTip(tr(source))
+            button.setAccessibleName(tr(source))
+        self.loop_toggle.setText(tr("Loop"))
+        self.loop_toggle.setToolTip(tr("Loop through images in this window until it closes"))
+        self.zoom_slider.setAccessibleName(tr("Image zoom"))
+        self.zoom_slider.setToolTip(
+            tr("Adjust zoom; actual size is 100% (1:1 pixels), fit to window is a separate mode")
+        )
+        self.status.details_button.setText(tr("Image Information"))
+        self.status.details_button.setAccessibleName(tr("Image Information"))
+        self.status.details_button.setToolTip(tr("View image information and EXIF"))
+        if self._canvas_source and self.canvas.image.isNull():
+            self.canvas.message = tr(self._canvas_source)
+            self.canvas.update()
+        if self._status_source == "{info} · {mode}{scale}%":
+            self.update_zoom(self.canvas.scale, self.canvas.fitting)
+        elif self._status_source:
+            self.set_status(self._status_source, **self._status_values)
+        elif not self.canvas.image.isNull():
+            self.update_zoom(self.canvas.scale, self.canvas.fitting)
 
     @property
     def current_token(self):
@@ -393,13 +454,19 @@ class ImageViewer(QMainWindow):
         with QSignalBlocker(self.zoom_slider):
             self.zoom_slider.setValue(round(100 * math.log2(max(0.00001, scale))))
         if not self.canvas.image.isNull():
-            mode = "适应窗口 · " if fitting else ""
-            self.status.setText(f"{self._info} · {mode}{scale * 100:.3g}%")
+            mode = self.language_context.translate("Fit to Window") + " · " if fitting else ""
+            self.set_status(
+                "{info} · {mode}{scale}%", info=self._info, mode=mode, scale=f"{scale * 100:.3g}"
+            )
 
     def image_information(self):
         if self._information:
-            return self._information
-        return f"文件名称：{self.items[self.index][1]}\n\n{self.status.text()}"
+            return self._information[self.language_context.language]
+        return self.language_context.translate(
+            "File name: {name}\n\n{status}",
+            name=self.items[self.index][1],
+            status=self.status.text(),
+        )
 
     def navigate(self, delta):
         target = (
@@ -421,7 +488,7 @@ class ImageViewer(QMainWindow):
             self.request(force=True)
 
     def request(self, *, force=False):
-        self._information = ""
+        self._information = {}
         self._region_timer.stop()
         self._pending_region = self._rendered_region = None
         if self.region_task:
@@ -429,10 +496,15 @@ class ImageViewer(QMainWindow):
         self._generation += 1
         self._pending = (self._generation, self.current_token, force)
         name = self.items[self.index][1]
-        self.setWindowTitle(f"{name} — 图片查看器")
+        self.setWindowTitle(self.language_context.translate("{name} — Image Viewer", name=name))
         self.update_navigation()
-        self.canvas.clear("正在加载…")
-        self.status.setText(f"正在加载：{name} · {self.index + 1}/{len(self.items)}")
+        self.clear_canvas("Loading…")
+        self.set_status(
+            "Loading: {name} · {index}/{total}",
+            name=name,
+            index=self.index + 1,
+            total=len(self.items),
+        )
         if self.task:
             self.task.cancelled.set()
         else:
@@ -464,20 +536,35 @@ class ImageViewer(QMainWindow):
                 self.start_pending()
             elif generation == self._generation:
                 if task.error or task.cancelled.is_set():
-                    self.canvas.clear("无法显示图片；可继续查看上一张或下一张。")
-                    self.status.setText(f"无法加载图片：{task.error or '操作已取消'}")
+                    self.clear_canvas(
+                        "Unable to display the image; you can navigate to another image."
+                    )
+                    self.set_status(
+                        "Unable to load image: {error}",
+                        error=task.error or self.language_context.translate("Operation canceled"),
+                    )
                 elif not self.accept_image(self, task.result.image):
-                    self.canvas.clear("已打开图片占用过多内存，请关闭部分图片窗口后重新加载。")
-                    self.status.setText(self.canvas.message)
+                    self.clear_canvas(
+                        "Open images use too much memory; close some image windows and reload."
+                    )
+                    self.set_status(
+                        "Open images use too much memory; close some image windows and reload."
+                    )
                 else:
                     result = task.result
                     name = result.name or self.items[self.index][1]
-                    self.setWindowTitle(f"{name} — 图片查看器")
+                    self.setWindowTitle(
+                        self.language_context.translate("{name} — Image Viewer", name=name)
+                    )
                     self._info = (
                         f"{result.format} · {result.width} × {result.height} · "
                         f"{self.index + 1}/{len(self.items)}"
                     )
-                    self._information = information_text(result)
+                    self._information = {
+                        language: information_text(result, LanguageContext(language).translate)
+                        for language in (ENGLISH, SIMPLIFIED_CHINESE)
+                    }
+                    self._canvas_source = None
                     self.canvas.set_image(result)
             task.result = None
             task.deleteLater()
@@ -509,7 +596,7 @@ class ImageViewer(QMainWindow):
         task = ViewerTask(lambda cancel: source.render(rect, output, cancel), self)
         task._image_lease = lease
         self.region_task = task
-        self.status.setText(f"{self._info} · 正在读取大图可见区域…")
+        self.set_status("{info} · Loading the visible region…", info=self._info)
 
         def finished():
             self.region_task = None
@@ -524,9 +611,14 @@ class ImageViewer(QMainWindow):
                         self.canvas.update()
                         self.update_zoom(self.canvas.scale, self.canvas.fitting)
                     else:
-                        self.status.setText("可见区域缓存超过内存预算；请关闭部分图片窗口。")
+                        self.set_status(
+                            "Visible region cache exceeds the memory budget; close some image windows."
+                        )
                 elif task.error and not task.cancelled.is_set():
-                    self.status.setText(f"大图细节读取失败：{task.error}；当前保留缩略预览。")
+                    self.set_status(
+                        "Unable to load image details: {error}; showing the preview.",
+                        error=task.error,
+                    )
             task.result = None
             task._image_lease = None
             task.deleteLater()
