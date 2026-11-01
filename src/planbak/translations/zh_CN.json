@@ -368,5 +368,13 @@
   "Forward": "前进",
   "Create New Folder": "新建文件夹",
   "List View": "列表视图",
-  "Detail View": "详细信息视图"
+  "Detail View": "详细信息视图",
+  "Grayscale": "灰度",
+  "Indexed color": "索引色",
+  "Grayscale + Alpha": "灰度+Alpha",
+  "EXIF data is too large to display": "EXIF 数据过大，未展开",
+  "Too many PNG chunks; some metadata was not read": "PNG 数据块过多，未读取全部元数据",
+  "Unable to read metadata: {error}": "元数据无法读取：{error}",
+  "Unable to read {group} data": "{group} 数据无法读取",
+  "; ": "；"
 }

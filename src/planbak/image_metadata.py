@@ -186,7 +186,13 @@ def information_text(result, translate=None):
         unit = f" ({size / 1024**2:.2f} MiB)" if size >= 1024**2 else ""
         lines.append(tr("File size: {size} bytes{unit}", size=f"{size:,}", unit=unit))
         if metadata.mode:
-            lines.append(tr("Color mode: {mode}", mode=metadata.mode))
+            modes = {
+                "灰度": "Grayscale",
+                "索引色": "Indexed color",
+                "灰度+Alpha": "Grayscale + Alpha",
+            }
+            mode = tr(modes[metadata.mode]) if metadata.mode in modes else metadata.mode
+            lines.append(tr("Color mode: {mode}", mode=mode))
         if metadata.bit_depth:
             lines.append(tr("Bit depth: {depth} bit", depth=metadata.bit_depth))
     lines.extend(("", "EXIF"))
@@ -195,5 +201,21 @@ def information_text(result, translate=None):
     elif not metadata or not metadata.error:
         lines.append(tr("No EXIF information"))
     if metadata and metadata.error:
-        lines.append(metadata.error)
+        messages = {
+            "EXIF 数据过大，未展开": "EXIF data is too large to display",
+            "PNG 数据块过多，未读取全部元数据": "Too many PNG chunks; some metadata was not read",
+        }
+        errors = []
+        for error in metadata.error.split("；"):
+            if error in messages:
+                errors.append(tr(messages[error]))
+            elif error.startswith("元数据无法读取："):
+                errors.append(
+                    tr("Unable to read metadata: {error}", error=error[len("元数据无法读取：") :])
+                )
+            elif error in ("Exif 数据无法读取", "GPS 数据无法读取", "Interop 数据无法读取"):
+                errors.append(tr("Unable to read {group} data", group=error.split(" ", 1)[0]))
+            else:
+                errors.append(error)
+        lines.append(tr("; ").join(errors))
     return "\n".join(lines)
