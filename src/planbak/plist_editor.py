@@ -244,6 +244,18 @@ class DateValue(QWidget):
         layout.addRow("日期（UTC）：", self.date)
         layout.addRow("时间（UTC）：", self.time)
         layout.addRow("小数秒（六位）：0.", self.fraction)
+        self.form = layout
+
+    def retranslate(self, tr):
+        for widget, text in (
+            (self.date, "Date (UTC):"),
+            (self.time, "Time (UTC):"),
+            (self.fraction, "Fraction (six digits): 0."),
+        ):
+            self.form.labelForField(widget).setText(tr(text))
+        self.fraction.setToolTip(
+            tr("Six digits of fractional seconds; XML dates support whole seconds only")
+        )
 
     def set_value(self, value):
         self.date.setDate(QDate(value.year, value.month, value.day))
@@ -284,12 +296,15 @@ def data_ascii_preview(data, limit=4096):
 class ValueDialog(FixedDialog):
     def __init__(self, node, parent_kind, siblings, binary, parent=None):
         super().__init__(parent)
+        if self.language_context is None:
+            self.language_context = LanguageContext(parent=self)
+        self._error_source = None
         self.setWindowTitle("编辑 plist 条目")
         self.node, self.siblings, self.parent_kind = node, siblings, parent_kind
         self.binary = binary
         self.result_node = None
         layout = QVBoxLayout(self)
-        form = QFormLayout()
+        form = self.form = QFormLayout()
         self.key_field = QLineEdit(node.key)
         self.key_field.setEnabled(parent_kind == "Dictionary")
         form.addRow("键：", self.key_field)
@@ -327,7 +342,7 @@ class ValueDialog(FixedDialog):
         self.data_preview.setReadOnly(True)
         self.data_preview.setFont(QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont))
         self.data_preview.setAccessibleName("Data ASCII 预览（只读）")
-        data_note = QLabel(
+        data_note = self.data_note = QLabel(
             "预览仅移除首尾空白，不改变原始字节。替换或查看完整内容请使用 Data 条目的右键菜单。"
         )
         data_note.setWordWrap(True)
@@ -348,7 +363,7 @@ class ValueDialog(FixedDialog):
         self.error.setTextFormat(Qt.TextFormat.PlainText)
         self.error.setWordWrap(True)
         layout.addWidget(self.error)
-        buttons = QDialogButtonBox(
+        buttons = self.buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
         buttons.button(QDialogButtonBox.StandardButton.Ok).setText("确定")
@@ -357,10 +372,66 @@ class ValueDialog(FixedDialog):
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
         self.type_field.currentTextChanged.connect(self.update_value)
+        self.type_field.currentTextChanged.connect(self.retranslate)
         self.update_value(node.kind)
+        self.language_context.changed.connect(self.retranslate)
+        self.retranslate()
         self.lock_size(QSize(600, 460))
 
+    def retranslate(self):
+        tr = self.language_context.translate
+        self.setWindowTitle(tr("Edit plist Item"))
+        self.form.labelForField(self.key_field).setText(tr("Key:"))
+        self.form.labelForField(self.type_field).setText(tr("Type:"))
+        self.date_field.retranslate(tr)
+        self.data_preview.setAccessibleName(tr("Data ASCII preview (read-only)"))
+        self.data_note.setText(
+            tr(
+                "The preview trims whitespace only; original bytes are unchanged. Use the Data item's context menu to replace or view its full contents."
+            )
+        )
+        self.buttons.button(QDialogButtonBox.StandardButton.Ok).setText(tr("OK"))
+        self.buttons.button(QDialogButtonBox.StandardButton.Cancel).setText(tr("Cancel"))
+        kind = self.type_field.currentText()
+        if kind in ("Integer", "Real", "UID"):
+            self.number_help.setText(
+                tr(
+                    {
+                        "Integer": "Integer range: −2⁶³ to 2⁶⁴−1",
+                        "Real": "Decimals and scientific notation are supported; original precision is retained",
+                        "UID": "Object reference (UID): 0 to 2⁶⁴−1; object relationships are not adjusted automatically",
+                    }[kind]
+                )
+            )
+        elif kind == "Data":
+            data = self.node.value if kind == self.node.kind else b""
+            preview, truncated = data_ascii_preview(data)
+            self.data_info.setText(
+                tr("{count} bytes · ASCII preview (read-only)", count=len(data))
+                + (tr(" · Showing the first 4096 bytes only") if truncated else "")
+            )
+            if not data:
+                preview = tr("Empty Data")
+            elif not data[:4096].strip(b" \t\r\n"):
+                preview = tr(
+                    "The preview is empty after trimming whitespace"
+                    if truncated
+                    else "No visible content after trimming whitespace"
+                )
+            self.data_preview.setPlainText(preview)
+        elif kind in ("Dictionary", "Array", "Null"):
+            self.fixed_value.setText(
+                "null"
+                if kind == "Null"
+                else tr(
+                    "Manage children in the tree; empty a non-empty container before changing its type."
+                )
+            )
+        if self._error_source:
+            self.error.setText(tr(self._error_source))
+
     def update_value(self, kind):
+        self._error_source = None
         self.error.clear()
         existing = kind == self.node.kind
         if kind == "String":
@@ -449,7 +520,19 @@ class ValueDialog(FixedDialog):
                     raise ValueError("当前格式无法无损保存该值；XML 日期只支持整秒")
             self.result_node = PlistNode(kind, key, value, children)
         except (ValueError, TypeError, OverflowError) as exc:
-            self.error.setText(str(exc))
+            self._error_source = {
+                "该字典已存在同名键": "This dictionary already contains that key",
+                "请先清空容器的子项目，再更改类型": "Remove the container's children before changing its type",
+                "请输入合法的 UTC 日期、时间及六位小数秒": "Enter a valid UTC date, time, and six fractional digits",
+                "整数必须介于 -2⁶³ 和 2⁶⁴−1 之间": "The integer must be between -2⁶³ and 2⁶⁴−1",
+                "请输入有限实数": "Enter a finite real number",
+                "当前格式无法无损保存该值；XML 日期只支持整秒": "This value cannot be saved without loss; XML dates support whole seconds only",
+            }.get(str(exc))
+            self.error.setText(
+                self.language_context.translate(self._error_source)
+                if self._error_source
+                else str(exc)
+            )
             return
         super().accept()
 
