@@ -5,6 +5,7 @@ from __future__ import annotations
 from PySide6.QtCore import QEvent, QIdentityProxyModel, QSize, Qt, Signal
 from PySide6.QtGui import QPainter, QPalette
 from PySide6.QtWidgets import (
+    QComboBox,
     QDialog,
     QFileDialog,
     QHBoxLayout,
@@ -398,6 +399,7 @@ class FixedFileDialog(FixedDialogMixin, QFileDialog):
         # Native platform pickers cannot consistently enforce application geometry.
         self.setOption(QFileDialog.Option.DontUseNativeDialog, True)
         self.lock_size(QSize(760, 480))
+        self._default_name_filter = not (args[3] if len(args) > 3 else kwargs.get("filter", ""))
         if self.language_context:
             self._localized_model = FileDialogModel(self.language_context, self)
             self.setProxyModel(self._localized_model)
@@ -419,6 +421,10 @@ class FixedFileDialog(FixedDialogMixin, QFileDialog):
             else "Open"
         )
         self.setLabelText(QFileDialog.DialogLabel.Accept, tr(accept))
+        if self._default_name_filter:
+            filters = self.findChild(QComboBox, "fileTypeCombo")
+            if filters and filters.count() == 1:
+                filters.setItemText(0, tr("All Files (*)"))
         for name, source in (
             ("backButton", "Back"),
             ("forwardButton", "Forward"),

@@ -555,5 +555,6 @@
   "Reload File": "重新加载文件",
   "Save External Edits": "保存外部编辑",
   "Copy Items to This Backup": "复制项目到当前备份",
-  "Clean Old Session Cache": "清理旧会话缓存"
+  "Clean Old Session Cache": "清理旧会话缓存",
+  "All Files (*)": "所有文件 (*)"
 }
