@@ -1680,19 +1680,49 @@ class MainWindow(QMainWindow):
         if tracked_status:
             self.track_status_job(job, "正在" + title + "…")
         if not silent and dialog_progress:
-            dialog = FixedProgressDialog(title, "取消", 0, 0, self)
+            dialog = FixedProgressDialog(
+                self.language_context.translate("Apply Changes"),
+                self.language_context.translate("Cancel"),
+                0,
+                0,
+                self,
+            )
             self.progress_dialog = dialog
             dialog.setWindowTitle("PlanBak")
             dialog.setWindowModality(Qt.WindowModality.WindowModal)
             dialog.canceled.connect(job.cancelled.set)
 
+            progress_text = [title]
+
+            def translate_progress():
+                labels = {
+                    "应用更改": "Apply Changes",
+                    "正在应用更改…": "Applying changes…",
+                    "估算备份大小…": "Estimating backup size…",
+                    "复制备份到独立输出文件夹…": "Copying backup to output folder…",
+                    "重新封装并验证清单…": "Repacking and verifying manifest…",
+                    "建立新的保存基线…": "Establishing the new save baseline…",
+                }
+                text = progress_text[0]
+                if text.startswith("写入："):
+                    text = self.language_context.translate(
+                        "Writing: {name}", name=text[len("写入：") :]
+                    )
+                elif text in labels:
+                    text = self.language_context.translate(labels[text])
+                dialog.setLabelText(text)
+                dialog._cancel_button.setText(self.language_context.translate("Cancel"))
+
+            self.language_context.changed.connect(translate_progress)
+
             def progress(text, done, total):
+                progress_text[0] = text
                 if total > 0:
                     dialog.setRange(0, 1000)
                     dialog.setValue(min(999, int(done / total * 1000)))
                 else:
                     dialog.setRange(0, 0)
-                dialog.setLabelText(text)
+                translate_progress()
                 if text == "正在应用更改…":
                     dialog.set_cancellable(False)
 
@@ -1705,6 +1735,7 @@ class MainWindow(QMainWindow):
             if tracked_status:
                 self.untrack_status_job(job)
             if dialog:
+                self.language_context.changed.disconnect(translate_progress)
                 self.progress_dialog = None
                 dialog.finish()
                 dialog.deleteLater()

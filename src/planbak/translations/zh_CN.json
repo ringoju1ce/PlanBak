@@ -353,5 +353,11 @@
   "Import Data": "导入 Data",
   "Export Data": "导出 Data",
   "Unable to Complete plist Operation": "无法完成 plist 操作",
-  "Discard unsaved changes?": "放弃未保存的更改？"
+  "Discard unsaved changes?": "放弃未保存的更改？",
+  "Applying changes…": "正在应用更改…",
+  "Estimating backup size…": "估算备份大小…",
+  "Copying backup to output folder…": "复制备份到独立输出文件夹…",
+  "Repacking and verifying manifest…": "重新封装并验证清单…",
+  "Establishing the new save baseline…": "建立新的保存基线…",
+  "Writing: {name}": "写入：{name}"
 }
