@@ -302,6 +302,7 @@ class ImageViewer(QMainWindow):
     load_finished = Signal(object)
     prefetch_started = Signal(object, str)
     prefetch_finished = Signal(object)
+    prefetch_miss = Signal(object, str)
 
     def __init__(
         self,
@@ -327,6 +328,7 @@ class ImageViewer(QMainWindow):
         self.index = next(i for i, item in enumerate(self.items) if item[0] == token)
         self.loader, self.accept_image = loader, accept_image
         self._with_progress = with_progress
+        self.prefetch_miss.connect(self._prefetch_miss)
         self.task = None
         self.prefetch_task = None
         self._prefetch_queue = []
@@ -609,9 +611,14 @@ class ImageViewer(QMainWindow):
         if self._closing or self.task or self.prefetch_task or not self._prefetch_queue:
             return
         token, name = self._prefetch_queue.pop(0)
-        task = ViewerTask(lambda cancel: self.loader(token, cancel, force=False), self)
+        task = ViewerTask(
+            lambda cancel: self.loader(
+                token, cancel, force=False,
+                on_miss=lambda: self.prefetch_miss.emit(task, name),
+            ),
+            self,
+        )
         self.prefetch_task = task
-        self.prefetch_started.emit(task, name)
 
         def finished():
             self.prefetch_task = None
@@ -626,6 +633,10 @@ class ImageViewer(QMainWindow):
 
         task.finished.connect(finished)
         task.start()
+
+    def _prefetch_miss(self, task, name):
+        if task is self.prefetch_task and not task.cancelled.is_set() and not self._closing:
+            self.prefetch_started.emit(task, name)
 
     def _reporting_progress(self, text, done, total):
         if self.task is not None:

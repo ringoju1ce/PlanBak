@@ -59,8 +59,10 @@ class ImageWindows:
             items = [(token, session.get(token).name)]
         cache = self.session_cache()
 
-        def load(current, cancel, *, force=False, progress=None):
-            return cache.load(current, cancel, force=force, progress=progress)
+        def load(current, cancel, *, force=False, progress=None, on_miss=None):
+            return cache.load(
+                current, cancel, force=force, progress=progress, on_miss=on_miss
+            )
 
         def accept(viewer, image, region=False):
             allocations = {image.cacheKey(): image.sizeInBytes()}

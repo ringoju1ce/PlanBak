@@ -150,7 +150,7 @@ class ImageCache:
                 )
         return None
 
-    def load(self, token, cancel=None, *, force=False, progress=None):
+    def load(self, token, cancel=None, *, force=False, progress=None, on_miss=None):
         check_cancel(cancel)
         entry, revision = self.source(token, cancel)
         if not force and (hit := self._hit(token, revision, entry)):
@@ -159,6 +159,8 @@ class ImageCache:
             entry, revision = self.source(token, cancel)
             if not force and (hit := self._hit(token, revision, entry)):
                 return hit
+            if on_miss:
+                on_miss()
             while not self._work.acquire(timeout=0.05):
                 check_cancel(cancel)
             try:
