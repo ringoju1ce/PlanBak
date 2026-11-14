@@ -478,6 +478,7 @@
   "The image exceeds the 128 MiB preview limit; export it to view in a system application.": "图片文件超过 128 MiB 的预览上限；可导出后使用系统应用查看。",
   "Unable to recognize the image; the file may be damaged or its format unsupported.": "无法识别图片：文件可能损坏或格式不受支持。",
   "Image decoding failed or memory is insufficient.": "图片解码失败或内存不足。",
+  "Preloading file: {name}": "预加载文件：{name}",
   "Loading file: {name}": "正在加载文件：{name}",
   "Missing key for protection class {class_id}": "缺少保护类别 {class_id} 的密钥",
   "Cannot create a file for protection class {class_id}": "不能为保护类别 {class_id} 创建文件",

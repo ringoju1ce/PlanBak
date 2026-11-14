@@ -300,6 +300,8 @@ class ImageViewer(QMainWindow):
     activated = Signal()
     load_progress = Signal(object, str, object, object)
     load_finished = Signal(object)
+    prefetch_started = Signal(object, str)
+    prefetch_finished = Signal(object)
 
     def __init__(
         self,
@@ -326,6 +328,9 @@ class ImageViewer(QMainWindow):
         self.loader, self.accept_image = loader, accept_image
         self._with_progress = with_progress
         self.task = None
+        self.prefetch_task = None
+        self._prefetch_queue = []
+        self._direction = 0
         self.region_task = None
         self._pending_region = self._rendered_region = None
         self._region_timer = QTimer(self)
@@ -488,6 +493,7 @@ class ImageViewer(QMainWindow):
             else max(0, min(len(self.items) - 1, self.index + delta))
         )
         if not self._closing and target != self.index:
+            self._direction = 1 if delta > 0 else -1
             self.index = target
             self.request()
 
@@ -502,6 +508,9 @@ class ImageViewer(QMainWindow):
 
     def request(self, *, force=False):
         self._information = {}
+        self._prefetch_queue = []
+        if self.prefetch_task:
+            self.prefetch_task.cancelled.set()
         self._region_timer.stop()
         self._pending_region = self._rendered_region = None
         if self.region_task:
@@ -543,7 +552,7 @@ class ImageViewer(QMainWindow):
             self.task = None
             self.load_finished.emit(task)
             if self._closing:
-                if not self.region_task:
+                if not self.region_task and not self.prefetch_task:
                     self.close()
             elif self._pending:
                 self.start_pending()
@@ -579,8 +588,41 @@ class ImageViewer(QMainWindow):
                     }
                     self._canvas_source = None
                     self.canvas.set_image(result)
+                    if self._with_progress:
+                        self.schedule_prefetch()
             task.result = None
             task.deleteLater()
+
+        task.finished.connect(finished)
+        task.start()
+
+    def schedule_prefetch(self):
+        offsets = (1, -1) if not self._direction else (self._direction, 2 * self._direction)
+        self._prefetch_queue = [
+            self.items[self.index + offset]
+            for offset in offsets
+            if 0 <= self.index + offset < len(self.items)
+        ]
+        self.start_prefetch()
+
+    def start_prefetch(self):
+        if self._closing or self.task or self.prefetch_task or not self._prefetch_queue:
+            return
+        token, name = self._prefetch_queue.pop(0)
+        task = ViewerTask(lambda cancel: self.loader(token, cancel, force=False), self)
+        self.prefetch_task = task
+        self.prefetch_started.emit(task, name)
+
+        def finished():
+            self.prefetch_task = None
+            self.prefetch_finished.emit(task)
+            task.result = None
+            task.deleteLater()
+            if self._closing:
+                if not self.task and not self.region_task:
+                    self.close()
+            else:
+                self.start_prefetch()
 
         task.finished.connect(finished)
         task.start()
@@ -614,7 +656,7 @@ class ImageViewer(QMainWindow):
         def finished():
             self.region_task = None
             if self._closing:
-                if not self.task:
+                if not self.task and not self.prefetch_task:
                     self.close()
             elif generation == self._generation and self._pending_region == key:
                 if not task.cancelled.is_set() and not task.error:
@@ -647,8 +689,11 @@ class ImageViewer(QMainWindow):
     def closeEvent(self, event):
         self._region_timer.stop()
         self._pending_region = None
-        if self.task or self.region_task:
+        if self.task or self.region_task or self.prefetch_task:
             self._closing = True
+            self._prefetch_queue = []
+            if self.prefetch_task:
+                self.prefetch_task.cancelled.set()
             self._pending = None
             if self.task:
                 self.task.cancelled.set()

@@ -85,6 +85,8 @@ class ImageWindows:
             on_load_progress=self._image_load_progress,
             on_load_finished=self._image_load_finished,
         )
+        viewer.prefetch_started.connect(self._prefetch_started)
+        viewer.prefetch_finished.connect(self._image_load_finished)
         self.viewers.append(viewer)
 
         def closed(_):
@@ -105,3 +107,6 @@ class ImageWindows:
 
     def _image_load_finished(self, task):
         self.owner.untrack_status_job(task)
+
+    def _prefetch_started(self, task, name):
+        self.owner.track_status_job(task, f"预加载文件：{name}", connect_progress=False)

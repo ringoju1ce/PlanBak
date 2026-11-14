@@ -1514,7 +1514,12 @@ class MainWindow(QMainWindow):
             self.work_label.setText(self.language_context.translate("Ready"))
             self.work_progress.hide()
             return
-        text, done, total = next(reversed(self._status_jobs.values()))
+        jobs = list(self._status_jobs.values())
+        text, done, total = next(
+            (job for job in reversed(jobs) if not job[0].startswith("预加载文件：")),
+            jobs[-1],
+        )
+        preloading = text.startswith("预加载文件：")
         progress_sources = {
             "正在读取备份…": "Reading backup…",
             "正在建立备份索引…": "Building backup index…",
@@ -1546,6 +1551,10 @@ class MainWindow(QMainWindow):
             text = self.language_context.translate(progress_sources[text])
         elif text.startswith("正在") and text.endswith("…") and text[2:-1] in operations:
             text = self.language_context.translate(operations[text[2:-1]] + "…")
+        elif text.startswith("预加载文件："):
+            text = self.language_context.translate(
+                "Preloading file: {name}", name=text[len("预加载文件：") :]
+            )
         elif text.startswith("正在加载文件："):
             text = self.language_context.translate(
                 "Loading file: {name}", name=text[len("正在加载文件：") :]
@@ -1555,6 +1564,9 @@ class MainWindow(QMainWindow):
                 "Exporting: {name}", name=text[len("正在导出：") :]
             )
         self.work_label.setText(text)
+        if preloading:
+            self.work_progress.hide()
+            return
         self.work_progress.setRange(0, 1000 if total > 0 else 0)
         if total > 0:
             self.work_progress.setValue(min(1000, int(done / total * 1000)))
