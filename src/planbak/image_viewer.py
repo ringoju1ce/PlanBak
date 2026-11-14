@@ -4,7 +4,7 @@ import math
 import time
 
 from PySide6.QtCore import QEvent, QPointF, QRectF, QSignalBlocker, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QAction, QImage, QPainter
+from PySide6.QtGui import QAction, QImage, QInputDevice, QPainter
 from PySide6.QtWidgets import QCheckBox, QMainWindow, QSlider, QWidget
 
 from .document_ui import DocumentStatus, DocumentToolBar, translate_command
@@ -169,9 +169,23 @@ class ImageCanvas(QWidget):
         event.accept()
         if not self.window().isActiveWindow() or self._pinching:
             return
+        touchpad = (
+            event.device().type() == QInputDevice.DeviceType.TouchPad
+            or not event.pixelDelta().isNull()
+        )
+        zooming = bool(event.modifiers() & Qt.KeyboardModifier.ControlModifier)
+        if touchpad and not zooming:
+            delta = event.pixelDelta()
+            if delta.isNull():
+                delta = event.angleDelta() / 8
+            self.pan += QPointF(delta)
+            self.clamp_pan()
+            self.view_changed.emit()
+            self.update()
+            self._wheel = 0
+            return
         if event.phase() == Qt.ScrollPhase.ScrollMomentum:
             return
-        zooming = bool(event.modifiers() & Qt.KeyboardModifier.ControlModifier)
         # Qt has already applied the system's natural/classic scroll preference.
         # Do not undo it with event.inverted().
         delta = event.angleDelta().y()
