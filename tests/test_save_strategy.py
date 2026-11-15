@@ -589,15 +589,17 @@ def test_close_gate_blocks_new_operations_before_cleanup(backup_root, tmp_path):
     import time
 
     session = BackupSession(backup_root, PASSWORD)
-    with ThreadPoolExecutor(max_workers=2) as pool:
+    with ThreadPoolExecutor(max_workers=1) as pool:
         with session.lock:
             future = pool.submit(session.close)
             deadline = time.monotonic() + 5
             while not session._closing and time.monotonic() < deadline:
                 time.sleep(0.001)
             assert session._closing
-            second_close = pool.submit(session.close)
-            assert not second_close.done()
+            # A second close while holding the session lock must not deadlock
+            # the first close, which is waiting for that lock.
+            with pytest.raises(BackupError, match="会话正在关闭"):
+                session.close()
             for operation in (
                 session.begin_apply,
                 session.begin_transfer,
@@ -607,5 +609,5 @@ def test_close_gate_blocks_new_operations_before_cleanup(backup_root, tmp_path):
                 with pytest.raises(BackupError, match="会话正在关闭"):
                     operation()
         future.result(timeout=10)
-        second_close.result(timeout=10)
+    session.close()  # Closing an already closed session remains harmless.
     assert not session.workspace.exists()

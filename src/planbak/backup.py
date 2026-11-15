@@ -1085,7 +1085,8 @@ class BackupSession(SessionOverlay):
                     )
                 self._closing = True
         if closing:
-            self._closed_event.wait()
+            if not self._closed_event.is_set():
+                raise BackupError("备份会话正在关闭", english="The backup session is closing")
             return
         try:
             with self.lock:
