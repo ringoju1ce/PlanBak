@@ -7,6 +7,7 @@ from PySide6.QtCore import QBuffer, QByteArray, QIODevice
 from PySide6.QtGui import QImageReader
 
 from .codec import BackupError
+from .staging import checked_staged_path
 
 HEADER_BYTES = 64 * 1024
 
@@ -14,7 +15,7 @@ HEADER_BYTES = 64 * 1024
 def source_revision(session, token):
     """调用方持有会话锁；与提取时选择当前文件的规则一致。"""
     entry = session.get(token)
-    path = Path(entry.staged) if entry.staged else session.cache_path(token)
+    path = checked_staged_path(entry) if entry.staged else session.cache_path(token)
     if not path.is_file():
         if not entry.original_id:
             raise BackupError("文件源已不可用。", english="The file source is no longer available.")

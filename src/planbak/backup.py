@@ -36,7 +36,7 @@ from .codec import (
     file_id,
     safe_path,
 )
-from .staging import Entry, SessionOverlay
+from .staging import Entry, SessionOverlay, checked_staged_path
 
 Progress = Callable[[str, int, int], None]
 
@@ -529,7 +529,11 @@ class BackupSession(SessionOverlay):
             raise BackupError(
                 "导出目标不能是链接", english="The export destination cannot be a link"
             )
-        cached = Path(entry.staged) if entry.staged else self.cache_path(entry.token)
+        cached = (
+            checked_staged_path(entry)
+            if use_cache and entry.staged
+            else self.cache_path(entry.token)
+        )
         if use_cache and cached.is_file():
             if cached.resolve() != target.resolve():
                 copy_file(cached, target, cancel, progress=progress)
@@ -775,8 +779,16 @@ class BackupSession(SessionOverlay):
                         if entry.kind == "file":
                             output = work / fid[:2] / fid
                             if entry.staged:
-                                staged = Path(entry.staged)
-                                meta.set("Size", staged.stat().st_size)
+                                staged = checked_staged_path(entry)
+                                try:
+                                    staged_size = staged.stat().st_size
+                                except FileNotFoundError as exc:
+                                    raise BackupError(
+                                        f"暂挂的编辑内容不可用：{entry.name}，请重新应用更改。",
+                                        english="Staged edited content is unavailable: {name}; apply the change again.",
+                                        values={"name": entry.name},
+                                    ) from exc
+                                meta.set("Size", staged_size)
                                 meta.set("LastModified", entry.mtime)
                                 meta.set("LastStatusChange", int(time.time()))
                                 sha1 = digest(staged, "sha1", cancel)

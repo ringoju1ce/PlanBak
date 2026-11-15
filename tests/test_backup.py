@@ -383,3 +383,28 @@ def test_discard_uses_last_saved_state(backup_root, tmp_path):
         assert (tmp_path / "restored.txt").read_bytes() == b"saved version"
     finally:
         s.close()
+
+
+def test_missing_staged_content_never_falls_back_to_original(backup_root, tmp_path):
+    from planbak.file_opening import source_revision
+
+    session = BackupSession(backup_root, PASSWORD)
+    try:
+        token = session.at("HomeDomain", "Documents/a.txt").token
+        session.stage_bytes(token, b"edited contents")
+        staged = Path(session.get(token).staged)
+        staged.unlink()
+        operations = [
+            lambda: session.extract_file(token, tmp_path / "extracted"),
+            lambda: session.cached_file(token),
+            lambda: source_revision(session, token),
+            lambda: session.export([token], tmp_path / "exported"),
+            lambda: session.save(tmp_path / "output"),
+        ]
+        for operation in operations:
+            with pytest.raises(BackupError, match="暂挂的编辑内容不可用"):
+                operation()
+            assert session.dirty and not staged.exists()
+        assert not (tmp_path / "output").exists()
+    finally:
+        session.close()

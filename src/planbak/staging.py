@@ -12,6 +12,19 @@ from pathlib import Path
 
 from .codec import BackupError, check_cancel
 
+
+def checked_staged_path(entry):
+    """Do not replace a missing edited file with its original backup contents."""
+    path = Path(entry.staged)
+    if not path.is_file():
+        raise BackupError(
+            f"暂挂的编辑内容不可用：{entry.name}，请重新应用更改。",
+            english="Staged edited content is unavailable: {name}; apply the change again.",
+            values={"name": entry.name},
+        )
+    return path
+
+
 COLUMNS = (
     "token",
     "original_id",
@@ -324,7 +337,7 @@ class SessionOverlay:
             entry = self.get(token)
             if entry.kind != "file":
                 raise BackupError("只能打开普通文件", english="Only regular files can be opened")
-            target = self.cache_path(token)
+            target = checked_staged_path(entry) if entry.staged else self.cache_path(token)
             if not target.exists():
                 temporary = self.workspace / (uuid.uuid4().hex + ".extract")
                 try:
