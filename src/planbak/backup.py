@@ -199,6 +199,8 @@ class BackupSession(SessionOverlay):
         self._applying = None
         self._transfers = set()
         self._copying = False
+        self._closing = False
+        self._closed_event = threading.Event()
         self.db = None
         self.keybag = None
         self.manifest_key = None
@@ -264,6 +266,8 @@ class BackupSession(SessionOverlay):
 
     def check_changes_allowed(self):
         with self._state_lock:
+            if self._closing:
+                raise BackupError("备份会话正在关闭", english="The backup session is closing")
             if self._transfers:
                 raise BackupError(
                     "正在向其他备份复制项目，请稍后再修改",
@@ -277,6 +281,8 @@ class BackupSession(SessionOverlay):
 
     def begin_apply(self):
         with self._state_lock:
+            if self._closing:
+                raise BackupError("备份会话正在关闭", english="The backup session is closing")
             if self._applying is not None or self._copying or self._transfers:
                 raise BackupError(
                     "正在应用更改或创建副本，请稍后重试",
@@ -288,6 +294,8 @@ class BackupSession(SessionOverlay):
 
     def begin_transfer(self):
         with self._state_lock:
+            if self._closing:
+                raise BackupError("备份会话正在关闭", english="The backup session is closing")
             if self._applying is not None or self._copying:
                 raise BackupError(
                     "来源备份正在应用更改或创建副本，请稍后复制",
@@ -308,6 +316,8 @@ class BackupSession(SessionOverlay):
 
     def create_copy(self, destination, *, progress=None, cancel=None, container=False):
         with self._state_lock:
+            if self._closing:
+                raise BackupError("备份会话正在关闭", english="The backup session is closing")
             if self._applying is not None or self._copying or self._transfers:
                 raise BackupError(
                     "已有保存或副本任务进行中",
@@ -1008,16 +1018,31 @@ class BackupSession(SessionOverlay):
 
     def close(self):
         with self._state_lock:
-            if self._transfers:
-                raise BackupError(
-                    "正在向其他备份复制项目，暂不能清理来源会话",
-                    english="Items are being copied to another backup; the source session cannot be cleared yet",
-                )
-        with contextlib.suppress(Exception):
-            if self.db is not None:
-                self.db.close()
-        self.db = None
-        if self.keybag:
-            self.keybag.keys.clear()
-        self.keybag = self.manifest_key = None
-        shutil.rmtree(self.workspace, ignore_errors=True)
+            closing = self._closing
+            if not closing:
+                if self._transfers:
+                    raise BackupError(
+                        "正在向其他备份复制项目，暂不能清理来源会话",
+                        english="Items are being copied to another backup; the source session cannot be cleared yet",
+                    )
+                if self._applying is not None or self._copying:
+                    raise BackupError(
+                        "正在应用更改或创建副本，暂不能关闭备份会话",
+                        english="Changes are being applied or a copy is being created; the backup session cannot close yet",
+                    )
+                self._closing = True
+        if closing:
+            self._closed_event.wait()
+            return
+        try:
+            with self.lock:
+                with contextlib.suppress(Exception):
+                    if self.db is not None:
+                        self.db.close()
+                self.db = None
+                if self.keybag:
+                    self.keybag.keys.clear()
+                self.keybag = self.manifest_key = None
+                shutil.rmtree(self.workspace, ignore_errors=True)
+        finally:
+            self._closed_event.set()

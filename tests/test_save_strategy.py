@@ -541,3 +541,71 @@ def test_previous_backup_roots_remain_protected_after_switch(backup_root, tmp_pa
         assert not (backup_root / "nested-save").exists()
     finally:
         session.close()
+
+
+def test_close_rejects_active_apply(backup_root):
+    session = BackupSession(backup_root, PASSWORD)
+    token = session.begin_apply()
+    try:
+        with pytest.raises(BackupError, match="暂不能关闭"):
+            session.close()
+        assert session.workspace.exists() and session.db is not None
+    finally:
+        session.end_apply(token)
+        session.close()
+    assert not session.workspace.exists()
+
+
+def test_close_rejects_active_copy(backup_root, tmp_path, monkeypatch):
+    import planbak.backup as module
+
+    session = BackupSession(backup_root, PASSWORD)
+    started, release = threading.Event(), threading.Event()
+    original = module.copy_backup
+
+    def blocked(*args, **kwargs):
+        started.set()
+        assert release.wait(5)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(module, "copy_backup", blocked)
+    try:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(session.create_copy, tmp_path / "copy")
+            assert started.wait(5)
+            try:
+                with pytest.raises(BackupError, match="暂不能关闭"):
+                    session.close()
+                assert session.workspace.exists() and session.db is not None
+            finally:
+                release.set()
+            assert future.result(timeout=10).path.is_dir()
+    finally:
+        session.close()
+    assert not session.workspace.exists()
+
+
+def test_close_gate_blocks_new_operations_before_cleanup(backup_root, tmp_path):
+    import time
+
+    session = BackupSession(backup_root, PASSWORD)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        with session.lock:
+            future = pool.submit(session.close)
+            deadline = time.monotonic() + 5
+            while not session._closing and time.monotonic() < deadline:
+                time.sleep(0.001)
+            assert session._closing
+            second_close = pool.submit(session.close)
+            assert not second_close.done()
+            for operation in (
+                session.begin_apply,
+                session.begin_transfer,
+                lambda: session.create_copy(tmp_path / "copy"),
+                lambda: session.new_directory("HomeDomain", "Documents", "new"),
+            ):
+                with pytest.raises(BackupError, match="会话正在关闭"):
+                    operation()
+        future.result(timeout=10)
+        second_close.result(timeout=10)
+    assert not session.workspace.exists()
