@@ -3282,7 +3282,13 @@ class MainWindow(QMainWindow):
         if self.check_hex_viewers():
             return
         for record in list(self.opened.values()):
-            stamp = self.file_stamp(record.path)
+            if time.monotonic() < record.later_until:
+                continue
+            try:
+                stamp = self.file_stamp(record.path)
+            except OSError as exc:
+                self.external_check_failed(record, exc)
+                continue
             if stamp == record.stamp:
                 continue
             record.unreviewed = True
@@ -3290,8 +3296,6 @@ class MainWindow(QMainWindow):
                 record.seen, record.stable = stamp, 0
                 continue
             record.stable += 1
-            if record.stable < 1 or time.monotonic() < record.later_until:
-                continue
             if stamp == (None,):
                 choice = QMessageBox.question(
                     self,
@@ -3310,7 +3314,12 @@ class MainWindow(QMainWindow):
                 self.watcher.addPath(str(record.path))
 
             def checked(fingerprint, rec=record, observed=stamp):
-                if self.file_stamp(rec.path) != observed:
+                try:
+                    current_stamp = self.file_stamp(rec.path)
+                except OSError as exc:
+                    self.external_check_failed(rec, exc)
+                    return
+                if current_stamp != observed:
                     rec.seen, rec.stable = None, 0
                     return
                 if fingerprint == rec.fingerprint:
@@ -3323,8 +3332,20 @@ class MainWindow(QMainWindow):
                 lambda progress, cancel, rec=record: digest(rec.path, cancel=cancel),
                 checked,
                 silent=True,
+                on_error=lambda exc, rec=record: self.external_check_failed(rec, exc),
             )
             return
+
+    def external_check_failed(self, record, error):
+        record.unreviewed = True
+        record.later_until = time.monotonic() + 30
+        self.statusBar().showMessage(
+            self.language_context.translate(
+                "Could not check external edits for {name}: {error}",
+                name=record.path.name, error=str(error),
+            ),
+            10000,
+        )
 
     def review_external(self, record, fingerprint, stamp):
         box = QMessageBox(

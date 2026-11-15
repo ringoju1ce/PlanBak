@@ -479,6 +479,7 @@
   "Unable to recognize the image; the file may be damaged or its format unsupported.": "无法识别图片：文件可能损坏或格式不受支持。",
   "Image decoding failed or memory is insufficient.": "图片解码失败或内存不足。",
   "Preloading file: {name}": "预加载文件：{name}",
+  "Could not check external edits for {name}: {error}": "无法检查 {name} 的外部编辑：{error}",
   "Loading file: {name}": "正在加载文件：{name}",
   "Missing key for protection class {class_id}": "缺少保护类别 {class_id} 的密钥",
   "Cannot create a file for protection class {class_id}": "不能为保护类别 {class_id} 创建文件",
