@@ -168,8 +168,8 @@ def test_file_menu_and_close_reset_release_everything(factory, tmp_path, qtbot):
     assert w.isVisible() and w.session is None and not workspace.exists()
     assert not w.model.rows and w.changes_model.rowCount() == 0
     assert w.directory_tree.directory_model.root is None
-    assert not w._view_states and not w.opened and w.images.cache is None
-    assert not w.watcher.files() and not w.watcher.directories()
+    assert not w._view_states and not w.external_edits.records and w.images.cache is None
+    assert not w.external_edits.watcher.files() and not w.external_edits.watcher.directories()
     assert w.windowTitle() == "PlanBak" and not w.changes_dock.isVisible()
     assert w.location.text() == "/" and w.work_label.text() == "就绪"
     assert factory.manager.owner_for(root) is None

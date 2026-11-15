@@ -20,7 +20,6 @@ from PySide6.QtCore import (
     QAbstractTableModel,
     QByteArray,
     QEventLoop,
-    QFileSystemWatcher,
     QItemSelection,
     QItemSelectionModel,
     QMimeData,
@@ -84,6 +83,7 @@ from .dialogs import FixedFileDialog as QFileDialog
 from .dialogs import FixedInputDialog as QInputDialog
 from .dialogs import FixedMessageBox as QMessageBox
 from .dialogs import FixedProgressDialog
+from .external_edits import ExternalEdits, file_stamp
 from .file_opening import identify_file, source_revision
 from .hex_viewer import HexViewer
 from .i18n import ENGLISH, SIMPLIFIED_CHINESE, LanguageContext
@@ -568,18 +568,6 @@ class ExportMimeData(QMimeData):
 
 
 @dataclass
-class OpenedFile:
-    token: str
-    path: Path
-    fingerprint: bytes
-    stamp: tuple
-    seen: tuple | None = None
-    stable: int = 0
-    later_until: float = 0
-    unreviewed: bool = False
-
-
-@dataclass
 class OpenedPlist:
     token: str
     editor: PlistEditor
@@ -692,7 +680,7 @@ class MainWindow(QMainWindow):
         status_layout.addWidget(self.summary_panel, 3)
         status_layout.addWidget(self.work_panel, 1)
         self.statusBar().addPermanentWidget(self.status_panel, 1)
-        self.opened: dict[str, OpenedFile] = {}
+        self.external_edits = ExternalEdits(self)
         self.plist_editors = {}
         self.database_viewers = {}
         self.hex_viewers = {}
@@ -739,9 +727,6 @@ class MainWindow(QMainWindow):
         self.retranslate_main_actions()
         self.panes = BrowserPaneFocus(self.directory_tree, (self.table, self.grid), self)
         self.panes.changed.connect(self.update_actions)
-        self.watcher = QFileSystemWatcher(self)
-        self.watcher.fileChanged.connect(self._file_event)
-        self.watcher.directoryChanged.connect(self._directory_event)
         self.poll_timer = QTimer(self)
         self.poll_timer.setInterval(2000)
         self.poll_timer.timeout.connect(self.poll_open_files)
@@ -1854,15 +1839,7 @@ class MainWindow(QMainWindow):
         if not self.session:
             continuation()
             return
-        external = []
-        for record in self.opened.values():
-            if record.unreviewed or self.file_stamp(record.path) != record.stamp:
-                try:
-                    self.session.get(record.token)
-                except BackupError:
-                    # A staged deletion takes precedence over its old editor copy.
-                    continue
-                external.append(record)
+        external = self.external_edits.changed_records(self.session)
         if not self.session.dirty and not external:
             continuation()
             return
@@ -1911,26 +1888,12 @@ class MainWindow(QMainWindow):
                 return
 
             def stage_external(progress, cancel):
-                updates = []
-                for record in external:
-                    stamp = self.file_stamp(record.path)
-                    if stamp == (None,):
-                        raise BackupError(
-                            f"外部编辑文件已被移动或删除：{record.path.name}",
-                            english="The externally edited file was moved or deleted: {name}",
-                            values={"name": record.path.name},
-                        )
-                    self.session.stage_edit(record.token, record.path, cancel)
-                    staged = self.session.cached_file(record.token, cancel=cancel)
-                    updates.append((record, digest(staged, cancel=cancel), stamp))
-                return updates
+                return self.external_edits.stage(self.session, external, cancel)
 
             def staged(updates):
-                for record, fingerprint, stamp in updates:
-                    record.fingerprint, record.stamp = fingerprint, stamp
-                    record.unreviewed = self.file_stamp(record.path) != stamp
+                self.external_edits.accept_staged(updates)
                 self.refresh()
-                if any(record.unreviewed for record in external):
+                if self.external_edits.has_unreviewed(external):
                     message(
                         self,
                         "外部文件仍在修改",
@@ -2176,10 +2139,7 @@ class MainWindow(QMainWindow):
     def clear_opened_files(self, *, clear_images=True):
         if clear_images:
             self.images.clear_cache()
-        paths = self.watcher.files() + self.watcher.directories()
-        if paths:
-            self.watcher.removePaths(paths)
-        self.opened.clear()
+        self.external_edits.clear()
 
     def add_files(self):
         paths, _ = QFileDialog.getOpenFileNames(
@@ -2385,10 +2345,9 @@ class MainWindow(QMainWindow):
             editors = [
                 record for key, record in self.plist_editors.items() if key in plan.reset_contents
             ]
-            external = [record for key, record in self.opened.items() if key in plan.reset_contents]
-            dirty = any(record.editor.dirty for record in editors) or any(
-                record.unreviewed or self.file_stamp(record.path) != record.stamp
-                for record in external
+            external = self.external_edits.records_for(plan.reset_contents)
+            dirty = any(record.editor.dirty for record in editors) or self.external_edits.has_changes(
+                external
             )
             if dirty:
                 box = QMessageBox(
@@ -2411,13 +2370,7 @@ class MainWindow(QMainWindow):
                     return
             for record in editors:
                 record.editor.discard_and_close()
-            for record in external:
-                self.opened.pop(record.token, None)
-                if str(record.path) in self.watcher.files():
-                    self.watcher.removePath(str(record.path))
-                if not any(r.path.parent == record.path.parent for r in self.opened.values()):
-                    if str(record.path.parent) in self.watcher.directories():
-                        self.watcher.removePath(str(record.path.parent))
+            self.external_edits.forget(external)
             self.run_task(
                 "放弃更改",
                 lambda progress, cancel: session.revert(plan, progress=progress, cancel=cancel),
@@ -2510,9 +2463,7 @@ class MainWindow(QMainWindow):
                 editor.tree.setFocus()
                 self.check_plist_editors()
                 return
-        current = self.opened.get(token)
-        if current and current.path.exists():
-            QDesktopServices.openUrl(QUrl.fromLocalFile(str(current.path)))
+        if self.external_edits.reopen(token):
             return
         session = self.session
         name = rows[0].name
@@ -2611,10 +2562,8 @@ class MainWindow(QMainWindow):
             return kind, preparers[kind](target, cancel)
 
         def open_external(fingerprint):
-            self.opened[token] = OpenedFile(token, target, fingerprint, self.file_stamp(target))
+            self.external_edits.register(token, target, fingerprint)
             resources["keep_file"] = True
-            self.watcher.addPath(str(target))
-            self.watcher.addPath(str(target.parent))
             if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(target))):
                 message(
                     self,
@@ -3021,7 +2970,7 @@ class MainWindow(QMainWindow):
         source = (
             Path(entry.staged) if entry.staged else self.session.payload_path(entry.original_id)
         )
-        return (str(source), self.file_stamp(source))
+        return (str(source), file_stamp(source))
 
     def open_plist(self, token, name, *, prepared=None):
         if self._transitioning or self._outgoing_transfers or self._readonly_closing:
@@ -3251,142 +3200,14 @@ class MainWindow(QMainWindow):
             return True
         return False
 
-    @staticmethod
-    def file_stamp(path):
-        try:
-            st = path.stat()
-            return (st.st_size, st.st_mtime_ns, st.st_ctime_ns, st.st_ino)
-        except FileNotFoundError:
-            return (None,)
-
-    def _file_event(self, path):
-        for record in self.opened.values():
-            if str(record.path) == path:
-                record.stable = 0
-                record.unreviewed = self.file_stamp(record.path) != record.stamp
-
-    def _directory_event(self, path):
-        for record in self.opened.values():
-            if str(record.path.parent) == path:
-                self._file_event(str(record.path))
-
     def poll_open_files(self):
         if self._outgoing_transfers or self._transitioning or self._readonly_closing:
             return
         if self.task or not self.session or self._focus_owned_modal(focus=False):
             return
-        if self.check_plist_editors():
+        if self.check_plist_editors() or self.check_database_viewers() or self.check_hex_viewers():
             return
-        if self.check_database_viewers():
-            return
-        if self.check_hex_viewers():
-            return
-        for record in list(self.opened.values()):
-            if time.monotonic() < record.later_until:
-                continue
-            try:
-                stamp = self.file_stamp(record.path)
-            except OSError as exc:
-                self.external_check_failed(record, exc)
-                continue
-            if stamp == record.stamp:
-                continue
-            record.unreviewed = True
-            if record.seen != stamp:
-                record.seen, record.stable = stamp, 0
-                continue
-            record.stable += 1
-            if stamp == (None,):
-                choice = QMessageBox.question(
-                    self,
-                    self.language_context.translate("Temporary File Deleted"),
-                    self.language_context.translate(
-                        "Stop tracking this copy? The file in the backup will not be deleted."
-                    ),
-                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                )
-                if choice == QMessageBox.StandardButton.Yes:
-                    self.opened.pop(record.token, None)
-                else:
-                    record.later_until = time.monotonic() + 30
-                return
-            if str(record.path) not in self.watcher.files():
-                self.watcher.addPath(str(record.path))
-
-            def checked(fingerprint, rec=record, observed=stamp):
-                try:
-                    current_stamp = self.file_stamp(rec.path)
-                except OSError as exc:
-                    self.external_check_failed(rec, exc)
-                    return
-                if current_stamp != observed:
-                    rec.seen, rec.stable = None, 0
-                    return
-                if fingerprint == rec.fingerprint:
-                    rec.stamp, rec.unreviewed = observed, False
-                    return
-                self.review_external(rec, fingerprint, observed)
-
-            self.run_task(
-                "检查外部编辑",
-                lambda progress, cancel, rec=record: digest(rec.path, cancel=cancel),
-                checked,
-                silent=True,
-                on_error=lambda exc, rec=record: self.external_check_failed(rec, exc),
-            )
-            return
-
-    def external_check_failed(self, record, error):
-        record.unreviewed = True
-        record.later_until = time.monotonic() + 30
-        self.statusBar().showMessage(
-            self.language_context.translate(
-                "Could not check external edits for {name}: {error}",
-                name=record.path.name, error=str(error),
-            ),
-            10000,
-        )
-
-    def review_external(self, record, fingerprint, stamp):
-        box = QMessageBox(
-            QMessageBox.Icon.Question,
-            self.language_context.translate("External Edit Detected"),
-            "",
-            parent=self,
-        )
-        box.setTextFormat(Qt.TextFormat.PlainText)
-        box.setText(
-            self.language_context.translate(
-                "{name} has changed. Stage the new contents in this backup session?",
-                name=record.path.name,
-            )
-        )
-        stage = box.addButton(
-            self.language_context.translate("Stage Changes"), QMessageBox.ButtonRole.AcceptRole
-        )
-        ignore = box.addButton(
-            self.language_context.translate("Ignore This Change"),
-            QMessageBox.ButtonRole.DestructiveRole,
-        )
-        box.addButton(
-            self.language_context.translate("Decide Later"), QMessageBox.ButtonRole.RejectRole
-        )
-        box.exec()
-        if box.clickedButton() == stage:
-
-            def staged(_):
-                record.fingerprint, record.stamp, record.unreviewed = fingerprint, stamp, False
-                self.refresh()
-
-            self.run_task(
-                "保存外部编辑",
-                lambda progress, cancel: self.session.stage_edit(record.token, record.path, cancel),
-                staged,
-            )
-        elif box.clickedButton() == ignore:
-            record.fingerprint, record.stamp, record.unreviewed = fingerprint, stamp, False
-        else:
-            record.later_until = time.monotonic() + 30
+        self.external_edits.poll()
 
     def save(self, *_args, after=None, quiet=False, on_cancel=None):
         if (

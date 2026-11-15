@@ -7,9 +7,10 @@ import pytest
 from conftest import PASSWORD, archive, make_backup
 from test_ui import window as window
 
-from planbak.app import OpenedFile, QFileDialog, QMessageBox, Task
+from planbak.app import QFileDialog, QMessageBox, Task
 from planbak.backup import BackupSession, digest, stale_workspaces
 from planbak.codec import BackupError, file_id
+from planbak.external_edits import OpenedFile, file_stamp
 from planbak.plist_editor import PlistNode, ValueDialog
 
 
@@ -127,8 +128,8 @@ def test_external_reversion_to_baseline_during_switch(window, qtbot, monkeypatch
     w.session.stage_bytes(token, b'first change')
     path = w.session.workspace / 'external-edit.txt'
     path.write_bytes(b'first change')
-    record = OpenedFile(token, path, digest(path), w.file_stamp(path))
-    w.opened[token] = record
+    record = OpenedFile(token, path, digest(path), file_stamp(path))
+    w.external_edits.records[token] = record
     path.write_bytes(b'hello world')
     record.unreviewed = True
     errors, continued = [], []

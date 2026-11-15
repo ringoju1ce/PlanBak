@@ -48,8 +48,8 @@ def test_misnamed_plist_and_explicit_external(window, qtbot, tmp_path, monkeypat
     assert not list((w.session.workspace / 'opened').glob('*'))
     w.open_file(external=True)
     qtbot.waitUntil(lambda: w.task is None)
-    assert calls and token in w.opened and token not in w.plist_editors
-    assert w.opened[token].path.read_bytes() == path.read_bytes()
+    assert calls and token in w.external_edits.records and token not in w.plist_editors
+    assert w.external_edits.records[token].path.read_bytes() == path.read_bytes()
 
 
 def test_explicit_external_respects_unsaved_cancel(window, qtbot, monkeypatch):

@@ -110,11 +110,11 @@ def test_external_open_and_detection(window, qtbot, monkeypatch):
     monkeypatch.setattr("planbak.app.QDesktopServices.openUrl", lambda url: True)
     w.open_file()
     qtbot.waitUntil(lambda: w.task is None)
-    record = next(iter(w.opened.values()))
+    record = next(iter(w.external_edits.records.values()))
     assert record.path.read_bytes() == b"hello world"
     record.path.write_bytes(b"updated outside")
     observed = []
-    monkeypatch.setattr(w, "review_external", lambda rec, fp, stamp: observed.append((rec, fp)))
+    monkeypatch.setattr(w.external_edits, "review_external", lambda rec, fp, stamp: observed.append((rec, fp)))
     w.poll_open_files()
     w.poll_open_files()
     qtbot.waitUntil(lambda: w.task is None)
@@ -161,8 +161,8 @@ def test_stage_external_edit_prompt(window, qtbot):
     from PySide6.QtCore import QTimer
     from PySide6.QtWidgets import QApplication, QMessageBox
 
-    from planbak.app import OpenedFile
     from planbak.backup import digest
+    from planbak.external_edits import OpenedFile, file_stamp
 
     w = window
     entry = w.session.at("HomeDomain", "Documents/a.txt")
@@ -176,7 +176,7 @@ def test_stage_external_edit_prompt(window, qtbot):
         next(button for button in box.buttons() if button.text() == "暂挂更改").click()
 
     QTimer.singleShot(30, accept)
-    w.review_external(record, digest(path), w.file_stamp(path))
+    w.external_edits.review_external(record, digest(path), file_stamp(path))
     qtbot.waitUntil(lambda: w.task is None)
     assert w.session.dirty
     staged = Path(w.session.get(entry.token).staged)
@@ -545,15 +545,16 @@ def test_exit_cancellation_keeps_edits_and_workspace(
 
 
 def test_exit_applies_unreviewed_external_editor_copy(window, qtbot, tmp_path, monkeypatch):
-    from planbak.app import OpenedFile, QMessageBox
+    from planbak.app import QMessageBox
     from planbak.backup import digest
+    from planbak.external_edits import OpenedFile, file_stamp
 
     w = window
     entry = w.session.at("HomeDomain", "Documents/a.txt")
     path = w.session.workspace / "opened.txt"
     path.write_bytes(b"original")
-    record = OpenedFile(entry.token, path, digest(path), w.file_stamp(path))
-    w.opened[entry.token] = record
+    record = OpenedFile(entry.token, path, digest(path), file_stamp(path))
+    w.external_edits.records[entry.token] = record
     path.write_bytes(b"external change at exit")
     workspace = w.session.workspace
     output = tmp_path / "external-on-exit"
@@ -864,7 +865,7 @@ def test_internal_plist_edit_stage_and_restore(
     editor.update_actions()
     assert editor.save_document()
     assert w.session.dirty and not editor.document.dirty
-    assert not w.opened
+    assert not w.external_edits.records
     editor.close()
     assert not w.plist_editors
     assert not list(temporary_directory.iterdir())
@@ -918,7 +919,7 @@ def test_plist_single_instance_multiple_files(
     monkeypatch.setattr("planbak.app.QDesktopServices.openUrl", lambda *a: calls.append(a))
     w.open_file()
     assert w.plist_editors[record.token].editor is editor
-    assert not calls and not w.opened and len(w.plist_editors) == 1
+    assert not calls and not w.external_edits.records and len(w.plist_editors) == 1
     path = tmp_path / "second.plist"
     path.write_bytes(plistlib.dumps({"other": 123}))
     w.session.import_paths([path], "SystemPreferencesDomain", "")
@@ -1774,7 +1775,7 @@ def test_database_unknown_format_and_sidecars_report_clear_error(
         w.open_file()
         qtbot.waitUntil(lambda: w.task is None)
         assert expected in str(errors[-1])
-    assert not w.database_viewers and not w.opened
+    assert not w.database_viewers and not w.external_edits.records
 
 
 def open_test_hex(w, qtbot):
@@ -2192,9 +2193,9 @@ def test_external_check_error_is_nonmodal_and_delayed(window, qtbot, monkeypatch
     monkeypatch.setattr("planbak.app.QDesktopServices.openUrl", lambda url: True)
     w.open_file()
     qtbot.waitUntil(lambda: w.task is None)
-    record = next(iter(w.opened.values()))
+    record = next(iter(w.external_edits.records.values()))
     record.path.write_bytes(b"changed")
-    monkeypatch.setattr("planbak.app.digest", lambda *args, **kwargs: (_ for _ in ()).throw(PermissionError("locked")))
+    monkeypatch.setattr("planbak.external_edits.digest", lambda *args, **kwargs: (_ for _ in ()).throw(PermissionError("locked")))
     w.poll_open_files()
     w.poll_open_files()
     qtbot.waitUntil(lambda: w.task is None)
