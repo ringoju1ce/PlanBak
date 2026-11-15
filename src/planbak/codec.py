@@ -92,13 +92,27 @@ def crypto_file(
                 if encrypt:
                     dst.write(transform.update(pad.update(block)))
                 else:
-                    dst.write(pad.update(transform.update(block)))
+                    try:
+                        plain = pad.update(transform.update(block))
+                    except ValueError as exc:
+                        raise BackupError(
+                            "加密备份数据已损坏或不完整，无法解密",
+                            english="Encrypted backup data is damaged or incomplete and cannot be decrypted",
+                        ) from exc
+                    dst.write(plain)
                 if progress:
                     progress(len(block))
             if encrypt:
                 dst.write(transform.update(pad.finalize()) + transform.finalize())
             else:
-                dst.write(pad.update(transform.finalize()) + pad.finalize())
+                try:
+                    plain = pad.update(transform.finalize()) + pad.finalize()
+                except ValueError as exc:
+                    raise BackupError(
+                        "加密备份数据已损坏或不完整，无法解密",
+                        english="Encrypted backup data is damaged or incomplete and cannot be decrypted",
+                    ) from exc
+                dst.write(plain)
     except Exception:
         target.unlink(missing_ok=True)
         raise
