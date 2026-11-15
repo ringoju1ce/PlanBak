@@ -148,13 +148,19 @@ class Keybag:
                 )
             return count
 
+        salt = attrs.get(b"SALT")
+        if not isinstance(salt, bytes) or not salt:
+            raise BackupError(
+                "备份密钥包缺少有效的派生盐值",
+                english="The backup keybag is missing a valid derivation salt",
+            )
         secret = password.encode("utf-8")
         if b"DPSL" in attrs:
             secret = hashlib.pbkdf2_hmac(
                 "sha256", secret, attrs[b"DPSL"], number(b"DPIC", 50_000_000), 32
             )
         derived = hashlib.pbkdf2_hmac(
-            "sha1", secret, attrs[b"SALT"], number(b"ITER", 10_000_000), 32
+            "sha1", secret, salt, number(b"ITER", 10_000_000), 32
         )
         self.keys: dict[int, bytes] = {}
         try:
@@ -165,7 +171,7 @@ class Keybag:
                 if wrap & 2:
                     clas = struct.unpack(">I", item[b"CLAS"])[0]
                     self.keys[clas] = aes_key_unwrap(derived, item[b"WPKY"])
-        except (InvalidUnwrap, ValueError) as exc:
+        except (InvalidUnwrap, ValueError, KeyError, struct.error) as exc:
             raise BackupError(
                 "备份密码不正确，或密钥包已损坏",
                 english="The backup password is incorrect or the keybag is damaged",
