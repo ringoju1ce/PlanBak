@@ -3765,11 +3765,16 @@ class MainWindow(QMainWindow):
         def done(paths):
             result.extend(paths)
 
+        def export(progress, cancel):
+            try:
+                return self.session.export(tokens, target, progress=progress, cancel=cancel)
+            except BaseException:
+                shutil.rmtree(target, ignore_errors=True)
+                raise
+
         job = self.run_task(
             "导出项目",
-            lambda progress, cancel: self.session.export(
-                tokens, target, progress=progress, cancel=cancel
-            ),
+            export,
             done,
             on_done=loop.quit,
         )
