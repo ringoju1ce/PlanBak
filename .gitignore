@@ -9,8 +9,21 @@ dist/
 *.log
 .env
 
-# Local validation fixtures and tests are intentionally not versioned.
-/tests/
+# Generated test and coverage output
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+junit*.xml
+test-results/
+screenshots/
+playwright-report/
+
+# Historical investigations, logs, screenshots and private QA stay local.
+# Only curated, long-lived documentation is published.
+/docs/*
+!/docs/testing.md
+!/docs/release-checklist.md
 
 # macOS Finder metadata and resource forks
 .DS_Store

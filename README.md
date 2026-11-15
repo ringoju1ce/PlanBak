@@ -47,6 +47,10 @@ PlanBak 支持使用 `Manifest.db` 的备份，不支持旧版 `Manifest.mbdb`�
 
 PlanBak 是独立项目，与 Apple Inc. 无关联，未获得其赞助、认可或授权。Apple、iOS 等名称及商标属于 Apple Inc.；其他名称和商标属于各自的所有者。
 
+## 测试
+
+运行命令、覆盖范围和离屏测试方式见 [测试说明](docs/testing.md)。
+
 ## 项目开发
 
 项目由 ringojuice 维护，代码由 Codex 根据维护者提出的需求和反馈生成。
