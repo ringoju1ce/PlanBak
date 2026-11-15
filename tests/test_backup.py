@@ -408,3 +408,50 @@ def test_missing_staged_content_never_falls_back_to_original(backup_root, tmp_pa
         assert not (tmp_path / "output").exists()
     finally:
         session.close()
+
+
+def test_missing_required_payload_fails_before_copy(backup_root, tmp_path, monkeypatch):
+    import planbak.backup as module
+
+    session = BackupSession(backup_root, PASSWORD)
+    try:
+        missing = session.at("HomeDomain", "Documents/a.txt")
+        session.payload_path(missing.original_id).unlink()
+        session.new_directory("HomeDomain", "Documents", "pending")
+        copies = []
+        original = module.copy_file
+
+        def track_copy(*args, **kwargs):
+            copies.append(args)
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(module, "copy_file", track_copy)
+        with pytest.raises(BackupError, match="缺少文件数据"):
+            session.save(tmp_path / "output")
+        assert not copies and session.dirty and not (tmp_path / "output").exists()
+    finally:
+        session.close()
+
+
+@pytest.mark.parametrize("resolution", ["delete", "replace"])
+def test_preflight_does_not_require_deleted_or_replaced_payload(backup_root, tmp_path, resolution):
+    session = BackupSession(backup_root, PASSWORD)
+    try:
+        entry = session.at("HomeDomain", "Documents/a.txt")
+        if resolution == "replace":
+            session.stage_bytes(entry.token, b"replacement")
+        else:
+            session.delete([entry.token])
+        session.payload_path(entry.original_id).unlink()
+        output = session.save(tmp_path / "output")
+        reader = BackupSession(output, PASSWORD)
+        try:
+            current = reader.at("HomeDomain", "Documents/a.txt")
+            if resolution == "delete":
+                assert current is None
+            else:
+                assert reader.cached_file(current.token).read_bytes() == b"replacement"
+        finally:
+            reader.close()
+    finally:
+        session.close()

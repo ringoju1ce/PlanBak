@@ -706,6 +706,26 @@ class BackupSession(SessionOverlay):
         finally:
             self.end_apply(token)
 
+    def _check_required_payloads(self, cancel):
+        # Only inspect originals that survive unchanged or are needed for a move.
+        # A deleted file or an edited replacement no longer needs its old payload.
+        rows = self.db.execute(
+            "SELECT DISTINCT f.fileID FROM Files AS f "
+            "JOIN EditorEntries AS e ON e.original_id=f.fileID "
+            "WHERE (e.changed=0 AND f.flags=1) "
+            "OR (e.changed=1 AND e.kind='file' AND e.staged IS NULL)"
+        )
+        for (fid,) in rows:
+            check_cancel(cancel)
+            try:
+                self.payload_path(fid)
+            except BackupError as exc:
+                raise BackupError(
+                    f"输出备份缺少文件数据：{fid}",
+                    english="Output backup is missing file data: {file_id}",
+                    values={"file_id": fid},
+                ) from exc
+
     def _save(self, destination, *, progress=None, cancel=None, container=False):
         """Prepare and validate output, then publish a copy or update a marked backup."""
         with self.lock:
@@ -730,6 +750,7 @@ class BackupSession(SessionOverlay):
                     "原备份在打开后已改变，请重新打开备份",
                     english="The original backup changed after opening; reopen the backup",
                 )
+            self._check_required_payloads(cancel)
             destination.parent.mkdir(parents=True, exist_ok=True)
             progress("估算备份大小…", 0, 0)
             required = (
