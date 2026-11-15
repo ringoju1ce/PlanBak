@@ -447,6 +447,7 @@ class SessionOverlay:
                     "重命名只能选中一个项目", english="Select exactly one item to rename"
                 )
             plans = []
+            reserved_targets = set()
             for root in roots:
                 if root.domain != domain:
                     raise BackupError(
@@ -468,16 +469,22 @@ class SessionOverlay:
                 if target == root.path:
                     continue
                 existing = self.at(domain, target)
-                if existing:
+                if existing or target in reserved_targets:
                     if collision == "skip":
                         continue
                     if collision == "keep_both":
                         base, number = target, 2
-                        while self.at(domain, target):
+                        while self.at(domain, target) or target in reserved_targets:
                             stem, ext = os.path.splitext(base)
                             target = f"{stem} ({number}){ext}"
                             number += 1
                     elif collision == "replace":
+                        if target in reserved_targets:
+                            raise BackupError(
+                                f"多个源项目的目标名称相同：{basename}",
+                                english="Multiple source items have the same destination name: {name}",
+                                values={"name": basename},
+                            )
                         if root.path.startswith(target + "/"):
                             raise BackupError(
                                 "不能覆盖包含源项目的上层文件夹",
@@ -491,6 +498,7 @@ class SessionOverlay:
                             english="Destination already exists: {name}",
                             values={"name": basename},
                         )
+                reserved_targets.add(target)
                 for entry in self.subtree(root):
                     moved = relocated(entry, target + entry.path[len(root.path) :])
                     # 明确移动/重命名的合成文件夹必须能独立保存为空文件夹。

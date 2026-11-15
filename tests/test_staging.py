@@ -241,3 +241,42 @@ def test_failed_rebase_does_not_publish_or_change_baseline(session, tmp_path, mo
     assert not output.exists() and not list(tmp_path.glob(".planbak-save-*"))
     assert session.root == root and session.changes == snapshot and session.dirty
     assert session.cached_file(token).read_bytes() == b"current"
+
+
+@pytest.mark.parametrize("collision", ["error", "replace", "skip", "keep_both"])
+def test_multi_move_with_duplicate_source_names(backup_root, tmp_path, collision):
+    session = BackupSession(backup_root, PASSWORD)
+    try:
+        session.new_directory("HomeDomain", "Documents", "destination")
+        duplicate = tmp_path / "a.txt"
+        duplicate.write_bytes(b"second source")
+        session.import_paths([duplicate], "HomeDomain", "Documents/sub")
+        original = session.at("HomeDomain", "Documents/a.txt")
+        second = session.at("HomeDomain", "Documents/sub/a.txt")
+        tokens = [original.token, second.token]
+        if collision in ("error", "replace"):
+            before = session.changes
+            with pytest.raises(BackupError, match="目标"):
+                session.move(tokens, "HomeDomain", "Documents/destination", collision=collision)
+            assert session.changes == before
+            assert session.at("HomeDomain", "Documents/a.txt")
+            assert session.at("HomeDomain", "Documents/sub/a.txt")
+            assert not session.at("HomeDomain", "Documents/destination/a.txt")
+        else:
+            session.move(tokens, "HomeDomain", "Documents/destination", collision=collision)
+            moved = session.at("HomeDomain", "Documents/destination/a.txt")
+            assert moved
+            alternate = session.at("HomeDomain", "Documents/destination/a (2).txt")
+            if collision == "keep_both":
+                assert alternate
+                assert {session.cached_file(moved.token).read_bytes(),
+                        session.cached_file(alternate.token).read_bytes()} == {
+                    b"hello world", b"second source"
+                }
+            else:
+                assert alternate is None
+                assert sum(session.at("HomeDomain", path) is not None for path in (
+                    "Documents/a.txt", "Documents/sub/a.txt"
+                )) == 1
+    finally:
+        session.close()
