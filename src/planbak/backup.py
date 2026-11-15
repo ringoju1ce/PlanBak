@@ -19,6 +19,7 @@ from typing import Callable
 
 from .backup_copy import (
     backup_stamp,
+    check_backup_overlap,
     check_persistent_location,
     copy_backup,
     output_location,
@@ -317,7 +318,10 @@ class BackupSession(SessionOverlay):
             # 不持有会话锁进行整份复制，允许期间继续浏览、编辑和暂挂。
             with self.lock:
                 source, stamp = self.root, self.source_stamp
-            destination = output_location(source, destination, workspace=self.workspace)
+                protected_roots = tuple(self._protected_roots)
+            destination = output_location(
+                source, destination, workspace=self.workspace, protected_roots=protected_roots
+            )
             return copy_backup(
                 source,
                 destination,
@@ -335,6 +339,7 @@ class BackupSession(SessionOverlay):
         with self.lock:
             self.check_changes_allowed()
             check_persistent_location(copied.path, self.workspace)
+            check_backup_overlap(copied.path, self._protected_roots)
             if self.root != copied.source or self._stamp() != copied.stamp:
                 raise BackupError(
                     "当前备份已改变，未切换到新副本",
@@ -705,7 +710,10 @@ class BackupSession(SessionOverlay):
                     )
                 destination = self.root
             else:
-                destination = output_location(self.root, destination, workspace=self.workspace)
+                destination = output_location(
+                    self.root, destination, workspace=self.workspace,
+                    protected_roots=self._protected_roots,
+                )
             check_persistent_location(destination, self.workspace)
             if self._stamp() != self.source_stamp:
                 raise BackupError(

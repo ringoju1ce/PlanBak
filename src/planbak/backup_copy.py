@@ -79,7 +79,18 @@ def check_persistent_location(destination, workspace=None):
             continue
 
 
-def output_location(source, destination, *, workspace=None):
+def check_backup_overlap(destination, roots):
+    destination = Path(destination).resolve()
+    for root in roots:
+        root = Path(root).resolve()
+        if destination == root or root in destination.parents or destination in root.parents:
+            raise BackupError(
+                "保存位置不能与受保护的备份重叠",
+                english="The save location cannot overlap a protected backup",
+            )
+
+
+def output_location(source, destination, *, workspace=None, protected_roots=()):
     destination = Path(destination).expanduser().absolute()
     if destination.exists() or destination.is_symlink():
         raise BackupError(
@@ -88,11 +99,7 @@ def output_location(source, destination, *, workspace=None):
         )
     destination = destination.parent.resolve() / destination.name
     check_persistent_location(destination, workspace)
-    if destination == source or source in destination.parents or destination in source.parents:
-        raise BackupError(
-            "保存位置不能与原备份重叠",
-            english="The save location cannot overlap the original backup",
-        )
+    check_backup_overlap(destination, (source, *protected_roots))
     destination.parent.mkdir(parents=True, exist_ok=True)
     return destination
 

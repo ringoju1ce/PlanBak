@@ -509,3 +509,35 @@ def test_saved_mbfile_digest_matches_stored_payload(backup_root, tmp_path, direc
             reopened.close()
     finally:
         s.close()
+
+
+def test_previous_backup_roots_remain_protected_after_switch(backup_root, tmp_path):
+    from dataclasses import replace
+
+    session = BackupSession(backup_root, PASSWORD)
+    before = hashes(backup_root)
+    try:
+        copied = session.create_copy(tmp_path / "editable")
+        session.use_copy(copied)
+        token = session.at("HomeDomain", "Documents/a.txt").token
+        session.stage_bytes(token, b"changed")
+        with pytest.raises(BackupError, match="受保护的备份重叠"):
+            session.create_copy(backup_root / "nested-copy")
+        with pytest.raises(BackupError, match="受保护的备份重叠"):
+            session.save(backup_root / "nested-save")
+        alias = tmp_path / "source-alias"
+        try:
+            alias.symlink_to(backup_root, target_is_directory=True)
+        except OSError:
+            pass  # Creating symlinks may require special permissions on Windows.
+        else:
+            with pytest.raises(BackupError, match="受保护的备份重叠"):
+                session.create_copy(alias / "nested-alias")
+        with pytest.raises(BackupError, match="受保护的备份重叠"):
+            session.use_copy(replace(copied, source=session.root, path=backup_root))
+        assert session.root == copied.path and session.dirty
+        assert hashes(backup_root) == before
+        assert not (backup_root / "nested-copy").exists()
+        assert not (backup_root / "nested-save").exists()
+    finally:
+        session.close()
