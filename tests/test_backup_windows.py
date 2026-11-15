@@ -602,7 +602,7 @@ def test_close_backup_cleans_its_viewers_without_affecting_other_window(
     first.close_backup()
     ready(first, qtbot)
     assert not workspace.exists() and first.session is None
-    assert not first.database_viewers and not first.hex_viewers and not first.image_viewers
+    assert not first.readonly.database_viewers and not first.readonly.hex_viewers and not first.image_viewers
     assert other_workspace.exists() and second.session is not None and second.isVisible()
 
 
@@ -659,7 +659,7 @@ def test_open_during_slow_viewer_close_cannot_leave_reserved_target(
         assert factory.manager.owner_for(other) is None
     finally:
         release.set()
-    qtbot.waitUntil(lambda: not w._readonly_closing and not w.hex_viewers)
+    qtbot.waitUntil(lambda: not w._readonly_closing and not w.readonly.hex_viewers)
     qtbot.wait(10)
     assert w.isVisible() and w.session is not None and not w._transitioning
 

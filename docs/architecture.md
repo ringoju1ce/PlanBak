@@ -12,6 +12,7 @@ PlanBak 是离线桌面应用，界面使用 PySide6。应用不需要连接设�
 | `external_edits.py` | 外部编辑临时副本的登记、文件监视、变更检查和跟踪清理。 |
 | `plist_editor.py`、`plist_xml.py` | plist 树和 XML 编辑。 |
 | `sqlite_viewer.py`、`sqlite_database.py` | 只读 SQLite 查看和隔离快照。 |
+| `readonly_windows.py` | SQLite 与十六进制窗口的登记、快照、重新加载和关闭清理。 |
 | `hex_viewer.py`、`hex_data.py` | 十六进制查看和搜索。 |
 | `image_session.py`、`image_viewer.py`、`image_cache.py`、`image_data.py`、`large_image.py` | 图片窗口、解码、共享缓存及大图区域读取。 |
 | `i18n.py`、`translations/`、`appearance.py` | 语言和外观。 |
@@ -21,6 +22,8 @@ PlanBak 是离线桌面应用，界面使用 PySide6。应用不需要连接设�
 打开备份后，应用使用临时会话管理清单、缓存及尚未应用的更改；创建副本或应用更改时才写入持久备份。不同主窗口拥有各自会话，备份占用锁防止本应用的多个窗口或进程同时打开同一实际备份。保存边界见[备份与保存](backup-and-saving.md)。
 
 读取、解码、导出和清理等操作使用后台任务。取消采用协作式检查，原生解码等步骤可能无法立即中断。关闭备份或退出时等待相关任务结束并清理会话工作区；异常退出后的失效工作区由后续启动清理。
+
+SQLite 和十六进制窗口由 `ReadOnlyWindows` 管理各自的快照与重载；主窗口协调它们与图片窗口的批量关闭。plist 编辑器仍由主窗口管理。
 
 外部编辑使用临时副本并监视变更；`ExternalEdits` 管理跟踪、轮询和变更暂挂，主窗口协调后台任务、退出确认及其他查看器的检查。检查失败时状态栏提示并延迟重试。拖出成功后的临时文件保留到关闭备份，以供接收程序读取。加密备份的临时工作区可能包含解密内容。
 

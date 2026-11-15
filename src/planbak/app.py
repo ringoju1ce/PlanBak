@@ -11,7 +11,6 @@ import tempfile
 import threading
 import time
 import uuid
-import weakref
 from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
@@ -77,7 +76,7 @@ from .backup import (
     stale_workspaces,
 )
 from .backup_windows import BackupWindows
-from .codec import CHUNK, BackupError, Cancelled, check_cancel
+from .codec import BackupError, Cancelled, check_cancel
 from .dialogs import FixedDialog as QDialog
 from .dialogs import FixedFileDialog as QFileDialog
 from .dialogs import FixedInputDialog as QInputDialog
@@ -85,7 +84,6 @@ from .dialogs import FixedMessageBox as QMessageBox
 from .dialogs import FixedProgressDialog
 from .external_edits import ExternalEdits, file_stamp
 from .file_opening import identify_file, source_revision
-from .hex_viewer import HexViewer
 from .i18n import ENGLISH, SIMPLIFIED_CHINESE, LanguageContext
 from .icons import ApplicationIcons
 from .image_session import ImageWindows
@@ -93,9 +91,9 @@ from .navigation import Location, ViewState, split_domain
 from .pane_focus import BrowserPaneFocus
 from .pending_view import PendingChangesModel
 from .plist_editor import PlistDocument, PlistEditor
+from .readonly_windows import ReadOnlyWindows
 from .sidebar import DirectoryTree
-from .sqlite_database import DatabaseSnapshot, companions, prepare_snapshot
-from .sqlite_viewer import SQLiteViewer
+from .sqlite_database import prepare_snapshot
 
 INTERNAL_MIME = "application/x-planbak-entries"
 
@@ -578,25 +576,6 @@ class OpenedPlist:
 
 
 @dataclass
-class OpenedDatabase:
-    token: str
-    viewer: SQLiteViewer
-    snapshot: DatabaseSnapshot
-    revision: tuple
-
-
-@dataclass
-class OpenedHex:
-    token: str
-    viewer: HexViewer
-    path: Path
-    source_digest: bytes
-    observed_digest: bytes
-    revision: tuple
-    detached: bool = False
-
-
-@dataclass
 class WindowTransfer:
     source: MainWindow
     session: BackupSession
@@ -682,8 +661,7 @@ class MainWindow(QMainWindow):
         self.statusBar().addPermanentWidget(self.status_panel, 1)
         self.external_edits = ExternalEdits(self)
         self.plist_editors = {}
-        self.database_viewers = {}
-        self.hex_viewers = {}
+        self.readonly = ReadOnlyWindows(self)
         self.images = ImageWindows(self)
         self.image_viewers = self.images.viewers
         self._readonly_closing = False
@@ -1798,8 +1776,7 @@ class MainWindow(QMainWindow):
     def _focus_owned_modal(self, *, focus=True):
         owners = {self}
         owners.update(record.editor for record in self.plist_editors.values())
-        owners.update(record.viewer for record in self.database_viewers.values())
-        owners.update(record.viewer for record in self.hex_viewers.values())
+        owners.update(self.readonly.viewers())
         owners.update(self.image_viewers)
         # 不只检查全局activeModalWidget：其他备份可能同时有自己的WindowModal。
         for widget in QApplication.topLevelWidgets():
@@ -1824,7 +1801,7 @@ class MainWindow(QMainWindow):
             if cancelled:
                 cancelled()
             return
-        if self.database_viewers or self.hex_viewers or self.image_viewers:
+        if self.readonly.has_open() or self.image_viewers:
             self.close_readonly_viewers(
                 lambda: self.confirm_leave(
                     continuation, exiting=exiting, cancelled=cancelled, purpose=purpose
@@ -2448,12 +2425,7 @@ class MainWindow(QMainWindow):
         else:
             if self.images.reuse(token):
                 return
-            if token in self.database_viewers:
-                viewer = self.database_viewers[token].viewer
-                viewer.showNormal()
-                viewer.raise_()
-                viewer.activateWindow()
-                viewer.table.setFocus()
+            if self.readonly.reuse_database(token):
                 return
             if token in self.plist_editors:
                 editor = self.plist_editors[token].editor
@@ -2576,7 +2548,7 @@ class MainWindow(QMainWindow):
                 )
 
         def open_database(snapshot):
-            self.show_database(token, snapshot)
+            self.readonly.show_database(token, snapshot)
             resources["snapshot"] = None
 
         openers = {
@@ -2598,33 +2570,6 @@ class MainWindow(QMainWindow):
 
         self.run_task("打开文件", prepare, opened, on_done=cleanup)
 
-    def database_revision(self, token):
-        return tuple(
-            (entry.token, self.plist_revision(entry.token))
-            for entry in companions(self.session, token)
-        )
-
-    def show_database(self, token, snapshot):
-        if self._transitioning or self._outgoing_transfers or self._readonly_closing:
-            shutil.rmtree(snapshot.directory, ignore_errors=True)
-            return
-        session = self.session
-        viewer = SQLiteViewer(snapshot, session.get(token).name, self)
-        record = OpenedDatabase(token, viewer, snapshot, self.database_revision(token))
-        self.database_viewers[token] = record
-        viewer.reload_requested.connect(lambda: self.reload_database(record))
-
-        def closed(_):
-            self.database_viewers.pop(token, None)
-            shutil.rmtree(record.snapshot.directory, ignore_errors=True)
-            if not viewer._skip_prompt:
-                self.restore_browser_after_editor(session, viewer)
-            viewer.deleteLater()
-
-        viewer.finished.connect(closed)
-        self.panes.activate(self.active_view(), focus=True)
-        viewer.show()
-
     def close_readonly_viewers(self, after):
         if self._readonly_closing:
             return
@@ -2639,331 +2584,17 @@ class MainWindow(QMainWindow):
 
         def closed(_):
             nonlocal scheduled
-            if not self.database_viewers and not self.hex_viewers and not self.image_viewers:
+            if not self.readonly.has_open() and not self.image_viewers:
                 if not scheduled:
                     scheduled = True
                     QTimer.singleShot(0, resume)
 
-        viewers = [
-            record.viewer
-            for record in list(self.database_viewers.values()) + list(self.hex_viewers.values())
-        ] + list(self.image_viewers)
-        for viewer in viewers:
+        self.readonly.request_close_all(closed)
+        for viewer in list(self.image_viewers):
             viewer._skip_prompt = True
             viewer.finished.connect(closed)
             viewer.reject()
         closed(None)
-
-    def open_hex(self):
-        if (
-            self._transitioning
-            or self._outgoing_transfers
-            or self._readonly_closing
-            or self.task
-            or not self.session
-            or self.sidebar_active()
-        ):
-            return
-        rows = self.selected_rows()
-        if len(rows) != 1 or rows[0].kind != "file":
-            return
-        token = rows[0].entry.token
-        if token in self.hex_viewers:
-            viewer = self.hex_viewers[token].viewer
-            viewer.showNormal()
-            viewer.raise_()
-            viewer.activateWindow()
-            viewer.table.setFocus()
-            return
-        session = self.session
-        path = session.workspace / "hex-viewer" / uuid.uuid4().hex / "snapshot.bin"
-
-        def prepare(progress, cancel):
-            session.extract_file(token, path, cancel=cancel)
-            return digest(path, cancel=cancel)
-
-        def opened(fingerprint):
-            viewer = HexViewer(path, session.get(token).name, self)
-            record = OpenedHex(
-                token, viewer, path, fingerprint, fingerprint, self.plist_revision(token)
-            )
-            self.hex_viewers[token] = record
-            viewer.reload_requested.connect(lambda: self.reload_hex(record))
-
-            def closed(_):
-                self.hex_viewers.pop(token, None)
-                shutil.rmtree(record.path.parent, ignore_errors=True)
-                if not viewer._skip_prompt:
-                    self.restore_browser_after_editor(session, viewer)
-                viewer.deleteLater()
-
-            viewer.finished.connect(closed)
-            self.panes.activate(self.active_view(), focus=True)
-            viewer.show()
-
-        def cleanup():
-            if token not in self.hex_viewers:
-                shutil.rmtree(path.parent, ignore_errors=True)
-
-        self.run_task("打开文件", prepare, opened, on_done=cleanup)
-
-    def reload_hex(self, record, *, automatic=False):
-        if record.detached:
-            return
-        if self.task or not self.session or record.viewer.task or record.viewer._closing:
-            return
-        session = self.session
-        try:
-            revision = self.plist_revision(record.token)
-        except BackupError:
-            record.viewer.set_source_state(available=False)
-            return
-        path = session.workspace / "hex-viewer" / uuid.uuid4().hex / "snapshot.bin"
-
-        def prepare(progress, cancel):
-            session.extract_file(record.token, path, cancel=cancel)
-            return digest(path, cancel=cancel)
-
-        def loaded(fingerprint):
-            if self._focus_owned_modal(focus=False):
-                return
-            if self.hex_viewers.get(record.token) is not record:
-                return
-            record.revision = revision
-            changed = fingerprint != record.source_digest
-            prompt = changed and fingerprint != record.observed_digest
-            record.observed_digest = fingerprint
-            record.viewer.set_source_state(stale=changed)
-            accept = not automatic
-            if automatic and prompt:
-                accept = (
-                    QMessageBox.question(
-                        record.viewer,
-                        self.language_context.translate("Source File Changed"),
-                        self.language_context.translate("Reload the updated version?"),
-                        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                        QMessageBox.StandardButton.No,
-                    )
-                    == QMessageBox.StandardButton.Yes
-                )
-            if accept and not record.viewer.task and not record.viewer._closing:
-                previous = record.path
-                record.path, record.source_digest = path, fingerprint
-                record.viewer.replace_snapshot(path, session.get(record.token).name)
-                shutil.rmtree(previous.parent, ignore_errors=True)
-
-        def failed(exc):
-            record.revision = revision
-            if self.hex_viewers.get(record.token) is record:
-                record.viewer.set_source_state(stale=True)
-                record.viewer.set_status("Unable to reload file: {error}", error=exc)
-
-        def cleanup():
-            if self.hex_viewers.get(record.token) is not record or record.path != path:
-                shutil.rmtree(path.parent, ignore_errors=True)
-
-        self.run_task(
-            "重新加载文件", prepare, loaded, silent=automatic, on_error=failed, on_done=cleanup
-        )
-
-    def check_hex_viewers(self):
-        if self._outgoing_transfers or self._transitioning or self._readonly_closing:
-            return False
-        if self._focus_owned_modal(focus=False):
-            return False
-        for record in list(self.hex_viewers.values()):
-            if record.detached or record.viewer.task or record.viewer._closing:
-                continue
-            try:
-                entry = self.session.get(record.token)
-                revision = self.plist_revision(record.token)
-            except BackupError:
-                record.viewer.set_source_state(available=False)
-                continue
-            if record.viewer.name != entry.name:
-                record.viewer.name = entry.name
-                record.viewer.update_title()
-            if not record.viewer.available:
-                record.viewer.set_source_state(stale=record.viewer.stale)
-            if revision != record.revision:
-                self.reload_hex(record, automatic=True)
-                return True
-        return False
-
-    def open_data_hex(self, data, identity, label, *, owner=None):
-        if (
-            self._transitioning
-            or self._outgoing_transfers
-            or self._readonly_closing
-            or self.task
-            or not self.session
-        ):
-            self.statusBar().setToolTip(
-                self.language_context.translate(
-                    "A backup operation is in progress; try viewing Data later."
-                )
-            )
-            return
-        session = self.session
-        path = session.workspace / "hex-viewer" / uuid.uuid4().hex / "data.bin"
-        retained = False
-        owner_ref = weakref.ref(owner) if owner is not None else lambda: None
-
-        def prepare(progress, cancel):
-            path.parent.mkdir(parents=True, exist_ok=True)
-            fingerprint = hashlib.sha256()
-            with path.open("wb") as stream:
-                view = memoryview(data)
-                for offset in range(0, len(view), CHUNK):
-                    check_cancel(cancel)
-                    block = view[offset : offset + CHUNK]
-                    fingerprint.update(block)
-                    stream.write(block)
-            check_cancel(cancel)
-            return fingerprint.digest()
-
-        def opened(fingerprint):
-            nonlocal retained
-            token = f"plist-data:{identity}:{fingerprint.hex()}"
-            if token in self.hex_viewers:
-                viewer = self.hex_viewers[token].viewer
-                viewer.name = label
-                viewer.update_title()
-                viewer.showNormal()
-                viewer.raise_()
-                viewer.activateWindow()
-                viewer.table.setFocus()
-                return
-            viewer = HexViewer(path, label, self)
-            viewer.reload_button.defaultAction().setVisible(False)
-            viewer.set_status()
-            record = OpenedHex(token, viewer, path, fingerprint, fingerprint, (), detached=True)
-            self.hex_viewers[token] = record
-            retained = True
-
-            def closed(_):
-                self.hex_viewers.pop(token, None)
-                shutil.rmtree(path.parent, ignore_errors=True)
-                if not viewer._skip_prompt:
-                    target = owner_ref()
-                    if target is not None and any(
-                        r.editor is target for r in self.plist_editors.values()
-                    ):
-
-                        def restore():
-                            if (
-                                any(r.editor is target for r in self.plist_editors.values())
-                                and target.isVisible()
-                                and not target.isMinimized()
-                                and not self._focus_owned_modal(focus=False)
-                                and QApplication.activeWindow() in (None, self, viewer, target)
-                            ):
-                                target.activateWindow()
-                                (
-                                    target.tree
-                                    if target.pages.currentIndex() == 0
-                                    else target.xml.code
-                                ).setFocus()
-
-                        QTimer.singleShot(0, restore)
-                    else:
-                        self.restore_browser_after_editor(session, viewer)
-                viewer.deleteLater()
-
-            viewer.finished.connect(closed)
-            viewer.show()
-
-        def cleanup():
-            if not retained:
-                shutil.rmtree(path.parent, ignore_errors=True)
-
-        self.run_task("打开项目", prepare, opened, on_done=cleanup)
-
-    def reload_database(self, record, *, automatic=False):
-        if self.task or not self.session or record.viewer.task or record.viewer._closing:
-            return
-        session = self.session
-        try:
-            revision = self.database_revision(record.token)
-        except BackupError:
-            record.viewer.set_source_state(available=False)
-            return
-        directory = session.workspace / "sqlite-viewer" / uuid.uuid4().hex
-
-        def loaded(snapshot):
-            if self._focus_owned_modal(focus=False):
-                return
-            if record.token not in self.database_viewers:
-                shutil.rmtree(snapshot.directory, ignore_errors=True)
-                return
-            record.revision = revision
-            changed = snapshot.fingerprint != record.snapshot.fingerprint
-            record.viewer.set_source_state(stale=changed)
-            accept = not automatic
-            if automatic and changed:
-                accept = (
-                    QMessageBox.question(
-                        record.viewer,
-                        self.language_context.translate("Database Changed"),
-                        self.language_context.translate("Reload the updated version?"),
-                        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                        QMessageBox.StandardButton.No,
-                    )
-                    == QMessageBox.StandardButton.Yes
-                )
-            if not accept or record.viewer.task or record.viewer._closing:
-                shutil.rmtree(snapshot.directory, ignore_errors=True)
-                return
-            previous = record.snapshot
-            record.snapshot = snapshot
-            record.viewer.replace_snapshot(snapshot, session.get(record.token).name)
-            shutil.rmtree(previous.directory, ignore_errors=True)
-
-        def failed(exc):
-            record.revision = revision
-            if record.token in self.database_viewers:
-                record.viewer.set_source_state(stale=True)
-                record.viewer.set_status("Unable to reload database: {error}", error=exc)
-
-        def cleanup():
-            if record.snapshot.directory != directory:
-                shutil.rmtree(directory, ignore_errors=True)
-
-        self.run_task(
-            "重新加载文件",
-            lambda progress, cancel: prepare_snapshot(
-                session, record.token, directory, cancel=cancel
-            ),
-            loaded,
-            silent=automatic,
-            on_error=failed,
-            on_done=cleanup,
-        )
-
-    def check_database_viewers(self):
-        if self._outgoing_transfers or self._transitioning or self._readonly_closing:
-            return False
-        if self._focus_owned_modal(focus=False):
-            return False
-        for record in list(self.database_viewers.values()):
-            if record.viewer.task or record.viewer._closing:
-                continue
-            try:
-                entry = self.session.get(record.token)
-                revision = self.database_revision(record.token)
-            except BackupError:
-                record.viewer.set_source_state(available=False)
-                continue
-            if record.viewer.name != entry.name:
-                record.viewer.name = entry.name
-                record.viewer.update_title()
-            if not record.viewer.available:
-                record.viewer.set_source_state(stale=record.viewer.stale)
-                record.viewer.set_status("The source file is available again.")
-            if revision != record.revision:
-                self.reload_database(record, automatic=True)
-                return True
-        return False
 
     def plist_revision(self, token):
         entry = self.session.get(token)
@@ -3044,7 +2675,7 @@ class MainWindow(QMainWindow):
 
             editor = PlistEditor(document, name, stage, self)
             editor.data_hex_requested.connect(
-                lambda data, identity, label: self.open_data_hex(
+                lambda data, identity, label: self.readonly.open_data_hex(
                     data, identity, label, owner=editor
                 )
             )
@@ -3205,7 +2836,7 @@ class MainWindow(QMainWindow):
             return
         if self.task or not self.session or self._focus_owned_modal(focus=False):
             return
-        if self.check_plist_editors() or self.check_database_viewers() or self.check_hex_viewers():
+        if self.check_plist_editors() or self.readonly.check_database_viewers() or self.readonly.check_hex_viewers():
             return
         self.external_edits.poll()
 
@@ -3347,7 +2978,7 @@ class MainWindow(QMainWindow):
         if len(rows) == 1 and rows[0].kind == "file":
             hex_action = menu.addAction(self.language_context.translate("View as Hexadecimal"))
             hex_action.setEnabled(not self.task)
-            hex_action.triggered.connect(self.open_hex)
+            hex_action.triggered.connect(self.readonly.open_hex)
             external = menu.addAction(
                 self.language_context.translate("Open with System Application")
             )
@@ -3623,7 +3254,7 @@ class MainWindow(QMainWindow):
             if self.task:
                 event.ignore()
                 return
-            if self.database_viewers or self.hex_viewers or self.image_viewers:
+            if self.readonly.has_open() or self.image_viewers:
                 event.ignore()
                 self.close_readonly_viewers(self.close)
                 return

@@ -123,5 +123,5 @@ def test_exit_drops_prepared_database_snapshot(window, qtbot, tmp_path, monkeypa
     qtbot.waitUntil(ready.is_set)
     w.close()
     qtbot.waitUntil(lambda: not w.isVisible())
-    assert not root.exists() and not w.database_viewers
+    assert not root.exists() and not w.readonly.database_viewers
     assert snapshots and not snapshots[0].exists()

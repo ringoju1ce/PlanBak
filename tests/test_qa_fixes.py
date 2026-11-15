@@ -168,15 +168,15 @@ def test_async_readonly_close_does_not_lose_new_window_continuation(window, qtbo
     try:
         w.close_readonly_viewers(lambda: continued.append(True))
         choose(w, 'empty.bin')
-        w.open_hex()
+        w.readonly.open_hex()
         qtbot.waitUntil(lambda: w.task is None)
-        second = next((r for r in w.hex_viewers.values() if r is not first), None)
+        second = next((r for r in w.readonly.hex_viewers.values() if r is not first), None)
     finally:
         release.set()
     qtbot.waitUntil(lambda: first.viewer.task is None)
     if second:
         second.viewer.close()
-    qtbot.waitUntil(lambda: not w.hex_viewers)
+    qtbot.waitUntil(lambda: not w.readonly.hex_viewers)
     qtbot.wait(20)
     print('continuation=', continued, 'closing flag=', w._readonly_closing)
     assert continued == [True] and not w._readonly_closing
@@ -188,7 +188,7 @@ def test_cancel_exit_does_not_orphan_late_reload_snapshot(window, qtbot, tmp_pat
 
     from test_ui import open_test_database
 
-    import planbak.app as module
+    import planbak.readonly_windows as module
 
     w = window
     w.poll_timer.stop()
@@ -208,10 +208,10 @@ def test_cancel_exit_does_not_orphan_late_reload_snapshot(window, qtbot, tmp_pat
 
     monkeypatch.setattr(module, 'prepare_snapshot', late)
     monkeypatch.setattr(QMessageBox, 'exec', lambda self: QMessageBox.StandardButton.Cancel)
-    w.reload_database(record)
+    w.readonly.reload_database(record)
     qtbot.waitUntil(started.is_set)
     w.close()
-    qtbot.waitUntil(lambda: w.task is None and not w.database_viewers)
+    qtbot.waitUntil(lambda: w.task is None and not w.readonly.database_viewers)
     qtbot.wait(30)
     assert w.isVisible() and w.session is not None
     remaining = [str(p.relative_to(w.session.workspace)) for p in snapshots if p.exists()]

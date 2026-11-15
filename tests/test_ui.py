@@ -1628,8 +1628,8 @@ def open_test_database(w, qtbot, tmp_path):
     w.open_file()
     qtbot.waitUntil(lambda: w.task is None, timeout=5000)
     token = w.session.at("HomeDomain", "Documents/system-data").token
-    qtbot.waitUntil(lambda: token in w.database_viewers)
-    rec = w.database_viewers[token]
+    qtbot.waitUntil(lambda: token in w.readonly.database_viewers)
+    rec = w.readonly.database_viewers[token]
     qtbot.waitUntil(lambda: rec.viewer.task is None)
     return rec
 
@@ -1648,13 +1648,13 @@ def test_database_open_single_instance_close_focus_and_cleanup(
     snapshot_dir = rec.snapshot.directory
     before = list(w.session.changes)
     w.open_file()
-    assert len(w.database_viewers) == 1 and w.database_viewers[rec.token] is rec
+    assert len(w.readonly.database_viewers) == 1 and w.readonly.database_viewers[rec.token] is rec
     rec.viewer.code.setPlainText("SELECT 42")
     rec.viewer.execute_sql()
     qtbot.waitUntil(lambda: rec.viewer.task is None)
     assert rec.viewer.model.result.rows == [(42,)] and list(w.session.changes) == before
     qtbot.keyClick(rec.viewer, Qt.Key.Key_Escape)
-    qtbot.waitUntil(lambda: not w.database_viewers and w.active_view().hasFocus())
+    qtbot.waitUntil(lambda: not w.readonly.database_viewers and w.active_view().hasFocus())
     assert not snapshot_dir.exists() and not w.sidebar_active()
 
 
@@ -1671,7 +1671,7 @@ def test_database_reloads_only_when_actual_content_changes(window, qtbot, tmp_pa
     # A revision change without a byte change must not prompt.
     cached = w.session.cache_path(rec.token)
     cached.touch()
-    assert w.check_database_viewers()
+    assert w.readonly.check_database_viewers()
     qtbot.waitUntil(lambda: w.task is None)
     assert not prompts
     source = tmp_path / "replacement.db"
@@ -1684,13 +1684,13 @@ def test_database_reloads_only_when_actual_content_changes(window, qtbot, tmp_pa
     c.close()
     w.session.stage_bytes(rec.token, source.read_bytes())
     old = rec.snapshot.directory
-    assert w.check_database_viewers()
+    assert w.readonly.check_database_viewers()
     qtbot.waitUntil(lambda: w.task is None)
     qtbot.waitUntil(lambda: rec.viewer.task is None)
     assert len(prompts) == 1 and not old.exists()
     assert query(rec.snapshot.path, 'SELECT max(id) FROM "items weird"').rows == [(999,)]
     w.session.delete([rec.token])
-    w.check_database_viewers()
+    w.readonly.check_database_viewers()
     assert not rec.viewer.available
     rec.viewer.close()
 
@@ -1711,10 +1711,10 @@ def test_database_declined_reload_keeps_snapshot_and_does_not_repeat(
     data[60:64] = (123).to_bytes(4, "big")
     w.session.stage_bytes(rec.token, bytes(data))
     old = rec.snapshot
-    assert w.check_database_viewers()
+    assert w.readonly.check_database_viewers()
     qtbot.waitUntil(lambda: w.task is None)
     assert rec.snapshot is old and rec.viewer.stale and len(prompts) == 1
-    assert not w.check_database_viewers() and len(prompts) == 1
+    assert not w.readonly.check_database_viewers() and len(prompts) == 1
     rec.viewer.close()
 
 
@@ -1733,7 +1733,7 @@ def test_database_exit_cancels_active_query_before_session_cleanup(
     monkeypatch.setattr(QMessageBox, "exec", lambda *a: QMessageBox.StandardButton.Discard)
     w.close()
     qtbot.waitUntil(lambda: not w.isVisible(), timeout=5000)
-    assert not workspace.exists() and not w.database_viewers and w.session is None
+    assert not workspace.exists() and not w.readonly.database_viewers and w.session is None
 
 
 def test_database_viewer_closed_before_switching_backup(window, qtbot, tmp_path, monkeypatch):
@@ -1746,7 +1746,7 @@ def test_database_viewer_closed_before_switching_backup(window, qtbot, tmp_path,
     monkeypatch.setattr(QMessageBox, "exec", lambda *a: QMessageBox.StandardButton.Discard)
     w.confirm_leave(lambda: w.open_path(next_backup))
     qtbot.waitUntil(
-        lambda: not w.database_viewers and w.task is None and w.session.root == next_backup,
+        lambda: not w.readonly.database_viewers and w.task is None and w.session.root == next_backup,
         timeout=5000,
     )
     assert not snapshot.exists()
@@ -1775,7 +1775,7 @@ def test_database_unknown_format_and_sidecars_report_clear_error(
         w.open_file()
         qtbot.waitUntil(lambda: w.task is None)
         assert expected in str(errors[-1])
-    assert not w.database_viewers and not w.external_edits.records
+    assert not w.readonly.database_viewers and not w.external_edits.records
 
 
 def open_test_hex(w, qtbot):
@@ -1784,10 +1784,10 @@ def open_test_hex(w, qtbot):
     w.navigate(Location("HomeDomain", "Documents"))
     w.panes.activate(w.active_view(), focus=True)
     choose(w, "a.txt")
-    w.open_hex()
+    w.readonly.open_hex()
     qtbot.waitUntil(lambda: w.task is None)
     token = w.session.at("HomeDomain", "Documents/a.txt").token
-    return w.hex_viewers[token]
+    return w.readonly.hex_viewers[token]
 
 
 def test_hex_menu_single_instance_and_close_preserves_focus(window, qtbot, monkeypatch):
@@ -1809,27 +1809,27 @@ def test_hex_menu_single_instance_and_close_preserves_focus(window, qtbot, monke
     w.context_menu(w.active_view(), w.active_view().visualRect(index).center())
     qtbot.waitUntil(lambda: w.task is None)
     token = w.session.at("HomeDomain", "Documents/a.txt").token
-    record = w.hex_viewers[token]
+    record = w.readonly.hex_viewers[token]
     assert record.path.read_bytes() == b"hello world" and not w.session.dirty
-    w.open_hex()
-    assert len(w.hex_viewers) == 1 and w.hex_viewers[token] is record
+    w.readonly.open_hex()
+    assert len(w.readonly.hex_viewers) == 1 and w.readonly.hex_viewers[token] is record
     directory = record.path.parent
     qtbot.keyClick(record.viewer, Qt.Key.Key_Escape)
-    qtbot.waitUntil(lambda: not w.hex_viewers and w.active_view().hasFocus())
+    qtbot.waitUntil(lambda: not w.readonly.hex_viewers and w.active_view().hasFocus())
     assert not directory.exists() and not w.sidebar_active()
 
 
 def test_hex_can_coexist_with_plist_and_does_not_redirect_normal_open(window, qtbot):
     w = window
     plist = open_test_plist(w, qtbot)
-    w.open_hex()
+    w.readonly.open_hex()
     qtbot.waitUntil(lambda: w.task is None)
-    assert plist.token in w.hex_viewers and plist.token in w.plist_editors
-    assert w.hex_viewers[plist.token].path.read_bytes().startswith(b"<?xml")
+    assert plist.token in w.readonly.hex_viewers and plist.token in w.plist_editors
+    assert w.readonly.hex_viewers[plist.token].path.read_bytes().startswith(b"<?xml")
     w.open_file()
     qtbot.waitUntil(lambda: plist.editor.isActiveWindow())
-    assert len(w.hex_viewers) == 1
-    w.hex_viewers[plist.token].viewer.close()
+    assert len(w.readonly.hex_viewers) == 1
+    w.readonly.hex_viewers[plist.token].viewer.close()
     plist.editor.close()
 
 
@@ -1845,26 +1845,26 @@ def test_hex_source_revision_checks_exact_bytes_and_manual_reload(window, qtbot,
     # Touching original bytes changes the observed revision but not the contents.
     source = w.session.payload_path(w.session.get(record.token).original_id)
     source.touch()
-    assert w.check_hex_viewers()
+    assert w.readonly.check_hex_viewers()
     qtbot.waitUntil(lambda: w.task is None)
     assert not calls
     old_path = record.path
     w.session.stage_bytes(record.token, b"replacement")
-    assert w.check_hex_viewers()
+    assert w.readonly.check_hex_viewers()
     qtbot.waitUntil(lambda: w.task is None)
     assert len(calls) == 1 and record.viewer.stale
     assert record.path == old_path and old_path.read_bytes() == b"hello world"
     # Same bytes with another stat change must not repeat a declined prompt.
     w.session.cache_path(record.token).touch()
-    assert w.check_hex_viewers()
+    assert w.readonly.check_hex_viewers()
     qtbot.waitUntil(lambda: w.task is None)
     assert len(calls) == 1
-    w.reload_hex(record)
+    w.readonly.reload_hex(record)
     qtbot.waitUntil(lambda: w.task is None)
     assert record.path.read_bytes() == b"replacement" and not old_path.exists()
     assert not record.viewer.stale
     w.session.delete([record.token])
-    w.check_hex_viewers()
+    w.readonly.check_hex_viewers()
     assert not record.viewer.available
     record.viewer.close()
 
@@ -1897,7 +1897,7 @@ def test_hex_and_sqlite_exit_cancel_both_workers_before_cleanup(
     monkeypatch.setattr(QMessageBox, "exec", lambda *a: QMessageBox.StandardButton.Discard)
     w.close()
     qtbot.waitUntil(lambda: not w.isVisible(), timeout=5000)
-    assert not workspace.exists() and not w.hex_viewers and not w.database_viewers
+    assert not workspace.exists() and not w.readonly.hex_viewers and not w.readonly.database_viewers
 
 
 @pytest.mark.parametrize("data", [b"\x00\xffraw-data", b""])
@@ -1913,20 +1913,20 @@ def test_plist_data_hex_uses_unsaved_bytes_and_reuses_snapshot(window, qtbot, da
     before = list(w.session.changes)
     editor.view_data_hex()
     qtbot.waitUntil(lambda: w.task is None)
-    record = next(iter(w.hex_viewers.values()))
+    record = next(iter(w.readonly.hex_viewers.values()))
     assert record.detached and record.path.read_bytes() == data
     assert record.viewer.model.data_bytes == data
     assert not record.viewer.reload_button.isVisible()
     assert list(w.session.changes) == before and editor.dirty
-    assert not w.check_hex_viewers()
+    assert not w.readonly.check_hex_viewers()
     editor.view_data_hex()
     qtbot.waitUntil(lambda: w.task is None)
-    assert len(w.hex_viewers) == 1 and next(iter(w.hex_viewers.values())) is record
+    assert len(w.readonly.hex_viewers) == 1 and next(iter(w.readonly.hex_viewers.values())) is record
     assert len(list((w.session.workspace / "hex-viewer").iterdir())) == 1
     path = record.path
     record.viewer.close()
     qtbot.waitUntil(editor.tree.hasFocus)
-    assert not path.exists() and not w.hex_viewers
+    assert not path.exists() and not w.readonly.hex_viewers
 
 
 def test_plist_data_hex_changed_values_create_independent_snapshots(window, qtbot):
@@ -1939,13 +1939,13 @@ def test_plist_data_hex_changed_values_create_independent_snapshots(window, qtbo
     plist.editor.rebuild(node)
     plist.editor.view_data_hex()
     qtbot.waitUntil(lambda: w.task is None)
-    first = next(iter(w.hex_viewers.values()))
+    first = next(iter(w.readonly.hex_viewers.values()))
     node.value = b"second"
     plist.editor.rebuild(node)
     plist.editor.view_data_hex()
     qtbot.waitUntil(lambda: w.task is None)
-    assert len(w.hex_viewers) == 2
-    assert {rec.path.read_bytes() for rec in w.hex_viewers.values()} == {b"first", b"second"}
+    assert len(w.readonly.hex_viewers) == 2
+    assert {rec.path.read_bytes() for rec in w.readonly.hex_viewers.values()} == {b"first", b"second"}
     assert first.path.read_bytes() == b"first" and not w.session.dirty
 
 
@@ -1962,14 +1962,14 @@ def test_plist_data_hex_survives_source_close_and_exit_cancels_search(window, qt
     plist.editor.rebuild(node)
     plist.editor.view_data_hex()
     qtbot.waitUntil(lambda: w.task is None)
-    record = next(iter(w.hex_viewers.values()))
+    record = next(iter(w.readonly.hex_viewers.values()))
     monkeypatch.setattr(
         FixedMessageBox, "exec", lambda *a: FixedMessageBox.StandardButton.Ok
     )
     plist.editor.close()
     qtbot.waitUntil(lambda: not w.plist_editors)
     assert record.viewer.isVisible() and record.path.exists()
-    assert not w.check_hex_viewers()
+    assert not w.readonly.check_hex_viewers()
 
     def search(*a, cancel, **k):
         while not cancel():
@@ -1982,7 +1982,7 @@ def test_plist_data_hex_survives_source_close_and_exit_cancels_search(window, qt
     workspace = w.session.workspace
     w.close()
     qtbot.waitUntil(lambda: not w.isVisible(), timeout=5000)
-    assert not workspace.exists() and not w.hex_viewers
+    assert not workspace.exists() and not w.readonly.hex_viewers
 
 
 @pytest.mark.parametrize("grid", [False, True])
@@ -2145,12 +2145,12 @@ def test_independent_document_windows_close_with_session_and_allow_multiple_file
     hexdump = open_test_hex(w, qtbot)
     for document in (plist.editor, database.viewer, hexdump.viewer):
         assert document.isVisible() and document.windowHandle().transientParent() is None
-    assert w.plist_editors and w.database_viewers and w.hex_viewers
+    assert w.plist_editors and w.readonly.database_viewers and w.readonly.hex_viewers
     workspace = w.session.workspace
     monkeypatch.setattr(QMessageBox, "exec", lambda *a: QMessageBox.StandardButton.Discard)
     w.close()
     qtbot.waitUntil(lambda: not w.isVisible(), timeout=5000)
-    assert not w.plist_editors and not w.database_viewers and not w.hex_viewers
+    assert not w.plist_editors and not w.readonly.database_viewers and not w.readonly.hex_viewers
     assert not workspace.exists()
 
 
