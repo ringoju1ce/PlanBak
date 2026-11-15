@@ -7,7 +7,7 @@ from PySide6.QtCore import QBuffer, QByteArray, QIODevice
 from PySide6.QtGui import QImageReader
 
 from .codec import BackupError
-from .staging import checked_staged_path
+from .staging import checked_staged_path, staged_unavailable_error
 
 HEADER_BYTES = 64 * 1024
 
@@ -15,12 +15,20 @@ HEADER_BYTES = 64 * 1024
 def source_revision(session, token):
     """调用方持有会话锁；与提取时选择当前文件的规则一致。"""
     entry = session.get(token)
-    path = checked_staged_path(entry) if entry.staged else session.cache_path(token)
-    if not path.is_file():
-        if not entry.original_id:
-            raise BackupError("文件源已不可用。", english="The file source is no longer available.")
-        path = session.payload_path(entry.original_id)
-    stat = path.stat()
+    if entry.staged:
+        path = checked_staged_path(entry)
+    else:
+        path = session.cache_path(token)
+        if not path.is_file():
+            if not entry.original_id:
+                raise BackupError("文件源已不可用。", english="The file source is no longer available.")
+            path = session.payload_path(entry.original_id)
+    try:
+        stat = path.stat()
+    except FileNotFoundError as exc:
+        if entry.staged:
+            raise staged_unavailable_error(entry) from exc
+        raise
     return (
         str(session.root),
         str(path),

@@ -37,7 +37,7 @@ from .codec import (
     file_id,
     safe_path,
 )
-from .staging import Entry, SessionOverlay, checked_staged_path
+from .staging import Entry, SessionOverlay, checked_staged_path, staged_unavailable_error
 
 Progress = Callable[[str, int, int], None]
 
@@ -573,12 +573,19 @@ class BackupSession(SessionOverlay):
             raise BackupError(
                 "导出目标不能是链接", english="The export destination cannot be a link"
             )
-        cached = (
-            checked_staged_path(entry)
-            if use_cache and entry.staged
-            else self.cache_path(entry.token)
-        )
-        if use_cache and cached.is_file():
+        cached = self.cache_path(entry.token)
+        if use_cache and entry.staged:
+            cached = checked_staged_path(entry)
+            try:
+                if cached.resolve() != target.resolve():
+                    copy_file(cached, target, cancel, progress=progress)
+                else:
+                    checked_staged_path(entry)
+            except (FileNotFoundError, BackupError) as exc:
+                if not cached.is_file():
+                    raise staged_unavailable_error(entry) from exc
+                raise
+        elif use_cache and cached.is_file():
             if cached.resolve() != target.resolve():
                 copy_file(cached, target, cancel, progress=progress)
         else:
@@ -851,11 +858,7 @@ class BackupSession(SessionOverlay):
                                 try:
                                     staged_size = staged.stat().st_size
                                 except FileNotFoundError as exc:
-                                    raise BackupError(
-                                        f"暂挂的编辑内容不可用：{entry.name}，请重新应用更改。",
-                                        english="Staged edited content is unavailable: {name}; apply the change again.",
-                                        values={"name": entry.name},
-                                    ) from exc
+                                    raise staged_unavailable_error(entry) from exc
                                 meta.set("Size", staged_size)
                                 meta.set("LastModified", entry.mtime)
                                 meta.set("LastStatusChange", int(time.time()))

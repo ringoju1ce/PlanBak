@@ -13,15 +13,19 @@ from pathlib import Path
 from .codec import BackupError, check_cancel
 
 
+def staged_unavailable_error(entry):
+    return BackupError(
+        f"暂挂的编辑内容不可用：{entry.name}，请重新应用更改。",
+        english="Staged edited content is unavailable: {name}; apply the change again.",
+        values={"name": entry.name},
+    )
+
+
 def checked_staged_path(entry):
     """Do not replace a missing edited file with its original backup contents."""
     path = Path(entry.staged)
     if not path.is_file():
-        raise BackupError(
-            f"暂挂的编辑内容不可用：{entry.name}，请重新应用更改。",
-            english="Staged edited content is unavailable: {name}; apply the change again.",
-            values={"name": entry.name},
-        )
+        raise staged_unavailable_error(entry)
     return path
 
 

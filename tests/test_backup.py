@@ -455,3 +455,33 @@ def test_preflight_does_not_require_deleted_or_replaced_payload(backup_root, tmp
             reader.close()
     finally:
         session.close()
+
+
+@pytest.mark.parametrize("operation", ["extract", "revision"])
+def test_staged_file_disappearing_during_check_never_uses_original(
+    backup_root, tmp_path, monkeypatch, operation
+):
+    import planbak.backup as backup_module
+    import planbak.file_opening as opening_module
+
+    session = BackupSession(backup_root, PASSWORD)
+    try:
+        token = session.at("HomeDomain", "Documents/a.txt").token
+        session.stage_bytes(token, b"edited contents")
+        module = backup_module if operation == "extract" else opening_module
+        original_check = module.checked_staged_path
+
+        def disappear(entry):
+            path = original_check(entry)
+            path.unlink()
+            return path
+
+        monkeypatch.setattr(module, "checked_staged_path", disappear)
+        with pytest.raises(BackupError, match="暂挂的编辑内容不可用"):
+            if operation == "extract":
+                session.extract_file(token, tmp_path / "output")
+            else:
+                opening_module.source_revision(session, token)
+        assert session.dirty and not (tmp_path / "output").exists()
+    finally:
+        session.close()
