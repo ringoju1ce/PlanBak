@@ -23,6 +23,10 @@ playwright-report/
 # Only curated, long-lived documentation is published.
 /docs/*
 !/docs/testing.md
+!/docs/index.md
+!/docs/architecture.md
+!/docs/backup-and-saving.md
+!/docs/image-viewer.md
 !/docs/release-checklist.md
 
 # macOS Finder metadata and resource forks
