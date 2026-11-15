@@ -371,13 +371,44 @@ class BackupSession(SessionOverlay):
         self._progress("正在建立备份索引…", 0, total)
         parents = set()
         batch = []
+
+        def insert_batch(records):
+            try:
+                self.db.executemany(
+                    "INSERT INTO EditorEntries VALUES(?,?,?,?,?,?,?,?,?,?,?,?)", records
+                )
+            except sqlite3.IntegrityError as exc:
+                duplicate = self.db.execute(
+                    "SELECT domain,relativePath FROM Files GROUP BY domain,relativePath "
+                    "HAVING COUNT(*) > 1 LIMIT 1"
+                ).fetchone()
+                if duplicate:
+                    path = f"{duplicate[0]}/{duplicate[1]}"
+                    raise BackupError(
+                        f"备份清单包含重复路径：{path}",
+                        english="The backup manifest contains a duplicate path: {path}",
+                        values={"path": path},
+                    ) from exc
+                raise BackupError(
+                    "备份清单包含重复或无效的文件记录",
+                    english="The backup manifest contains duplicate or invalid file records",
+                ) from exc
+
         cursor = self.db.execute("SELECT fileID,domain,relativePath,flags,file FROM Files")
         for count, row in enumerate(cursor, 1):
             if count % 500 == 0:
                 check_cancel(cancel)
                 self._progress("正在建立备份索引…", count, total)
             fid, domain, path, flags, blob = row
-            safe_path(path)
+            try:
+                safe_path(path)
+            except BackupError as exc:
+                location = f"{domain}/{path}"[:512]
+                raise BackupError(
+                    f"备份清单包含无效路径：{location}",
+                    english="The backup manifest contains an invalid path: {path}",
+                    values={"path": location},
+                ) from exc
             if not domain or "/" in domain or "\\" in domain or "\x00" in domain:
                 raise BackupError(
                     "清单包含无效 domain", english="The manifest contains an invalid domain"
@@ -411,12 +442,10 @@ class BackupSession(SessionOverlay):
                 parents.add((domain, "/".join(parts[:n])))
             parents.add((domain, ""))
             if len(batch) >= 1000:
-                self.db.executemany(
-                    "INSERT INTO EditorEntries VALUES(?,?,?,?,?,?,?,?,?,?,?,?)", batch
-                )
+                insert_batch(batch)
                 batch.clear()
         if batch:
-            self.db.executemany("INSERT INTO EditorEntries VALUES(?,?,?,?,?,?,?,?,?,?,?,?)", batch)
+            insert_batch(batch)
         for domain, path in sorted(parents):
             parent, _, name = path.rpartition("/")
             self.db.execute(

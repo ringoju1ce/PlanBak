@@ -62,3 +62,38 @@ def test_decryption_progress_errors_are_not_misreported_as_corrupt_data(tmp_path
     with pytest.raises(ValueError, match="progress callback failed"):
         crypto_file(source, target, bytes(32), encrypt=False, progress=fail_progress)
     assert not target.exists()
+
+
+def test_manifest_duplicate_paths_report_location(tmp_path):
+    import sqlite3
+
+    from conftest import make_backup
+
+    from planbak.backup import BackupSession
+
+    root = make_backup(tmp_path / "backup")
+    with sqlite3.connect(root / "Manifest.db") as db:
+        db.execute(
+            "INSERT INTO Files SELECT ?, domain, relativePath, flags, file FROM Files "
+            "WHERE domain=? AND relativePath=?",
+            ("f" * 40, "HomeDomain", "Documents/a.txt"),
+        )
+    with pytest.raises(BackupError, match=r"重复路径.*HomeDomain/Documents/a.txt"):
+        BackupSession(root)
+
+
+def test_manifest_invalid_path_reports_location(tmp_path):
+    import sqlite3
+
+    from conftest import make_backup
+
+    from planbak.backup import BackupSession
+
+    root = make_backup(tmp_path / "backup")
+    with sqlite3.connect(root / "Manifest.db") as db:
+        db.execute(
+            "UPDATE Files SET relativePath=? WHERE domain=? AND relativePath=?",
+            ("../invalid", "HomeDomain", "Documents/a.txt"),
+        )
+    with pytest.raises(BackupError, match=r"无效路径.*HomeDomain/\.\./invalid"):
+        BackupSession(root)
