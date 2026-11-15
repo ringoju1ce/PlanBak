@@ -3794,9 +3794,18 @@ class MainWindow(QMainWindow):
             return
         self._copy_pending = None
         if self.force_close:
+            if self.task:
+                event.ignore()
+                return
             if self.database_viewers or self.hex_viewers or self.image_viewers:
                 event.ignore()
                 self.close_readonly_viewers(self.close)
+                return
+            if self.session:
+                event.ignore()
+                self._transitioning = True
+                self.poll_timer.stop()
+                self._clear_backup(lambda: QTimer.singleShot(0, self.close))
                 return
             self.panes.stopped = True
             for record in list(self.plist_editors.values()):
