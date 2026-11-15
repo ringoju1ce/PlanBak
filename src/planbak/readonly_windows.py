@@ -78,7 +78,7 @@ class ReadOnlyWindows:
     def show_database(self, token, snapshot):
         if (
             self.owner._transitioning
-            or self.owner._outgoing_transfers
+            or self.owner.transfers.active
             or self.owner._readonly_closing
         ):
             shutil.rmtree(snapshot.directory, ignore_errors=True)
@@ -103,7 +103,7 @@ class ReadOnlyWindows:
     def open_hex(self):
         if (
             self.owner._transitioning
-            or self.owner._outgoing_transfers
+            or self.owner.transfers.active
             or self.owner._readonly_closing
             or self.owner.task
             or not self.owner.session
@@ -219,7 +219,7 @@ class ReadOnlyWindows:
 
     def check_hex_viewers(self):
         if (
-            self.owner._outgoing_transfers
+            self.owner.transfers.active
             or self.owner._transitioning
             or self.owner._readonly_closing
         ):
@@ -248,7 +248,7 @@ class ReadOnlyWindows:
     def open_data_hex(self, data, identity, label, *, owner=None):
         if (
             self.owner._transitioning
-            or self.owner._outgoing_transfers
+            or self.owner.transfers.active
             or self.owner._readonly_closing
             or self.owner.task
             or not self.owner.session
@@ -403,7 +403,7 @@ class ReadOnlyWindows:
 
     def check_database_viewers(self):
         if (
-            self.owner._outgoing_transfers
+            self.owner.transfers.active
             or self.owner._transitioning
             or self.owner._readonly_closing
         ):

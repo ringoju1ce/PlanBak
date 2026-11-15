@@ -7,7 +7,6 @@ import hashlib
 import json
 import shutil
 import sys
-import tempfile
 import threading
 import time
 import uuid
@@ -94,6 +93,7 @@ from .plist_editor import PlistDocument, PlistEditor
 from .readonly_windows import ReadOnlyWindows
 from .sidebar import DirectoryTree
 from .sqlite_database import prepare_snapshot
+from .transfers import OutgoingTransfers
 
 INTERNAL_MIME = "application/x-planbak-entries"
 
@@ -575,29 +575,6 @@ class OpenedPlist:
     revision: tuple
 
 
-@dataclass
-class WindowTransfer:
-    source: MainWindow
-    session: BackupSession
-    token: object
-    started: bool = False
-    released: bool = False
-
-    def release(self):
-        if self.released:
-            return
-        self.released = True
-        self.session.end_transfer(self.token)
-        source = self.source
-        source._outgoing_transfers -= 1
-        source._status_jobs.pop(self.token, None)
-        source.update_actions()
-        source.update_work_status()
-        if not source._outgoing_transfers and source._close_after_transfer:
-            source._close_after_transfer = False
-            QTimer.singleShot(0, source.close)
-
-
 class MainWindow(QMainWindow):
     def __init__(self, manager=None, *, language=None):
         super().__init__()
@@ -608,8 +585,9 @@ class MainWindow(QMainWindow):
         self._opening_claim = None
         self._output_claim = None
         self._transitioning = False
-        self._outgoing_transfers = 0
-        self._close_after_transfer = False
+        self.transfers = OutgoingTransfers(
+            self, lambda: self.session, self.can_start_outgoing_transfer
+        )
         self.settings = QSettings("PlanBak", "PlanBak")
         self.session = None
         self._backup_container = None
@@ -705,6 +683,10 @@ class MainWindow(QMainWindow):
         self.retranslate_main_actions()
         self.panes = BrowserPaneFocus(self.directory_tree, (self.table, self.grid), self)
         self.panes.changed.connect(self.update_actions)
+        self.transfers.changed.connect(self.update_actions)
+        self.transfers.status_started.connect(self.outgoing_transfer_started)
+        self.transfers.status_finished.connect(self.untrack_status_job)
+        self.transfers.close_ready.connect(lambda: QTimer.singleShot(0, self.close))
         self.poll_timer = QTimer(self)
         self.poll_timer.setInterval(2000)
         self.poll_timer.timeout.connect(self.poll_open_files)
@@ -1056,7 +1038,7 @@ class MainWindow(QMainWindow):
         return Location(group=self.domain_group)
 
     def navigate(self, location, *, focus_browser=True):
-        if self.task or self._outgoing_transfers or self._readonly_closing or self._transitioning:
+        if self.task or self.transfers.active or self._readonly_closing or self._transitioning:
             return
         self.domain, self.path, self.domain_group = location.domain, location.path, location.group
         self.refresh(focus_browser=focus_browser)
@@ -1207,11 +1189,11 @@ class MainWindow(QMainWindow):
 
     def update_actions(self, *_):
         busy = bool(
-            self.task or self._outgoing_transfers or self._transitioning or self._readonly_closing
+            self.task or self.transfers.active or self._transitioning or self._readonly_closing
         )
         for record in self.plist_editors.values():
             # 转场确认仍须允许编辑器处理保存/放弃/取消，尚未启动文件任务。
-            record.editor.set_busy(bool(self.task or self._outgoing_transfers))
+            record.editor.set_busy(bool(self.task or self.transfers.active))
         self.directory_tree.directory_model.suspended = busy
         self.directory_tree.setEnabled(not busy)
         rows = self.selected_rows()
@@ -1283,7 +1265,7 @@ class MainWindow(QMainWindow):
         self.refresh()
 
     def refresh(self, *_, focus_browser=True):
-        if self.task or self._outgoing_transfers or not hasattr(self, "sort_combo"):
+        if self.task or self.transfers.active or not hasattr(self, "sort_combo"):
             return
         session_id = self.session.session_id if self.session else None
         if session_id != self._navigation_session:
@@ -1560,7 +1542,7 @@ class MainWindow(QMainWindow):
             or self.copy_task
             or self._copy_pending
             or self._transitioning
-            or self._outgoing_transfers
+            or self.transfers.active
             or self._readonly_closing
         ):
             return
@@ -1671,7 +1653,7 @@ class MainWindow(QMainWindow):
         on_error=None,
         on_done=None,
     ):
-        if self.task or self._outgoing_transfers:
+        if self.task or self.transfers.active:
             return
         job = Task(function, self)
         self.task = job
@@ -1905,7 +1887,7 @@ class MainWindow(QMainWindow):
             or self.copy_task
             or self._copy_pending
             or self._transitioning
-            or self._outgoing_transfers
+            or self.transfers.active
             or self._readonly_closing
         ):
             return
@@ -1922,7 +1904,7 @@ class MainWindow(QMainWindow):
             or self.copy_task
             or self._copy_pending
             or self._transitioning
-            or self._outgoing_transfers
+            or self.transfers.active
             or self._readonly_closing
         ):
             return
@@ -2056,7 +2038,7 @@ class MainWindow(QMainWindow):
             or self.copy_task
             or self._copy_pending
             or self._transitioning
-            or self._outgoing_transfers
+            or self.transfers.active
             or self._readonly_closing
         ):
             return
@@ -2404,7 +2386,7 @@ class MainWindow(QMainWindow):
     def open_file(self, *, external=False):
         if (
             self._transitioning
-            or self._outgoing_transfers
+            or self.transfers.active
             or self._readonly_closing
             or self.task
             or not self.session
@@ -2604,7 +2586,7 @@ class MainWindow(QMainWindow):
         return (str(source), file_stamp(source))
 
     def open_plist(self, token, name, *, prepared=None):
-        if self._transitioning or self._outgoing_transfers or self._readonly_closing:
+        if self._transitioning or self.transfers.active or self._readonly_closing:
             return
         session = self.session
         directory = session.workspace / "plist-editor" / uuid.uuid4().hex
@@ -2755,7 +2737,7 @@ class MainWindow(QMainWindow):
         return True
 
     def check_plist_editors(self):
-        if self._outgoing_transfers or self._transitioning or self._readonly_closing:
+        if self.transfers.active or self._transitioning or self._readonly_closing:
             return False
         if (
             self.task
@@ -2832,7 +2814,7 @@ class MainWindow(QMainWindow):
         return False
 
     def poll_open_files(self):
-        if self._outgoing_transfers or self._transitioning or self._readonly_closing:
+        if self.transfers.active or self._transitioning or self._readonly_closing:
             return
         if self.task or not self.session or self._focus_owned_modal(focus=False):
             return
@@ -2846,7 +2828,7 @@ class MainWindow(QMainWindow):
             or self.task
             or self.copy_task
             or self._copy_pending
-            or self._outgoing_transfers
+            or self.transfers.active
             or self._readonly_closing
         ):
             if on_cancel:
@@ -3007,7 +2989,7 @@ class MainWindow(QMainWindow):
         if (
             self.task
             or self._transitioning
-            or self._outgoing_transfers
+            or self.transfers.active
             or self._readonly_closing
             or self._drop_queued
             or self.force_close
@@ -3071,7 +3053,7 @@ class MainWindow(QMainWindow):
             self._queued_transfer = None
 
     def handle_drop(self, mime, index, *, target=None, borrowed=None):
-        if self.task or self._transitioning or self._outgoing_transfers or self._readonly_closing:
+        if self.task or self._transitioning or self.transfers.active or self._readonly_closing:
             return False
         domain, parent = target if target is not None else self.drop_location(index)
         if self.session is None:
@@ -3114,6 +3096,19 @@ class MainWindow(QMainWindow):
             return True
         return False
 
+    def can_start_outgoing_transfer(self):
+        return not (
+            self.task
+            or self.copy_task
+            or self._copy_pending
+            or self._transitioning
+            or self._readonly_closing
+            or self.force_close
+        )
+
+    def outgoing_transfer_started(self, token):
+        self.track_status_job(token, "正在向其他备份复制项目…", connect_progress=False)
+
     def borrow_transfer(self, session_id):
         source = self.manager.window_for_session(session_id)
         if source is None or source is self:
@@ -3121,22 +3116,7 @@ class MainWindow(QMainWindow):
                 "来源备份会话已关闭，或不属于当前程序；请先导出项目再添加。",
                 english="The source backup session is closed or belongs to another application; export items before adding them.",
             )
-        if (
-            source.task
-            or source.copy_task
-            or source._copy_pending
-            or source._transitioning
-            or source._readonly_closing
-            or source.force_close
-        ):
-            raise BackupError(
-                "来源备份正在处理其他操作，请稍后复制",
-                english="The source backup is busy; try copying again later",
-            )
-        session = source.session
-        token = session.begin_transfer()
-        source._outgoing_transfers += 1
-        return WindowTransfer(source, session, token)
+        return source.transfers.acquire()
 
     def copy_from_window(self, content, domain, parent, *, borrowed=None):
         borrowed = borrowed or self.borrow_transfer(content["session"])
@@ -3149,10 +3129,7 @@ class MainWindow(QMainWindow):
                 or any(not isinstance(t, str) for t in tokens)
             ):
                 raise BackupError("无效的拖放项目列表", english="Invalid list of dropped items")
-            source = borrowed.source
-            source._status_jobs[borrowed.token] = ("正在向其他备份复制项目…", 0, 0)
-            source.update_actions()
-            source.update_work_status()
+            borrowed.show_status()
             roots = borrowed.session.roots(tokens)
             conflict = any(session.at(domain, f"{parent}/{e.name}".lstrip("/")) for e in roots)
             policy = self.collision_policy() if conflict else "error"
@@ -3166,23 +3143,7 @@ class MainWindow(QMainWindow):
                 return False
 
             def copy(progress, cancel):
-                def copy_progress(_text, done, total):
-                    progress("正在复制项目到当前备份…", done, total)
-
-                with tempfile.TemporaryDirectory(
-                    prefix=".transfer-", dir=session.workspace
-                ) as directory:
-                    paths = borrowed.session.export(
-                        tokens, Path(directory), progress=copy_progress, cancel=cancel
-                    )
-                    session.import_paths(
-                        paths,
-                        domain,
-                        parent,
-                        collision=policy,
-                        progress=copy_progress,
-                        cancel=cancel,
-                    )
+                borrowed.copy_to(session, tokens, domain, parent, policy, progress, cancel)
 
             job = self.run_task(
                 "复制项目到当前备份", copy, lambda _: self.refresh(), on_done=borrowed.release
@@ -3200,7 +3161,7 @@ class MainWindow(QMainWindow):
             or not self.session
             or self.task
             or self._transitioning
-            or self._outgoing_transfers
+            or self.transfers.active
         ):
             return
         drag = QDrag(view)
@@ -3236,9 +3197,9 @@ class MainWindow(QMainWindow):
         return result
 
     def closeEvent(self, event):
-        if self._outgoing_transfers:
+        if self.transfers.active:
             event.ignore()
-            self._close_after_transfer = True
+            self.transfers.defer_close()
             return
         if not self.task and self._focus_owned_modal():
             event.ignore()

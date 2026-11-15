@@ -42,7 +42,7 @@ class ImageWindows:
         if (
             self.owner._readonly_closing
             or self.owner._transitioning
-            or self.owner._outgoing_transfers
+            or self.owner.transfers.active
         ):
             return None
         if viewer := self.reuse(token):

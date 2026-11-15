@@ -306,7 +306,7 @@ def test_cross_window_copy_uses_current_bytes_and_source_changes_unchanged(
     monkeypatch.setattr(target, "collision_policy", lambda: policy)
     assert target.queue_drop(drag(source), QModelIndex()) == Qt.DropAction.CopyAction
     qtbot.waitUntil(lambda: not target._drop_queued and target.task is None)
-    assert source.session.changes == before and not source._outgoing_transfers
+    assert source.session.changes == before and not source.transfers.active
     if policy == "replace":
         assert (
             target.session.cached_file(
@@ -356,6 +356,8 @@ def test_cancel_transfer_releases_source_and_rolls_back_target(
     monkeypatch.setattr(source.session, "export", slow)
     assert target.handle_drop(drag(source), QModelIndex())
     qtbot.waitUntil(started.is_set)
+    assert "复制" in source.work_label.text()
+    assert not source.open_backup_action.isEnabled()
     with pytest.raises(BackupError):
         source.session.stage_bytes(
             source.session.at("HomeDomain", "Documents/a.txt").token, b"blocked"
@@ -365,7 +367,8 @@ def test_cancel_transfer_releases_source_and_rolls_back_target(
     target.task.cancelled.set()
     qtbot.waitUntil(lambda: target.task is None)
     assert not target.session.dirty and not source.session.dirty
-    assert not source._outgoing_transfers and not list(target.session.workspace.glob(".transfer-*"))
+    assert not source.transfers.active and not list(target.session.workspace.glob(".transfer-*"))
+    assert source.work_label.text() == "就绪" and source.open_backup_action.isEnabled()
 
 
 def test_copy_before_queued_event_owns_source_until_completion(factory, tmp_path, qtbot):
@@ -528,7 +531,7 @@ def test_target_switch_before_queued_copy_releases_source_lease(factory, tmp_pat
     target.close_backup()
     ready(target, qtbot)
     qtbot.waitUntil(lambda: not target._drop_queued)
-    assert target.session is None and not source._outgoing_transfers
+    assert target.session is None and not source.transfers.active
 
 
 def test_cancelled_save_releases_reserved_output(factory, tmp_path, qtbot, monkeypatch):
@@ -625,7 +628,7 @@ def test_transfer_import_failure_rolls_back_target_and_releases_lease(
     assert target.handle_drop(drag(source), QModelIndex())
     qtbot.waitUntil(lambda: target.task is None)
     assert not target.session.dirty and target.session.at("HomeDomain", "a.txt") is None
-    assert not source.session.dirty and not source._outgoing_transfers
+    assert not source.session.dirty and not source.transfers.active
     assert not list(target.session.workspace.glob(".transfer-*"))
     assert not list(target.session.workspace.glob(".change-*"))
     assert factory.errors
@@ -713,10 +716,10 @@ def test_deleting_target_before_drop_consumption_releases_source(factory, tmp_pa
     target.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
     target.navigate(Location("HomeDomain"))
     assert target.queue_drop(drag(source), QModelIndex()) == Qt.DropAction.CopyAction
-    assert source._outgoing_transfers == 1
+    assert source.transfers.active == 1
     target.force_close = True
     target.close()
-    assert source._outgoing_transfers == 0
+    assert source.transfers.active == 0
     qtbot.waitUntil(lambda: not isValid(target))
     source.session.stage_bytes(
         source.session.at("HomeDomain", "Documents/a.txt").token, b"still editable"
