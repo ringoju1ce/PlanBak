@@ -30,6 +30,7 @@ from .codec import (
     CHUNK,
     MAX_METADATA_BYTES,
     BackupError,
+    Cancelled,
     Keybag,
     Metadata,
     check_cancel,
@@ -857,20 +858,24 @@ class BackupSession(SessionOverlay):
                                 staged = checked_staged_path(entry)
                                 try:
                                     staged_size = staged.stat().st_size
-                                except FileNotFoundError as exc:
-                                    raise staged_unavailable_error(entry) from exc
-                                meta.set("Size", staged_size)
-                                meta.set("LastModified", entry.mtime)
-                                meta.set("LastStatusChange", int(time.time()))
-                                sha1 = digest(staged, "sha1", cancel)
-                                if self.encrypted:
-                                    clas = int(meta.get("ProtectionClass", 3))
-                                    key, wrapped = self.keybag.new_key(clas)
-                                    meta.set("EncryptionKey", wrapped)
-                                    crypto_file(staged, output, key, encrypt=True, cancel=cancel)
-                                else:
-                                    meta.root.pop("EncryptionKey", None)
-                                    copy_file(staged, output, cancel)
+                                    meta.set("Size", staged_size)
+                                    meta.set("LastModified", entry.mtime)
+                                    meta.set("LastStatusChange", int(time.time()))
+                                    sha1 = digest(staged, "sha1", cancel)
+                                    if self.encrypted:
+                                        clas = int(meta.get("ProtectionClass", 3))
+                                        key, wrapped = self.keybag.new_key(clas)
+                                        meta.set("EncryptionKey", wrapped)
+                                        crypto_file(staged, output, key, encrypt=True, cancel=cancel)
+                                    else:
+                                        meta.root.pop("EncryptionKey", None)
+                                        copy_file(staged, output, cancel)
+                                except Cancelled:
+                                    raise
+                                except (FileNotFoundError, BackupError) as exc:
+                                    if not staged.is_file():
+                                        raise staged_unavailable_error(entry) from exc
+                                    raise
                                 # MBFile的Digest校验备份中的存储字节；加密备份
                                 # 必须在加密后计算。sha1单独用于明文往返验证。
                                 meta.set(

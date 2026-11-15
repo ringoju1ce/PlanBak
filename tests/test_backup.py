@@ -485,3 +485,52 @@ def test_staged_file_disappearing_during_check_never_uses_original(
         assert session.dirty and not (tmp_path / "output").exists()
     finally:
         session.close()
+
+
+def test_staged_content_disappearing_during_save_reports_error(backup_root, tmp_path, monkeypatch):
+    import planbak.backup as module
+
+    session = BackupSession(backup_root, PASSWORD)
+    try:
+        token = session.at("HomeDomain", "Documents/a.txt").token
+        session.stage_bytes(token, b"edited")
+        staged = Path(session.get(token).staged)
+        original = module.digest
+
+        def disappear(path, *args, **kwargs):
+            if Path(path) == staged:
+                staged.unlink()
+            return original(path, *args, **kwargs)
+
+        monkeypatch.setattr(module, "digest", disappear)
+        with pytest.raises(BackupError, match="暂挂的编辑内容不可用"):
+            session.save(tmp_path / "output")
+        assert session.dirty and not (tmp_path / "output").exists()
+    finally:
+        session.close()
+
+
+def test_save_cancellation_is_not_misreported_if_staged_file_disappears(
+    backup_root, tmp_path, monkeypatch
+):
+    import planbak.backup as module
+
+    session = BackupSession(backup_root, PASSWORD)
+    try:
+        token = session.at("HomeDomain", "Documents/a.txt").token
+        session.stage_bytes(token, b"edited")
+        staged = Path(session.get(token).staged)
+        original = module.digest
+
+        def cancel(path, *args, **kwargs):
+            if Path(path) == staged:
+                staged.unlink()
+                raise Cancelled("cancelled")
+            return original(path, *args, **kwargs)
+
+        monkeypatch.setattr(module, "digest", cancel)
+        with pytest.raises(Cancelled):
+            session.save(tmp_path / "output")
+        assert session.dirty and not (tmp_path / "output").exists()
+    finally:
+        session.close()
