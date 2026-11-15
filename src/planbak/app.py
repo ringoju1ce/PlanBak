@@ -3765,7 +3765,7 @@ class MainWindow(QMainWindow):
         def done(paths):
             result.extend(paths)
 
-        self.run_task(
+        job = self.run_task(
             "导出项目",
             lambda progress, cancel: self.session.export(
                 tokens, target, progress=progress, cancel=cancel
@@ -3773,6 +3773,8 @@ class MainWindow(QMainWindow):
             done,
             on_done=loop.quit,
         )
+        if job is None:
+            return []
         loop.exec()
         return result
 
