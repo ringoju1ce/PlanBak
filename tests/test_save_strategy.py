@@ -428,6 +428,27 @@ def test_status_keeps_backup_summary_and_places_work_near_three_quarters(window,
     assert '1 个已更改项目' in w.backup_status.text()
 
 
+def test_prefetch_priority_is_explicit_and_localized(window):
+    from planbak.i18n import ENGLISH, SIMPLIFIED_CHINESE
+
+    w = window
+    w.language_context.set_language(SIMPLIFIED_CHINESE)
+    prefetch, foreground = object(), object()
+    w.track_status_job(prefetch, "", connect_progress=False, prefetch_name="image.heic")
+    assert w.work_label.text() == "预加载文件：image.heic"
+    assert not w.work_progress.isVisible()
+    # A foreground label that happens to look like the old prefetch message stays foreground.
+    w.track_status_job(foreground, "预加载文件：ordinary", connect_progress=False)
+    assert w.work_label.text() == "预加载文件：ordinary"
+    assert w.work_progress.isVisible()
+    w.untrack_status_job(foreground)
+    w.language_context.set_language(ENGLISH)
+    assert w.work_label.text() == "Preloading file: image.heic"
+    assert not w.work_progress.isVisible()
+    w.untrack_status_job(prefetch)
+    assert prefetch not in w._prefetch_jobs
+
+
 def test_add_only_save_preserves_all_existing_payloads(backup_root, tmp_path):
     import hashlib
     import plistlib

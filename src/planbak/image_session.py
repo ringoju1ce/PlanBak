@@ -111,4 +111,4 @@ class ImageWindows:
         self.owner.untrack_status_job(task)
 
     def _prefetch_started(self, task, name):
-        self.owner.track_status_job(task, f"预加载文件：{name}", connect_progress=False)
+        self.owner.track_status_job(task, "", connect_progress=False, prefetch_name=name)

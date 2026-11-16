@@ -608,6 +608,7 @@ class MainWindow(QMainWindow):
         self._drop_queued = False
         self._queued_transfer = None
         self._status_jobs = {}
+        self._prefetch_jobs = {}
         self.work_label = QLabel("就绪", self)
         self.work_progress = QProgressBar(self)
         self.work_progress.setFixedWidth(160)
@@ -1459,12 +1460,12 @@ class MainWindow(QMainWindow):
             self.work_label.setText(self.language_context.translate("Ready"))
             self.work_progress.hide()
             return
-        jobs = list(self._status_jobs.values())
-        text, done, total = next(
-            (job for job in reversed(jobs) if not job[0].startswith("预加载文件：")),
+        jobs = list(self._status_jobs.items())
+        job, (text, done, total) = next(
+            (item for item in reversed(jobs) if item[0] not in self._prefetch_jobs),
             jobs[-1],
         )
-        preloading = text.startswith("预加载文件：")
+        preloading = job in self._prefetch_jobs
         progress_sources = {
             "正在读取备份…": "Reading backup…",
             "正在建立备份索引…": "Building backup index…",
@@ -1492,14 +1493,14 @@ class MainWindow(QMainWindow):
             "复制项目到当前备份": "Copying items to this backup",
             "清理旧会话缓存": "Cleaning old session cache",
         }
-        if text in progress_sources:
+        if preloading:
+            text = self.language_context.translate(
+                "Preloading file: {name}", name=self._prefetch_jobs[job]
+            )
+        elif text in progress_sources:
             text = self.language_context.translate(progress_sources[text])
         elif text.startswith("正在") and text.endswith("…") and text[2:-1] in operations:
             text = self.language_context.translate(operations[text[2:-1]] + "…")
-        elif text.startswith("预加载文件："):
-            text = self.language_context.translate(
-                "Preloading file: {name}", name=text[len("预加载文件：") :]
-            )
         elif text.startswith("正在加载文件："):
             text = self.language_context.translate(
                 "Loading file: {name}", name=text[len("正在加载文件：") :]
@@ -1522,9 +1523,11 @@ class MainWindow(QMainWindow):
             self._status_jobs[job] = (text, done, total)
             self.update_work_status()
 
-    def track_status_job(self, job, initial_text, *, connect_progress=True):
+    def track_status_job(self, job, initial_text, *, connect_progress=True, prefetch_name=None):
         """Show any background job through the shared status-bar progress UI."""
         self._status_jobs[job] = (initial_text, 0, 0)
+        if prefetch_name is not None:
+            self._prefetch_jobs[job] = prefetch_name
         if connect_progress:
             job.progress.connect(
                 lambda text, done, total: self.work_progress_changed(job, text, done, total)
@@ -1533,6 +1536,7 @@ class MainWindow(QMainWindow):
 
     def untrack_status_job(self, job):
         self._status_jobs.pop(job, None)
+        self._prefetch_jobs.pop(job, None)
         self.update_work_status()
 
     def create_backup_copy(self, *_):
