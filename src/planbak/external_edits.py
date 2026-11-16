@@ -171,7 +171,7 @@ class ExternalEdits:
                 self.review_external(rec, fingerprint, observed)
 
             self.owner.run_task(
-                "检查外部编辑",
+                "Check External Edits",
                 lambda progress, cancel, rec=record: digest(rec.path, cancel=cancel),
                 checked,
                 silent=True,
@@ -224,7 +224,7 @@ class ExternalEdits:
                 self.owner.refresh()
 
             self.owner.run_task(
-                "保存外部编辑",
+                "Save External Edits",
                 lambda progress, cancel: self.owner.session.stage_edit(
                     record.token, record.path, cancel
                 ),

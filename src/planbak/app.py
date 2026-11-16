@@ -109,53 +109,8 @@ def human_size(size):
 
 def message(parent, title, text, icon=QMessageBox.Icon.Information):
     tr = parent.language_context.translate
-    titles = {
-        "文件夹不存在": "Folder Not Found",
-        "无法创建备份副本": "Unable to Create Backup Copy",
-        "无法切换副本": "Unable to Switch Copies",
-        "备份已打开": "Backup Already Open",
-        "无法打开备份": "Unable to Open Backup",
-        "无法完成清理": "Unable to Complete Cleanup",
-        "选择目标文件夹": "Choose a Destination Folder",
-        "无法新建文件夹": "Unable to Create Folder",
-        "无法重命名": "Unable to Rename",
-        "无法启动默认应用": "Unable to Open Default Application",
-        "无法应用更改": "Unable to Apply Changes",
-        "应用完成": "Changes Applied",
-        "无法处理拖放项目": "Unable to Handle Dropped Items",
-        "外部文件仍在修改": "External File Still Changing",
-        "读取备份": "Read Backup",
-        "打开文件": "Open File",
-        "打开项目": "Open Item",
-        "添加项目": "Add Items",
-        "删除项目": "Delete Items",
-        "导出项目": "Export Items",
-        "应用更改": "Apply Changes",
-        "移动项目": "Move Items",
-        "关闭备份并清理缓存": "Close Backup and Clear Cache",
-        "切换到备份副本": "Switch to Backup Copy",
-        "应用外部编辑": "Apply External Edits",
-        "准备放弃更改": "Prepare to Discard Changes",
-        "放弃更改": "Discard Changes",
-        "重新加载文件": "Reload File",
-        "保存外部编辑": "Save External Edits",
-        "复制项目到当前备份": "Copy Items to This Backup",
-        "清理旧会话缓存": "Clean Old Session Cache",
-    }
-    messages = {
-        "此备份已在另一个窗口中打开。": "This backup is already open in another window.",
-        "请先进入可添加项目的文件夹": "Open a folder where items can be added first.",
-        "请将项目拖入可添加项目的文件夹": "Drop items into a folder where they can be added.",
-        "请先在外部应用中保存文件，然后重试。": "Save the file in the external application, then try again.",
-    }
-    title = tr(titles[title]) if title in titles else title
-    text = (
-        parent.language_context.error(text)
-        if isinstance(text, Exception)
-        else tr(messages[text])
-        if text in messages
-        else text
-    )
+    title = tr(title)
+    text = parent.language_context.error(text) if isinstance(text, Exception) else tr(text)
     box = QMessageBox(icon, title, "", parent=parent)
     box.setTextFormat(Qt.TextFormat.PlainText)
     box.setText(text)
@@ -1451,7 +1406,7 @@ class MainWindow(QMainWindow):
                 if not entry or entry.kind != "directory":
                     raise BackupError("文件夹不存在", english="The folder does not exist")
         except BackupError as exc:
-            message(self, "文件夹不存在", exc, QMessageBox.Icon.Warning)
+            message(self, "Folder Not Found", exc, QMessageBox.Icon.Warning)
             return
         self.navigate(location)
 
@@ -1534,7 +1489,7 @@ class MainWindow(QMainWindow):
                 Path(target) / session.root.name if container else target, self
             )
         except Exception as exc:
-            message(self, "无法创建备份副本", exc, QMessageBox.Icon.Warning)
+            message(self, "Unable to Create Backup Copy", exc, QMessageBox.Icon.Warning)
             return
         self._output_claim = claim
         job = Task(
@@ -1558,7 +1513,9 @@ class MainWindow(QMainWindow):
                 QTimer.singleShot(0, self.close)
             else:
                 if job.error and not isinstance(job.error, Cancelled):
-                    message(self, "无法创建备份副本", job.error, QMessageBox.Icon.Warning)
+                    message(
+                        self, "Unable to Create Backup Copy", job.error, QMessageBox.Icon.Warning
+                    )
                 if self._copy_pending is None:
                     self._release_output_claim()
                 self.attach_created_copy()
@@ -1580,7 +1537,7 @@ class MainWindow(QMainWindow):
         try:
             claim = self._output_claim or self.manager.reserve(copied.path, self)
         except Exception as exc:
-            message(self, "无法切换副本", exc, QMessageBox.Icon.Warning)
+            message(self, "Unable to Switch Copies", exc, QMessageBox.Icon.Warning)
             return
 
         def adopted(_):
@@ -1598,7 +1555,7 @@ class MainWindow(QMainWindow):
                     self._output_claim = None
 
         self.run_task(
-            "切换到备份副本",
+            "Switch to Backup Copy",
             lambda progress, cancel: session.use_copy(copied),
             adopted,
             silent=True,
@@ -1810,8 +1767,8 @@ class MainWindow(QMainWindow):
                 if self.external_edits.has_unreviewed(external):
                     message(
                         self,
-                        "外部文件仍在修改",
-                        "请先在外部应用中保存文件，然后重试。",
+                        "External File Still Changing",
+                        "Save the file in the external application, then try again.",
                         QMessageBox.Icon.Warning,
                     )
                     if cancelled:
@@ -1826,7 +1783,7 @@ class MainWindow(QMainWindow):
                 staged(updates)
 
             self.run_task(
-                "应用外部编辑",
+                "Apply External Edits",
                 stage_external,
                 done,
                 status_phase=ProgressPhase.STAGE_EXTERNAL,
@@ -1899,7 +1856,10 @@ class MainWindow(QMainWindow):
                 owner.activateWindow()
                 if owner is not self or new_window:
                     message(
-                        self, "备份已打开", "此备份已在另一个窗口中打开。", QMessageBox.Icon.Warning
+                        self,
+                        "Backup Already Open",
+                        "This backup is already open in another window.",
+                        QMessageBox.Icon.Warning,
                     )
                 return
             if new_window:
@@ -1914,7 +1874,7 @@ class MainWindow(QMainWindow):
                 path, self, shared=self._backup_claim if relocated else None
             )
         except Exception as exc:
-            message(self, "无法打开备份", exc, QMessageBox.Icon.Warning)
+            message(self, "Unable to Open Backup", exc, QMessageBox.Icon.Warning)
             return
         self._opening_claim = claim
         self._transitioning = True
@@ -1951,7 +1911,7 @@ class MainWindow(QMainWindow):
             encrypted = load_plist(path / "Manifest.plist").get("IsEncrypted", False)
         except Exception as exc:
             self._cancel_open()
-            message(self, "无法打开备份", exc, QMessageBox.Icon.Warning)
+            message(self, "Unable to Open Backup", exc, QMessageBox.Icon.Warning)
             return
         if encrypted:
             dialog = PasswordDialog(self)
@@ -1979,7 +1939,7 @@ class MainWindow(QMainWindow):
                 self._cancel_open()
 
         self.run_task(
-            "读取备份",
+            "Read Backup",
             lambda progress, cancel: BackupSession(
                 Path(path), password, progress=progress, cancel=cancel
             ),
@@ -2048,10 +2008,10 @@ class MainWindow(QMainWindow):
 
         def failed(exc):
             self._cancel_open()
-            message(self, "无法完成清理", exc, QMessageBox.Icon.Warning)
+            message(self, "Unable to Complete Cleanup", exc, QMessageBox.Icon.Warning)
 
         self.run_task(
-            "关闭备份并清理缓存",
+            "Close Backup and Clear Cache",
             cleanup,
             cleaned,
             status_phase=ProgressPhase.CLOSE_BACKUP,
@@ -2103,7 +2063,9 @@ class MainWindow(QMainWindow):
 
     def import_paths(self, paths, domain, parent):
         if not self.session or domain is None:
-            message(self, "选择目标文件夹", "请先进入可添加项目的文件夹")
+            message(
+                self, "Choose a Destination Folder", "Open a folder where items can be added first."
+            )
             return
         conflict = any(
             self.session.at(domain, f"{parent}/{Path(p).name}".lstrip("/")) for p in paths
@@ -2111,7 +2073,7 @@ class MainWindow(QMainWindow):
         policy = self.collision_policy() if conflict else "error"
         if policy:
             self.run_task(
-                "添加项目",
+                "Add Items",
                 lambda progress, cancel: self.session.import_paths(
                     paths, domain, parent, collision=policy, progress=progress, cancel=cancel
                 ),
@@ -2130,7 +2092,7 @@ class MainWindow(QMainWindow):
                 self.session.new_directory(self.domain, self.path, name)
                 self.refresh()
             except BackupError as exc:
-                message(self, "无法新建文件夹", exc, QMessageBox.Icon.Warning)
+                message(self, "Unable to Create Folder", exc, QMessageBox.Icon.Warning)
 
     def rename_selected(self):
         if self.sidebar_active():
@@ -2193,7 +2155,7 @@ class MainWindow(QMainWindow):
                             self._latest_view_states[location] = state
                 self.refresh(focus_browser=focus_browser)
             except BackupError as exc:
-                message(self, "无法重命名", exc, QMessageBox.Icon.Warning)
+                message(self, "Unable to Rename", exc, QMessageBox.Icon.Warning)
 
     def delete_selected(self):
         if self.sidebar_active():
@@ -2229,7 +2191,7 @@ class MainWindow(QMainWindow):
         box.setDefaultButton(QMessageBox.StandardButton.No)
         if box.exec() == QMessageBox.StandardButton.Yes:
             self.run_task(
-                "删除项目",
+                "Delete Items",
                 lambda progress, cancel: self.session.delete(tokens),
                 lambda _: self.refresh(focus_browser=focus_browser),
                 status_phase=ProgressPhase.DELETE_ITEMS,
@@ -2297,14 +2259,14 @@ class MainWindow(QMainWindow):
                 record.editor.discard_and_close()
             self.external_edits.forget(external)
             self.run_task(
-                "放弃更改",
+                "Discard Changes",
                 lambda progress, cancel: session.revert(plan, progress=progress, cancel=cancel),
                 lambda _: self.refresh_after_revert(directory.token if directory else None),
                 status_phase=ProgressPhase.DISCARD,
             )
 
         self.run_task(
-            "准备放弃更改",
+            "Prepare to Discard Changes",
             lambda progress, cancel: session.plan_revert(token, cancel=cancel),
             prepared,
             status_phase=ProgressPhase.PREPARE_DISCARD,
@@ -2342,7 +2304,7 @@ class MainWindow(QMainWindow):
         policy = self.collision_policy(exporting=True) if conflict else "error"
         if policy:
             self.run_task(
-                "导出项目",
+                "Export Items",
                 lambda progress, cancel: self.session.export(
                     tokens, Path(target), collision=policy, progress=progress, cancel=cancel
                 ),
@@ -2490,7 +2452,7 @@ class MainWindow(QMainWindow):
             if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(target))):
                 message(
                     self,
-                    "无法启动默认应用",
+                    "Unable to Open Default Application",
                     self.language_context.translate(
                         "The system could not open this file. The temporary file is located at:\n{path}",
                         path=target,
@@ -2520,7 +2482,7 @@ class MainWindow(QMainWindow):
                 shutil.rmtree(resources["snapshot"].directory, ignore_errors=True)
 
         self.run_task(
-            "打开文件", prepare, opened, status_phase=ProgressPhase.OPEN_FILE, on_done=cleanup
+            "Open File", prepare, opened, status_phase=ProgressPhase.OPEN_FILE, on_done=cleanup
         )
 
     def close_readonly_viewers(self, after):
@@ -2656,7 +2618,7 @@ class MainWindow(QMainWindow):
 
         if prepared is None:
             self.run_task(
-                "打开文件", prepare, opened, status_phase=ProgressPhase.OPEN_FILE, on_done=cleanup
+                "Open File", prepare, opened, status_phase=ProgressPhase.OPEN_FILE, on_done=cleanup
             )
         else:
             directory.mkdir(parents=True, exist_ok=True)
@@ -2782,7 +2744,7 @@ class MainWindow(QMainWindow):
                 rec.revision = version
                 rec.editor.show_error(exc)
 
-            self.run_task("检查 plist 更新", read, checked, silent=True, on_error=failed)
+            self.run_task("Check plist Updates", read, checked, silent=True, on_error=failed)
             return True
         return False
 
@@ -2852,7 +2814,7 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             if claim:
                 self._release_output_claim()
-            message(self, "无法应用更改", exc, QMessageBox.Icon.Warning)
+            message(self, "Unable to Apply Changes", exc, QMessageBox.Icon.Warning)
             if on_cancel:
                 on_cancel()
             return
@@ -2873,7 +2835,7 @@ class MainWindow(QMainWindow):
                     text += self.language_context.translate(
                         "\n\nOriginal backup preserved at:\n{path}", path=source_root
                     )
-                message(self, "应用完成", text)
+                message(self, "Changes Applied", text)
             if after:
                 after()
 
@@ -2890,7 +2852,7 @@ class MainWindow(QMainWindow):
                 on_cancel()
 
         self.run_task(
-            "应用更改",
+            "Apply Changes",
             lambda progress, cancel: session.save(
                 Path(target) if target else None,
                 progress=progress,
@@ -3039,7 +3001,11 @@ class MainWindow(QMainWindow):
                 return True
             return False
         if domain is None:
-            message(self, "选择目标文件夹", "请将项目拖入可添加项目的文件夹")
+            message(
+                self,
+                "Choose a Destination Folder",
+                "Drop items into a folder where they can be added.",
+            )
             return False
         if mime.hasFormat(INTERNAL_MIME):
             try:
@@ -3057,7 +3023,7 @@ class MainWindow(QMainWindow):
                 if not policy:
                     return False
                 self.run_task(
-                    "移动项目",
+                    "Move Items",
                     lambda progress, cancel: self.session.move(
                         tokens, domain, parent, collision=policy
                     ),
@@ -3066,7 +3032,7 @@ class MainWindow(QMainWindow):
                 )
                 return True
             except (ValueError, KeyError, TypeError, BackupError) as exc:
-                message(self, "无法处理拖放项目", exc, QMessageBox.Icon.Warning)
+                message(self, "Unable to Handle Dropped Items", exc, QMessageBox.Icon.Warning)
                 return False
         paths = [url.toLocalFile() for url in mime.urls() if url.isLocalFile()]
         if paths:
@@ -3126,7 +3092,7 @@ class MainWindow(QMainWindow):
                 borrowed.copy_to(session, tokens, domain, parent, policy, progress, cancel)
 
             job = self.run_task(
-                "复制项目到当前备份",
+                "Copy Items to This Backup",
                 copy,
                 lambda _: self.refresh(),
                 status_phase=ProgressPhase.COPY_TO,
@@ -3170,7 +3136,7 @@ class MainWindow(QMainWindow):
                 raise
 
         job = self.run_task(
-            "导出项目",
+            "Export Items",
             export,
             done,
             status_phase=ProgressPhase.EXPORT_ITEMS,
@@ -3261,7 +3227,9 @@ class MainWindow(QMainWindow):
                     progress(ProgressMessage(ProgressPhase.CLEANUP), number, len(paths))
                     shutil.rmtree(path)
 
-        self.run_task("清理旧会话缓存", cleanup, status_phase=ProgressPhase.CLEANUP, on_done=after)
+        self.run_task(
+            "Clean Old Session Cache", cleanup, status_phase=ProgressPhase.CLEANUP, on_done=after
+        )
 
 
 def main():

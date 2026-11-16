@@ -382,10 +382,10 @@ def test_invalid_backup_error_is_localized_without_translating_external_details(
     monkeypatch.setattr(FixedMessageBox, 'exec', lambda box: shown.append((box.windowTitle(), box.text())))
     with pytest.raises(BackupError) as caught:
         detect_backups(tmp_path)
-    message(parent, '无法打开备份', caught.value)
+    message(parent, 'Unable to Open Backup', caught.value)
     assert shown[-1][0] == 'Unable to Open Backup'
     assert 'does not contain an iOS backup' in shown[-1][1]
-    message(parent, '无法打开备份', OSError('opaque 外部 detail'))
+    message(parent, 'Unable to Open Backup', OSError('opaque 外部 detail'))
     assert shown[-1][1] == 'opaque 外部 detail'
 
 
@@ -616,3 +616,36 @@ def test_plist_date_calendar_follows_owner_without_changing_value(qtbot):
     parent.language_context.set_language(SIMPLIFIED_CHINESE)
     assert dialog.date_field.date.calendarWidget().locale().name() == 'zh_CN'
     assert dialog.date_field.value() == value
+
+
+def test_structured_error_templates_have_chinese_translations():
+    import ast
+    import json
+    from pathlib import Path
+    from string import Formatter
+
+    source = Path(__file__).resolve().parents[1] / 'src' / 'planbak'
+    catalog = json.loads((source / 'translations' / 'zh_CN.json').read_text(encoding='utf-8'))
+    missing = []
+
+    def fields(value):
+        return {key for _, key, _, _ in Formatter().parse(value) if key}
+
+    for path in source.rglob('*.py'):
+        tree = ast.parse(path.read_text(encoding='utf-8'))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
+                continue
+            if node.func.id not in {'BackupError', 'PlistValidationError'}:
+                continue
+            for keyword in node.keywords:
+                if keyword.arg != 'english' or not isinstance(keyword.value, ast.Constant):
+                    continue
+                text = keyword.value.value
+                if not isinstance(text, str):
+                    continue
+                if text not in catalog:
+                    missing.append(f'{path.name}:{node.lineno}: {text}')
+                    continue
+                assert fields(text) == fields(catalog[text]), f'{path.name}:{node.lineno}: {text}'
+    assert not missing, '\n'.join(missing)

@@ -149,7 +149,7 @@ class ReadOnlyWindows:
                 shutil.rmtree(path.parent, ignore_errors=True)
 
         self.owner.run_task(
-            "打开文件", prepare, opened, status_phase=ProgressPhase.OPEN_FILE, on_done=cleanup
+            "Open File", prepare, opened, status_phase=ProgressPhase.OPEN_FILE, on_done=cleanup
         )
 
     def reload_hex(self, record, *, automatic=False):
@@ -213,7 +213,7 @@ class ReadOnlyWindows:
                 shutil.rmtree(path.parent, ignore_errors=True)
 
         self.owner.run_task(
-            "重新加载文件",
+            "Reload File",
             prepare,
             loaded,
             silent=automatic,
@@ -335,7 +335,7 @@ class ReadOnlyWindows:
                 shutil.rmtree(path.parent, ignore_errors=True)
 
         self.owner.run_task(
-            "打开项目", prepare, opened, status_phase=ProgressPhase.OPEN_ITEM, on_done=cleanup
+            "Open Item", prepare, opened, status_phase=ProgressPhase.OPEN_ITEM, on_done=cleanup
         )
 
     def reload_database(self, record, *, automatic=False):
@@ -394,7 +394,7 @@ class ReadOnlyWindows:
                 shutil.rmtree(directory, ignore_errors=True)
 
         self.owner.run_task(
-            "重新加载文件",
+            "Reload File",
             lambda progress, cancel: prepare_snapshot(
                 session, record.token, directory, cancel=cancel
             ),
