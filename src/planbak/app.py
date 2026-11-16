@@ -90,6 +90,7 @@ from .navigation import Location, ViewState, split_domain
 from .pane_focus import BrowserPaneFocus
 from .pending_view import PendingChangesModel
 from .plist_editor import PlistDocument, PlistEditor
+from .progress import ProgressMessage, ProgressPhase
 from .readonly_windows import ReadOnlyWindows
 from .sidebar import DirectoryTree
 from .sqlite_database import prepare_snapshot
@@ -162,7 +163,7 @@ def message(parent, title, text, icon=QMessageBox.Icon.Information):
 
 
 class Task(QThread):
-    progress = Signal(str, object, object)
+    progress = Signal(object, object, object)
 
     def __init__(self, function, parent=None):
         super().__init__(parent)
@@ -177,7 +178,7 @@ class Task(QThread):
         def notify(text, done, total):
             now = time.monotonic()
             # 阶段切换不能被限频吞掉；同阶段的逐文件/字节通知仍限频。
-            phase = text.partition("：")[0]
+            phase = text.phase if isinstance(text, ProgressMessage) else text.partition("：")[0]
             if (
                 phase != last_progress[1]
                 or now - last_progress[0] > 0.07
@@ -1497,6 +1498,8 @@ class MainWindow(QMainWindow):
             text = self.language_context.translate(
                 "Preloading file: {name}", name=self._prefetch_jobs[job]
             )
+        elif isinstance(text, ProgressMessage):
+            text = text.translate(self.language_context)
         elif text in progress_sources:
             text = self.language_context.translate(progress_sources[text])
         elif text.startswith("正在") and text.endswith("…") and text[2:-1] in operations:
@@ -1690,7 +1693,9 @@ class MainWindow(QMainWindow):
                     "建立新的保存基线…": "Establishing the new save baseline…",
                 }
                 text = progress_text[0]
-                if text.startswith("写入："):
+                if isinstance(text, ProgressMessage):
+                    text = text.translate(self.language_context)
+                elif text.startswith("写入："):
                     text = self.language_context.translate(
                         "Writing: {name}", name=text[len("写入：") :]
                     )
@@ -1709,7 +1714,9 @@ class MainWindow(QMainWindow):
                 else:
                     dialog.setRange(0, 0)
                 translate_progress()
-                if text == "正在应用更改…":
+                if (
+                    isinstance(text, ProgressMessage) and text.phase is ProgressPhase.APPLY
+                ) or text == "正在应用更改…":
                     dialog.set_cancellable(False)
 
             job.progress.connect(progress)
@@ -2309,9 +2316,9 @@ class MainWindow(QMainWindow):
                 record for key, record in self.plist_editors.items() if key in plan.reset_contents
             ]
             external = self.external_edits.records_for(plan.reset_contents)
-            dirty = any(record.editor.dirty for record in editors) or self.external_edits.has_changes(
-                external
-            )
+            dirty = any(
+                record.editor.dirty for record in editors
+            ) or self.external_edits.has_changes(external)
             if dirty:
                 box = QMessageBox(
                     QMessageBox.Icon.Question,
@@ -2465,15 +2472,15 @@ class MainWindow(QMainWindow):
                 source = cached if cached.is_file() else session.payload_path(entry.original_id)
                 total = source.stat().st_size
                 done = 0
-                progress("正在打开文件…", 0, total)
+                progress(ProgressMessage(ProgressPhase.OPEN_FILE), 0, total)
 
                 def advanced(amount):
                     nonlocal done
                     done += amount
-                    progress("正在打开文件…", done, total)
+                    progress(ProgressMessage(ProgressPhase.OPEN_FILE), done, total)
 
                 session.extract_file(token, target, cancel=cancel, progress=advanced)
-                progress("正在打开文件…", 0, 0)
+                progress(ProgressMessage(ProgressPhase.OPEN_FILE), 0, 0)
 
             if external:
                 extract()
@@ -2822,7 +2829,11 @@ class MainWindow(QMainWindow):
             return
         if self.task or not self.session or self._focus_owned_modal(focus=False):
             return
-        if self.check_plist_editors() or self.readonly.check_database_viewers() or self.readonly.check_hex_viewers():
+        if (
+            self.check_plist_editors()
+            or self.readonly.check_database_viewers()
+            or self.readonly.check_hex_viewers()
+        ):
             return
         self.external_edits.poll()
 
@@ -3277,7 +3288,7 @@ class MainWindow(QMainWindow):
             for number, path in enumerate(paths, 1):
                 check_cancel(cancel)
                 if path in valid:
-                    progress("正在清理旧会话缓存…", number, len(paths))
+                    progress(ProgressMessage(ProgressPhase.CLEANUP), number, len(paths))
                     shutil.rmtree(path)
 
         self.run_task("清理旧会话缓存", cleanup, on_done=after)

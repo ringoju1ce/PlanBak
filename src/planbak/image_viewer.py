@@ -298,7 +298,7 @@ class ImageInformationStatus(DocumentStatus):
 class ImageViewer(QMainWindow):
     finished = Signal(int)
     activated = Signal()
-    load_progress = Signal(object, str, object, object)
+    load_progress = Signal(object, object, object, object)
     load_finished = Signal(object)
     prefetch_started = Signal(object, str)
     prefetch_finished = Signal(object)
@@ -613,7 +613,9 @@ class ImageViewer(QMainWindow):
         token, name = self._prefetch_queue.pop(0)
         task = ViewerTask(
             lambda cancel: self.loader(
-                token, cancel, force=False,
+                token,
+                cancel,
+                force=False,
                 on_miss=lambda: self.prefetch_miss.emit(task, name),
             ),
             self,

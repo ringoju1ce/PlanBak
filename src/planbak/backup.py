@@ -38,6 +38,7 @@ from .codec import (
     file_id,
     safe_path,
 )
+from .progress import ProgressMessage, ProgressPhase
 from .staging import Entry, SessionOverlay, checked_staged_path, staged_unavailable_error
 
 Progress = Callable[[str, int, int], None]
@@ -227,7 +228,7 @@ class BackupSession(SessionOverlay):
             self.encrypted = bool(self.manifest.get("IsEncrypted"))
             self.source_stamp = self._stamp()
             self.manifest_path = self.workspace / "Manifest.db"
-            self._progress("正在读取备份…", 0, 0)
+            self._progress(ProgressMessage(ProgressPhase.READ), 0, 0)
             if self.encrypted:
                 if not password:
                     raise BackupError(
@@ -369,7 +370,7 @@ class BackupSession(SessionOverlay):
     def _index(self, cancel):
         self.create_entry_table(self.db)
         total = self.db.execute("SELECT COUNT(*) FROM Files").fetchone()[0]
-        self._progress("正在建立备份索引…", 0, total)
+        self._progress(ProgressMessage(ProgressPhase.INDEX), 0, total)
         parents = set()
         batch = []
 
@@ -399,7 +400,7 @@ class BackupSession(SessionOverlay):
         for count, row in enumerate(cursor, 1):
             if count % 500 == 0:
                 check_cancel(cancel)
-                self._progress("正在建立备份索引…", count, total)
+                self._progress(ProgressMessage(ProgressPhase.INDEX), count, total)
             fid, domain, path, flags, blob = row
             try:
                 safe_path(path)
@@ -456,7 +457,7 @@ class BackupSession(SessionOverlay):
         self.db.commit()
         self.create_baseline(self.db)
         self.db.commit()
-        self._progress("正在建立备份索引…", total, total)
+        self._progress(ProgressMessage(ProgressPhase.INDEX), total, total)
 
     def domains(self):
         with self.lock:
@@ -672,7 +673,9 @@ class BackupSession(SessionOverlay):
             for output, destinations in plans:
                 for i, (entry, dest) in enumerate(destinations, 1):
                     check_cancel(cancel)
-                    progress(f"正在导出：{entry.name}", i, len(destinations))
+                    progress(
+                        ProgressMessage(ProgressPhase.EXPORT, name=entry.name), i, len(destinations)
+                    )
                     validate_destination(dest)
                     if entry.kind == "directory":
                         if dest.exists() and not dest.is_dir():
@@ -821,7 +824,7 @@ class BackupSession(SessionOverlay):
                 )
             self._check_required_payloads(cancel)
             destination.parent.mkdir(parents=True, exist_ok=True)
-            progress("估算备份大小…", 0, 0)
+            progress(ProgressMessage(ProgressPhase.ESTIMATE), 0, 0)
             required = (
                 sum(
                     r[0]
@@ -856,7 +859,7 @@ class BackupSession(SessionOverlay):
                 )
                 for n, source in enumerate(files, 1):
                     check_cancel(cancel)
-                    progress("复制备份到独立输出文件夹…", n, len(files))
+                    progress(ProgressMessage(ProgressPhase.COPY_OUTPUT), n, len(files))
                     copy_file(source, work / source.relative_to(self.root), cancel)
                 with contextlib.closing(sqlite3.connect(out_db_path)) as out_db, out_db:
                     self.db.backup(out_db)
@@ -880,7 +883,9 @@ class BackupSession(SessionOverlay):
                     verification = []
                     for i, entry in enumerate(changed, 1):
                         check_cancel(cancel)
-                        progress(f"写入：{entry.name}", i, len(changed))
+                        progress(
+                            ProgressMessage(ProgressPhase.WRITE, name=entry.name), i, len(changed)
+                        )
                         meta = self.metadata(entry)
                         if meta is None:
                             if entry.original_id:
@@ -988,7 +993,7 @@ class BackupSession(SessionOverlay):
                                 english="Output backup is missing file data: {file_id}",
                                 values={"file_id": fid},
                             )
-                progress("重新封装并验证清单…", 0, 0)
+                progress(ProgressMessage(ProgressPhase.VERIFY), 0, 0)
                 if self.encrypted:
                     crypto_file(
                         out_db_path,
@@ -1041,7 +1046,7 @@ class BackupSession(SessionOverlay):
                         "保存目标被其他程序创建，输出未覆盖",
                         english="Another application created the destination; it was not overwritten",
                     )
-                progress("建立新的保存基线…", 0, 0)
+                progress(ProgressMessage(ProgressPhase.BASELINE), 0, 0)
                 saved_db = self.prepare_saved_index(out_db_path, cancel)
                 check_cancel(cancel)
                 if self._stamp() != self.source_stamp:
@@ -1061,7 +1066,7 @@ class BackupSession(SessionOverlay):
                             english="The copy marker changed during saving",
                         )
                     # 最后一次取消检查在写入前。开始安装后完成本次写入，不提供日志/回滚。
-                    progress("正在应用更改…", 0, 0)
+                    progress(ProgressMessage(ProgressPhase.APPLY), 0, 0)
                     payloads = [
                         p for p in work.rglob("*") if p.is_file() and p.name != "Manifest.db"
                     ]

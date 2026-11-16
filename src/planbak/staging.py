@@ -11,6 +11,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 from .codec import BackupError, check_cancel
+from .progress import ProgressMessage, ProgressPhase
 
 
 def staged_unavailable_error(entry):
@@ -242,7 +243,7 @@ class Mutation:
                 pending[token] = PendingChange(token, base, current, tuple(labels), location)
             else:
                 pending.pop(token, None)
-            session._change_progress("正在更新更改列表…", number, total)
+            session._change_progress(ProgressMessage(ProgressPhase.UPDATE_CHANGES), number, total)
         check_cancel(self.cancel)
         return pending
 
@@ -611,7 +612,7 @@ class SessionOverlay:
                         )
                     )
                     if progress:
-                        progress(f"正在添加：{src.name}", 0, 0)
+                        progress(ProgressMessage(ProgressPhase.ADD, name=src.name), 0, 0)
                     if is_dir:
                         todo.extend(
                             (child, virtual + "/" + child.name)

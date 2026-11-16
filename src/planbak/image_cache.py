@@ -13,6 +13,7 @@ from PySide6.QtGui import QImage
 from .codec import BackupError, check_cancel
 from .file_opening import source_revision
 from .image_data import MAX_FILE_BYTES, DecodedImage, decode_image
+from .progress import ProgressMessage, ProgressPhase
 
 MEMORY_BUDGET = 128 * 1024**2
 DISK_BUDGET = 512 * 1024**2
@@ -208,7 +209,7 @@ class ImageCache:
             self.directory.mkdir(parents=True, exist_ok=True)
             path = self.directory / uuid.uuid4().hex
             try:
-                label = f"正在加载文件：{entry.name}"
+                label = ProgressMessage(ProgressPhase.LOAD_IMAGE, name=entry.name)
                 copied = 0
 
                 def advanced(amount):

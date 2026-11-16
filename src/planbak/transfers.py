@@ -6,6 +6,7 @@ from pathlib import Path
 from PySide6.QtCore import QObject, Signal
 
 from .codec import BackupError
+from .progress import ProgressMessage, ProgressPhase
 
 
 class TransferLease:
@@ -25,7 +26,7 @@ class TransferLease:
 
     def copy_to(self, destination, tokens, domain, parent, policy, progress, cancel):
         def copy_progress(_text, done, total):
-            progress("正在复制项目到当前备份…", done, total)
+            progress(ProgressMessage(ProgressPhase.COPY_TO), done, total)
 
         with tempfile.TemporaryDirectory(prefix=".transfer-", dir=destination.workspace) as folder:
             paths = self.session.export(tokens, Path(folder), progress=copy_progress, cancel=cancel)

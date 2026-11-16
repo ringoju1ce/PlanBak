@@ -10,6 +10,7 @@ from pathlib import Path
 
 from . import __version__
 from .codec import BackupError, check_cancel
+from .progress import ProgressMessage, ProgressPhase
 
 MARKER = ".planbak.json"
 
@@ -120,7 +121,7 @@ def copy_backup(source, destination, stamp, progress, cancel=None, *, container=
             "原备份在打开后已改变，请重新打开备份",
             english="The original backup changed after opening; reopen the backup",
         )
-    progress("正在创建备份副本…", 0, 0)
+    progress(ProgressMessage(ProgressPhase.COPY_BACKUP), 0, 0)
     files, total = [], 0
     for path in source.rglob("*"):
         check_cancel(cancel)
@@ -139,12 +140,12 @@ def copy_backup(source, destination, stamp, progress, cancel=None, *, container=
     def advanced(amount):
         nonlocal done
         done += amount
-        progress("正在创建备份副本…", done, max(1, total))
+        progress(ProgressMessage(ProgressPhase.COPY_BACKUP), done, max(1, total))
 
     try:
         if container:
             backup.mkdir()
-        progress("正在创建备份副本…", 0, max(1, total))
+        progress(ProgressMessage(ProgressPhase.COPY_BACKUP), 0, max(1, total))
         for path in files:
             check_cancel(cancel)
             copy_file(path, backup / path.relative_to(source), cancel, progress=advanced)
