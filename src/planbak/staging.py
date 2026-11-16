@@ -8,6 +8,7 @@ import tempfile
 import time
 import uuid
 from dataclasses import dataclass, replace
+from enum import StrEnum, auto
 from pathlib import Path
 
 from .codec import BackupError, check_cancel
@@ -79,26 +80,35 @@ def full_path(entry):
     return f"/{entry.domain}" + (f"/{entry.path}" if entry.path else "")
 
 
+class ChangeKind(StrEnum):
+    CREATE_FOLDER = auto()
+    ADD = auto()
+    DELETE_FOLDER = auto()
+    DELETE = auto()
+    RENAME_FOLDER = auto()
+    RENAME = auto()
+    MODIFY = auto()
+
+
+RENAME_KINDS = frozenset((ChangeKind.RENAME, ChangeKind.RENAME_FOLDER))
+
+
 @dataclass(frozen=True)
 class PendingChange:
     token: str
     before: Entry | None
     after: Entry | None
-    labels: tuple[str, ...]
+    kinds: tuple[ChangeKind, ...]
     location: Entry
 
     @property
-    def title(self):
-        text = full_path(self.after or self.before)
-        if any(label.startswith("重命名") for label in self.labels):
-            text = f"{full_path(self.before)} → {full_path(self.after)}"
-        return f"{'、'.join(self.labels)}　{text}"
+    def renamed(self):
+        return any(kind in RENAME_KINDS for kind in self.kinds)
 
     @property
     def tooltip(self):
         # Renames intentionally expose only the original path on hover.
-        renamed = any(label.startswith("重命名") for label in self.labels)
-        return full_path(self.before if renamed else self.after or self.before)
+        return full_path(self.before if self.renamed else self.after or self.before)
 
 
 @dataclass
@@ -206,19 +216,27 @@ class Mutation:
                     self.install(token, None)
             elif session.cache_path(token).exists():
                 self.install(token, None)
-            labels = []
+            kinds = []
             if base is None and current:
-                labels = ["建立文件夹" if current.kind == "directory" else "添加"]
+                kinds = [
+                    ChangeKind.CREATE_FOLDER if current.kind == "directory" else ChangeKind.ADD
+                ]
             elif base and current is None:
-                labels = ["删除文件夹" if base.kind == "directory" else "删除"]
+                kinds = [
+                    ChangeKind.DELETE_FOLDER if base.kind == "directory" else ChangeKind.DELETE
+                ]
             elif base and current:
                 if (base.domain, base.path) != (current.domain, current.path):
-                    labels.append("重命名文件夹" if current.kind == "directory" else "重命名")
+                    kinds.append(
+                        ChangeKind.RENAME_FOLDER
+                        if current.kind == "directory"
+                        else ChangeKind.RENAME
+                    )
                 if current.staged:
-                    labels.append("修改")
+                    kinds.append(ChangeKind.MODIFY)
             if current:
-                current = replace(current, changed=int(bool(labels)))
-                if not labels and base:
+                current = replace(current, changed=int(bool(kinds)))
+                if not kinds and base:
                     current = base
                 if current != stored:
                     session.db.execute(
@@ -232,7 +250,7 @@ class Mutation:
                             token,
                         ),
                     )
-            if labels:
+            if kinds:
                 old = pending.get(token)
                 location = (
                     self.locations.get(token)
@@ -240,7 +258,7 @@ class Mutation:
                     or previous
                     or (old.location if old else base)
                 )
-                pending[token] = PendingChange(token, base, current, tuple(labels), location)
+                pending[token] = PendingChange(token, base, current, tuple(kinds), location)
             else:
                 pending.pop(token, None)
             session._change_progress(ProgressMessage(ProgressPhase.UPDATE_CHANGES), number, total)
@@ -294,7 +312,7 @@ class SessionOverlay:
             directories = self.directory_mappings()
             visible = []
             for change in self._pending.values():
-                labels = list(change.labels)
+                kinds = list(change.kinds)
                 if change.before and change.after:
                     path = change.before.parent
                     while path:
@@ -304,11 +322,11 @@ class SessionOverlay:
                             and change.after.path
                             == directory.after.path + change.before.path[len(path) :]
                         ):
-                            labels = [label for label in labels if not label.startswith("重命名")]
+                            kinds = [kind for kind in kinds if kind not in RENAME_KINDS]
                             break
                         path = path.rpartition("/")[0]
-                if labels:
-                    visible.append(replace(change, labels=tuple(labels)))
+                if kinds:
+                    visible.append(replace(change, kinds=tuple(kinds)))
             self._visible_changes = tuple(
                 sorted(
                     visible,

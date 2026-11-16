@@ -1312,8 +1312,10 @@ def test_pending_directory_recursive_revert_preserves_other_modifications(window
     original = w.session.at("HomeDomain", "Documents/a.txt")
     w.session.stage_bytes(original.token, b"other change")
     w.refresh()
-    assert {"建立文件夹", "添加", "修改"} == {
-        label for change in w.session.changes for label in change.labels
+    from planbak.staging import ChangeKind
+
+    assert {ChangeKind.CREATE_FOLDER, ChangeKind.ADD, ChangeKind.MODIFY} == {
+        kind for change in w.session.changes for kind in change.kinds
     }
     w.revert_pending(parent.token)
     qtbot.waitUntil(lambda: w.task is None)

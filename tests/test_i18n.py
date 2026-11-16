@@ -313,6 +313,25 @@ def test_main_language_switch_preserves_navigation_and_progress(factory, qtbot, 
     w.update_work_status()
 
 
+def test_pending_changes_retranslate_without_changing_operation_types(factory, qtbot, tmp_path):
+    from planbak.staging import ChangeKind
+
+    w = factory()
+    w.language_context.set_language(SIMPLIFIED_CHINESE)
+    w.open_path(make_backup(tmp_path / "backup"))
+    ready(w, qtbot)
+    entry = w.session.at("HomeDomain", "Documents/a.txt")
+    w.session.move([entry.token], "HomeDomain", "Documents", name="renamed.txt")
+    w.session.stage_bytes(entry.token, b"changed")
+    w.refresh()
+    index = w.changes_model.index(0, 0)
+    assert "重命名" in index.data() and "修改" in index.data()
+    assert w.session.changes[0].kinds == (ChangeKind.RENAME, ChangeKind.MODIFY)
+    w.language_context.set_language(ENGLISH)
+    assert "Rename" in index.data() and "Modify" in index.data()
+    assert w.session.changes[0].kinds == (ChangeKind.RENAME, ChangeKind.MODIFY)
+
+
 def test_main_conflict_dialog_uses_window_language(factory, monkeypatch):
     from PySide6.QtWidgets import QMessageBox
 

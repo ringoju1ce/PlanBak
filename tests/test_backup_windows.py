@@ -16,6 +16,7 @@ from planbak.backup import BackupSession
 from planbak.backup_windows import BackupWindows
 from planbak.codec import BackupError, Cancelled
 from planbak.navigation import Location
+from planbak.staging import ChangeKind
 
 
 def test_parent_choice_and_background_copy_keep_container_layout(
@@ -336,7 +337,7 @@ def test_cross_window_copy_directory_is_addition_and_preserves_empty_children(
     assert target.session.at("HomeDomain", "sub/b.txt")
     assert target.session.at("HomeDomain", "sub/empty-child")
     assert source.session.changes == before
-    assert any(c.labels == ("添加",) for c in target.session.changes)
+    assert any(c.kinds == (ChangeKind.ADD,) for c in target.session.changes)
 
 
 def test_cancel_transfer_releases_source_and_rolls_back_target(

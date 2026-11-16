@@ -5,6 +5,7 @@ from conftest import PASSWORD
 
 from planbak.backup import BackupSession
 from planbak.codec import BackupError, Cancelled
+from planbak.staging import ChangeKind
 
 
 @pytest.fixture
@@ -29,7 +30,7 @@ def test_unique_cache_final_difference_and_content_reset(session, tmp_path):
     assert session.cached_file(token) == path
     assert path.read_bytes() == b"second"
     assert list((session.workspace / "pending").iterdir()) == [path]
-    assert len(session.changes) == 1 and session.changes[0].labels == ("修改",)
+    assert len(session.changes) == 1 and session.changes[0].kinds == (ChangeKind.MODIFY,)
     session.stage_bytes(token, b"hello world")
     assert not session.dirty and not session.changes
     assert session.get(token).staged is None
@@ -43,13 +44,13 @@ def test_add_edit_delete_and_modified_delete_merge(session, tmp_path):
     session.import_paths([path], "HomeDomain", "")
     added = session.at("HomeDomain", "added.txt")
     session.stage_bytes(added.token, b"two")
-    assert session.changes[0].labels == ("添加",)
+    assert session.changes[0].kinds == (ChangeKind.ADD,)
     session.delete([added.token])
     assert not session.dirty and not session.cache_path(added.token).exists()
     token = session.at("HomeDomain", "Documents/a.txt").token
     session.stage_bytes(token, b"modified")
     session.delete([token])
-    assert len(session.changes) == 1 and session.changes[0].labels == ("删除",)
+    assert len(session.changes) == 1 and session.changes[0].kinds == (ChangeKind.DELETE,)
     session.revert(session.plan_revert(token))
     assert contents(session, token, tmp_path) == b"hello world" and not session.dirty
 
@@ -86,13 +87,16 @@ def test_directory_rename_revert_preserves_independent_content_changes(session, 
     directory = session.at("HomeDomain", "Documents")
     child = session.at("HomeDomain", "Documents/a.txt")
     session.move([directory.token], "HomeDomain", "", name="Renamed")
-    assert len(session.changes) == 1 and session.changes[0].labels == ("重命名文件夹",)
+    assert len(session.changes) == 1 and session.changes[0].kinds == (ChangeKind.RENAME_FOLDER,)
     session.stage_bytes(child.token, b"modified")
-    assert {change.labels for change in session.changes} == {("重命名文件夹",), ("修改",)}
+    assert {change.kinds for change in session.changes} == {
+        (ChangeKind.RENAME_FOLDER,),
+        (ChangeKind.MODIFY,),
+    }
     session.revert(session.plan_revert(directory.token))
     assert session.get(child.token).path == "Documents/a.txt"
     assert contents(session, child.token, tmp_path) == b"modified"
-    assert len(session.changes) == 1 and session.changes[0].labels == ("修改",)
+    assert len(session.changes) == 1 and session.changes[0].kinds == (ChangeKind.MODIFY,)
     session.revert(session.plan_revert(child.token))
     assert not session.dirty
 
@@ -189,7 +193,7 @@ def test_tooltip_rename_contains_only_original_full_path(session):
     token = session.at("HomeDomain", "Documents/a.txt").token
     session.move([token], "HomeDomain", "", name="renamed.txt")
     change = session.changes[0]
-    assert change.labels == ("重命名",)
+    assert change.kinds == (ChangeKind.RENAME,)
     assert change.tooltip == "/HomeDomain/Documents/a.txt"
     assert "renamed.txt" not in change.tooltip
 
@@ -269,14 +273,18 @@ def test_multi_move_with_duplicate_source_names(backup_root, tmp_path, collision
             alternate = session.at("HomeDomain", "Documents/destination/a (2).txt")
             if collision == "keep_both":
                 assert alternate
-                assert {session.cached_file(moved.token).read_bytes(),
-                        session.cached_file(alternate.token).read_bytes()} == {
-                    b"hello world", b"second source"
-                }
+                assert {
+                    session.cached_file(moved.token).read_bytes(),
+                    session.cached_file(alternate.token).read_bytes(),
+                } == {b"hello world", b"second source"}
             else:
                 assert alternate is None
-                assert sum(session.at("HomeDomain", path) is not None for path in (
-                    "Documents/a.txt", "Documents/sub/a.txt"
-                )) == 1
+                assert (
+                    sum(
+                        session.at("HomeDomain", path) is not None
+                        for path in ("Documents/a.txt", "Documents/sub/a.txt")
+                    )
+                    == 1
+                )
     finally:
         session.close()
