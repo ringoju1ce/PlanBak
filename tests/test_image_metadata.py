@@ -32,6 +32,27 @@ def camera_exif():
     return exif
 
 
+def test_metadata_generated_details_translate_without_translating_exif_values():
+    from types import SimpleNamespace
+
+    from planbak.i18n import ENGLISH, SIMPLIFIED_CHINESE, LanguageContext
+    from planbak.image_metadata import ImageMetadata, MetadataIssue, value_text
+
+    metadata = ImageMetadata(
+        100,
+        mode="L",
+        exif=(("Make", "灰度"), ("Data", value_text(b"x" * 65))),
+        error=(MetadataIssue("Unable to read {group} data", (("group", "GPS"),)),),
+    )
+    image = SimpleNamespace(metadata=metadata, name="sample", backup_path="", format="PNG", width=1, height=1)
+    chinese = information_text(image, LanguageContext(SIMPLIFIED_CHINESE).translate)
+    english = information_text(image, LanguageContext(ENGLISH).translate)
+    assert "Make: 灰度" in chinese and "Make: 灰度" in english
+    assert "共 65 字节" in chinese and "65 bytes" in english
+    assert "GPS 数据无法读取" in chinese and "Unable to read GPS data" in english
+    assert "颜色模式：灰度" in chinese and "Color mode: Grayscale" in english
+
+
 @pytest.mark.parametrize("format_name", ["JPEG", "HEIF"])
 def test_jpeg_exif_nested_and_missing_data(tmp_path, format_name):
     jpeg = tmp_path / ("photo.jpg" if format_name == "JPEG" else "photo.heic")

@@ -14,12 +14,35 @@ MAX_VALUE = 512
 
 
 @dataclass(frozen=True)
+class MetadataIssue:
+    source: str
+    values: tuple = ()
+
+    def format(self, translate):
+        return translate(self.source, **dict(self.values))
+
+
+@dataclass(frozen=True)
+class TextFragments:
+    parts: tuple
+
+    def format(self, translate):
+        return "".join(format_metadata_value(part, translate) for part in self.parts)
+
+
+def format_metadata_value(value, translate):
+    if isinstance(value, (MetadataIssue, TextFragments)):
+        return value.format(translate)
+    return value
+
+
+@dataclass(frozen=True)
 class ImageMetadata:
     file_size: int
     mode: str = ""
     bit_depth: str = ""
     exif: tuple = ()
-    error: str = ""
+    error: tuple[MetadataIssue, ...] = ()
 
 
 def value_text(value, depth=0):
@@ -31,10 +54,21 @@ def value_text(value, depth=0):
             text = prefix.decode("ascii").rstrip("\x00")
         else:
             text = prefix.hex(" ")
-        return text + (f"…（共 {len(value)} 字节）" if len(value) > 64 else "")
+        if len(value) > 64:
+            return TextFragments(
+                (text, MetadataIssue("… ({count} bytes)", (("count", len(value)),)))
+            )
+        return text
     if isinstance(value, (tuple, list)) and depth < 2:
         values = [value_text(v, depth + 1) for v in value[:16]]
-        return ", ".join(values) + (f"…（共 {len(value)} 项）" if len(value) > 16 else "")
+        parts = []
+        for index, item in enumerate(values):
+            if index:
+                parts.append(", ")
+            parts.append(item)
+        if len(value) > 16:
+            parts.append(MetadataIssue("… ({count} items)", (("count", len(value)),)))
+        return TextFragments(tuple(parts))
     numerator, denominator = getattr(value, "numerator", None), getattr(value, "denominator", None)
     if numerator is not None and denominator not in (None, 1):
         return f"{numerator}/{denominator}"
@@ -72,7 +106,7 @@ def exif_fields(exif):
                     (label, nested, ExifTags.GPSTAGS if label == "GPS" else ExifTags.TAGS)
                 )
         except Exception:
-            errors.append(f"{label} 数据无法读取")
+            errors.append(MetadataIssue("Unable to read {group} data", (("group", label),)))
     for group, values, names in groups:
         for tag, value in sorted(values.items()):
             if tag in pointers:
@@ -83,12 +117,14 @@ def exif_fields(exif):
             try:
                 fields.append((label, value_text(value)))
             except Exception:
-                fields.append((label, "无法显示此值"))
-            used += sum(len(value) for value in fields[-1])
+                fields.append((label, MetadataIssue("Unable to display this value")))
+            used += sum(len(str(value)) for value in fields[-1])
             if len(fields) >= MAX_FIELDS or used >= 64 * 1024:
-                fields.append(("提示", "EXIF 内容较多，显示已截断"))
-                return tuple(fields), "；".join(errors)
-    return tuple(fields), "；".join(errors)
+                fields.append(
+                    (MetadataIssue("Note"), MetadataIssue("EXIF data is long; display truncated"))
+                )
+                return tuple(fields), tuple(errors)
+    return tuple(fields), tuple(errors)
 
 
 def png_metadata(path, cancel):
@@ -109,12 +145,15 @@ def png_metadata(path, cancel):
             if kind == b"IHDR" and length == 13:
                 data = stream.read(13)
                 depth = str(data[8])
-                mode = {0: "灰度", 2: "RGB", 3: "索引色", 4: "灰度+Alpha", 6: "RGBA"}.get(
-                    data[9], ""
-                )
+                mode = {0: "L", 2: "RGB", 3: "P", 4: "LA", 6: "RGBA"}.get(data[9], "")
             elif kind == b"eXIf":
                 if length > MAX_EXIF_BYTES:
-                    return ImageMetadata(size, mode, depth, error="EXIF 数据过大，未展开")
+                    return ImageMetadata(
+                        size,
+                        mode,
+                        depth,
+                        error=(MetadataIssue("EXIF data is too large to display"),),
+                    )
                 raw = stream.read(length)
             else:
                 stream.seek(length, 1)
@@ -122,7 +161,12 @@ def png_metadata(path, cancel):
             if kind == b"IEND":
                 break
         else:
-            return ImageMetadata(size, mode, depth, error="PNG 数据块过多，未读取全部元数据")
+            return ImageMetadata(
+                size,
+                mode,
+                depth,
+                error=(MetadataIssue("Too many PNG chunks; some metadata was not read"),),
+            )
     if not raw:
         return ImageMetadata(size, mode, depth)
     exif = Image.Exif()
@@ -145,7 +189,9 @@ def read_metadata(path, cancel=None):
             depth = str(image.info.get("bit_depth") or getattr(image, "bits", "") or "")
             raw = image.info.get("exif")
             if raw and len(raw) > MAX_EXIF_BYTES:
-                return ImageMetadata(size, mode, depth, error="EXIF 数据过大，未展开")
+                return ImageMetadata(
+                    size, mode, depth, error=(MetadataIssue("EXIF data is too large to display"),)
+                )
             if image.format == "TIFF":
                 exif = image.getexif()  # TIFF IFD metadata; no pixel load.
             elif raw:
@@ -161,7 +207,12 @@ def read_metadata(path, cancel=None):
             return ImageMetadata(size, mode, depth, fields, error)
     except Exception as exc:
         check_cancel(cancel)
-        return ImageMetadata(size, error=f"元数据无法读取：{type(exc).__name__}")
+        return ImageMetadata(
+            size,
+            error=(
+                MetadataIssue("Unable to read metadata: {error}", (("error", type(exc).__name__),)),
+            ),
+        )
 
 
 def information_text(result, translate=None):
@@ -187,9 +238,9 @@ def information_text(result, translate=None):
         lines.append(tr("File size: {size} bytes{unit}", size=f"{size:,}", unit=unit))
         if metadata.mode:
             modes = {
-                "灰度": "Grayscale",
-                "索引色": "Indexed color",
-                "灰度+Alpha": "Grayscale + Alpha",
+                "L": "Grayscale",
+                "P": "Indexed color",
+                "LA": "Grayscale + Alpha",
             }
             mode = tr(modes[metadata.mode]) if metadata.mode in modes else metadata.mode
             lines.append(tr("Color mode: {mode}", mode=mode))
@@ -197,25 +248,12 @@ def information_text(result, translate=None):
             lines.append(tr("Bit depth: {depth} bit", depth=metadata.bit_depth))
     lines.extend(("", "EXIF"))
     if metadata and metadata.exif:
-        lines.extend(f"{name}: {value}" for name, value in metadata.exif)
+        lines.extend(
+            f"{format_metadata_value(name, tr)}: {format_metadata_value(value, tr)}"
+            for name, value in metadata.exif
+        )
     elif not metadata or not metadata.error:
         lines.append(tr("No EXIF information"))
     if metadata and metadata.error:
-        messages = {
-            "EXIF 数据过大，未展开": "EXIF data is too large to display",
-            "PNG 数据块过多，未读取全部元数据": "Too many PNG chunks; some metadata was not read",
-        }
-        errors = []
-        for error in metadata.error.split("；"):
-            if error in messages:
-                errors.append(tr(messages[error]))
-            elif error.startswith("元数据无法读取："):
-                errors.append(
-                    tr("Unable to read metadata: {error}", error=error[len("元数据无法读取：") :])
-                )
-            elif error in ("Exif 数据无法读取", "GPS 数据无法读取", "Interop 数据无法读取"):
-                errors.append(tr("Unable to read {group} data", group=error.split(" ", 1)[0]))
-            else:
-                errors.append(error)
-        lines.append(tr("; ").join(errors))
+        lines.append(tr("; ").join(issue.format(tr) for issue in metadata.error))
     return "\n".join(lines)

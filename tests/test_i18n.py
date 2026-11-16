@@ -454,9 +454,9 @@ def test_single_file_picker_uses_window_scoped_dialog(qtbot, tmp_path, monkeypat
 def test_image_metadata_explanations_translate_not_exif_values():
     from types import SimpleNamespace
 
-    from planbak.image_metadata import ImageMetadata, information_text
+    from planbak.image_metadata import ImageMetadata, MetadataIssue, information_text
 
-    metadata = ImageMetadata(50, mode='灰度', exif=(('Make', '灰度'),), error='EXIF 数据过大，未展开')
+    metadata = ImageMetadata(50, mode='L', exif=(('Make', '灰度'),), error=(MetadataIssue('EXIF data is too large to display'),))
     image = SimpleNamespace(metadata=metadata, name='照片.png', backup_path='', format='PNG', width=2, height=3)
     text = information_text(image, LanguageContext(ENGLISH).translate)
     assert 'Color mode: Grayscale' in text
