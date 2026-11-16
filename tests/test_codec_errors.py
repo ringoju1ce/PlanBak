@@ -78,7 +78,7 @@ def test_manifest_duplicate_paths_report_location(tmp_path):
             "WHERE domain=? AND relativePath=?",
             ("f" * 40, "HomeDomain", "Documents/a.txt"),
         )
-    with pytest.raises(BackupError, match=r"重复路径.*HomeDomain/Documents/a.txt"):
+    with pytest.raises(BackupError, match=r"duplicate path.*HomeDomain/Documents/a.txt"):
         BackupSession(root)
 
 
@@ -95,5 +95,5 @@ def test_manifest_invalid_path_reports_location(tmp_path):
             "UPDATE Files SET relativePath=? WHERE domain=? AND relativePath=?",
             ("../invalid", "HomeDomain", "Documents/a.txt"),
         )
-    with pytest.raises(BackupError, match=r"无效路径.*HomeDomain/\.\./invalid"):
+    with pytest.raises(BackupError, match=r"invalid path.*HomeDomain/\.\./invalid"):
         BackupSession(root)

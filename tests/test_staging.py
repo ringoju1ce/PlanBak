@@ -123,7 +123,7 @@ def test_deleted_directory_restore_and_path_conflict_atomicity(session, tmp_path
     source.write_bytes(b"occupant")
     session.import_paths([source], "HomeDomain", "Documents")
     snapshot = session.changes
-    with pytest.raises(BackupError, match="占用"):
+    with pytest.raises(BackupError, match="occupied"):
         session.plan_revert(file.token)
     assert session.changes == snapshot
     assert (
@@ -260,7 +260,7 @@ def test_multi_move_with_duplicate_source_names(backup_root, tmp_path, collision
         tokens = [original.token, second.token]
         if collision in ("error", "replace"):
             before = session.changes
-            with pytest.raises(BackupError, match="目标"):
+            with pytest.raises(BackupError, match="[Dd]estination"):
                 session.move(tokens, "HomeDomain", "Documents/destination", collision=collision)
             assert session.changes == before
             assert session.at("HomeDomain", "Documents/a.txt")

@@ -115,7 +115,7 @@ def test_fallback_copy_is_marked_and_invalid_marker_protects_source(backup_root,
         token = s.at('HomeDomain', 'Documents/a.txt').token
         s.stage_bytes(token, b'edited')
         before = hashes(backup_root)
-        with pytest.raises(BackupError, match='标记'):
+        with pytest.raises(BackupError, match='marker'):
             s.save()
         assert hashes(backup_root) == before
         out = s.save(tmp_path / 'edited')
@@ -123,7 +123,7 @@ def test_fallback_copy_is_marked_and_invalid_marker_protects_source(backup_root,
         (out / MARKER).write_text('{broken')
         s.stage_bytes(token, b'later')
         saved = hashes(out)
-        with pytest.raises(BackupError, match='标记'):
+        with pytest.raises(BackupError, match='marker'):
             s.save()
         assert hashes(out) == saved and s.dirty
     finally:
@@ -143,7 +143,7 @@ def test_copy_allows_edits_but_prevents_concurrent_apply(backup_root, tmp_path):
             assert ready.wait(3)
             try:
                 s.stage_bytes(token, b'during copy')
-                with pytest.raises(BackupError, match='创建副本'):
+                with pytest.raises(BackupError, match='copy is being created'):
                     s.save(tmp_path / 'forbidden')
             finally:
                 release.set()
@@ -162,10 +162,10 @@ def test_apply_gate_rejects_mutations_immediately(backup_root, tmp_path):
         permit = s.begin_apply()
         with s.lock, ThreadPoolExecutor(1) as pool:
             job = pool.submit(s.stage_bytes, token, b'must not wait or queue')
-            with pytest.raises(BackupError, match='正在应用'):
+            with pytest.raises(BackupError, match='being applied'):
                 job.result(timeout=1)
             discard = pool.submit(s.discard)
-            with pytest.raises(BackupError, match='正在应用'):
+            with pytest.raises(BackupError, match='being applied'):
                 discard.result(timeout=1)
         for operation in (
             lambda: s.new_directory('HomeDomain', 'Documents', 'blocked'),
@@ -173,7 +173,7 @@ def test_apply_gate_rejects_mutations_immediately(backup_root, tmp_path):
             lambda: s.move([token], 'HomeDomain', 'Documents', name='blocked'),
             lambda: s.discard(),
         ):
-            with pytest.raises(BackupError, match='正在应用'):
+            with pytest.raises(BackupError, match='being applied'):
                 operation()
         s.save(tmp_path / 'copy', _token=permit)
         s.stage_bytes(token, b'allowed again')
@@ -237,7 +237,7 @@ def test_ui_copy_is_background_and_keeps_pending(window, qtbot, tmp_path, monkey
     monkeypatch.setattr('planbak.app.message', lambda *a, **k: None)
     w.save()
     assert w.progress_dialog is not None
-    with pytest.raises(BackupError, match='正在应用'):
+    with pytest.raises(BackupError, match='being applied'):
         w.session.stage_bytes(token, b'late')
     qtbot.waitUntil(lambda: w.task is None)
     assert not w.session.dirty and w.session.root == target
@@ -364,7 +364,7 @@ def test_direct_install_failure_has_no_recovery_and_does_not_touch_original(back
                 raise OSError('simulated install failure')
             return original_replace(source, target)
         monkeypatch.setattr('planbak.backup.os.replace', fail_manifest)
-        with pytest.raises(BackupError, match='部分写入'):
+        with pytest.raises(BackupError, match='partially written'):
             s.save()
         assert s.dirty and hashes(backup_root) == original_hashes
         assert not list(s.root.glob('*journal*'))
@@ -571,7 +571,7 @@ def test_close_rejects_active_apply(backup_root):
     session = BackupSession(backup_root, PASSWORD)
     token = session.begin_apply()
     try:
-        with pytest.raises(BackupError, match="暂不能关闭"):
+        with pytest.raises(BackupError, match="cannot close yet"):
             session.close()
         assert session.workspace.exists() and session.db is not None
     finally:
@@ -598,7 +598,7 @@ def test_close_rejects_active_copy(backup_root, tmp_path, monkeypatch):
             future = pool.submit(session.create_copy, tmp_path / "copy")
             assert started.wait(5)
             try:
-                with pytest.raises(BackupError, match="暂不能关闭"):
+                with pytest.raises(BackupError, match="cannot close yet"):
                     session.close()
                 assert session.workspace.exists() and session.db is not None
             finally:
@@ -622,7 +622,7 @@ def test_close_gate_blocks_new_operations_before_cleanup(backup_root, tmp_path):
             assert session._closing
             # A second close while holding the session lock must not deadlock
             # the first close, which is waiting for that lock.
-            with pytest.raises(BackupError, match="会话正在关闭"):
+            with pytest.raises(BackupError, match="session is closing"):
                 session.close()
             for operation in (
                 session.begin_apply,
@@ -630,7 +630,7 @@ def test_close_gate_blocks_new_operations_before_cleanup(backup_root, tmp_path):
                 lambda: session.create_copy(tmp_path / "copy"),
                 lambda: session.new_directory("HomeDomain", "Documents", "new"),
             ):
-                with pytest.raises(BackupError, match="会话正在关闭"):
+                with pytest.raises(BackupError, match="session is closing"):
                     operation()
         future.result(timeout=10)
     session.close()  # Closing an already closed session remains harmless.

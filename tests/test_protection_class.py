@@ -128,7 +128,7 @@ def test_existing_class_zero_reports_missing_key(backup_root, tmp_path, mode):
             source.write_bytes(b"readded")
             session.import_paths([source], "HomeDomain", "Documents")
             assert session.at("HomeDomain", "Documents/a.txt").original_id == entry.original_id
-        with pytest.raises(BackupError, match=r"保护类别 0.*密钥包.*没有对应密钥"):
+        with pytest.raises(BackupError, match=r"keybag has no key.*protection class 0"):
             session.save(tmp_path / "output")
         assert not (tmp_path / "output").exists()
     finally:
@@ -144,7 +144,7 @@ def test_new_file_missing_default_key_reports_error(backup_root, tmp_path):
         source.write_bytes(b"new")
         session.import_paths([source], "HomeDomain", "Documents")
         session.keybag.keys.pop(3)
-        with pytest.raises(BackupError, match=r"保护类别 3.*密钥包.*没有对应密钥"):
+        with pytest.raises(BackupError, match=r"keybag has no key.*protection class 3"):
             session.save(tmp_path / "output")
     finally:
         session.close()

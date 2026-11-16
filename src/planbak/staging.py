@@ -17,7 +17,6 @@ from .progress import ProgressMessage, ProgressPhase
 
 def staged_unavailable_error(entry):
     return BackupError(
-        f"暂挂的编辑内容不可用：{entry.name}，请重新应用更改。",
         english="Staged edited content is unavailable: {name}; apply the change again.",
         values={"name": entry.name},
     )
@@ -359,7 +358,7 @@ class SessionOverlay:
         with self.lock:
             entry = self.get(token)
             if entry.kind != "file":
-                raise BackupError("只能打开普通文件", english="Only regular files can be opened")
+                raise BackupError(english="Only regular files can be opened")
             target = checked_staged_path(entry) if entry.staged else self.cache_path(token)
             if not target.exists():
                 temporary = self.workspace / (uuid.uuid4().hex + ".extract")
@@ -417,18 +416,14 @@ class SessionOverlay:
 
         safe_path(name, root=False)
         if "/" in name:
-            raise BackupError(
-                "名称不能包含文件夹分隔符", english="The name cannot contain folder separators"
-            )
+            raise BackupError(english="The name cannot contain folder separators")
         with self.mutation() as work:
             directory = self.at(domain, parent)
             path = f"{parent}/{name}".lstrip("/")
             if not directory or directory.kind != "directory":
-                raise BackupError(
-                    "目标文件夹不存在", english="The destination folder does not exist"
-                )
+                raise BackupError(english="The destination folder does not exist")
             if self.at(domain, path):
-                raise BackupError("该名称已存在", english="An item with that name already exists")
+                raise BackupError(english="An item with that name already exists")
             token = uuid.uuid4().hex
             work.put(
                 Entry(
@@ -461,31 +456,24 @@ class SessionOverlay:
         with self.mutation() as work:
             destination = self.at(domain, parent)
             if not destination or destination.kind != "directory":
-                raise BackupError(
-                    "目标文件夹不存在", english="The destination folder does not exist"
-                )
+                raise BackupError(english="The destination folder does not exist")
             roots = self.roots(tokens)
             if name is not None and len(roots) != 1:
-                raise BackupError(
-                    "重命名只能选中一个项目", english="Select exactly one item to rename"
-                )
+                raise BackupError(english="Select exactly one item to rename")
             plans = []
             reserved_targets = set()
             for root in roots:
                 if root.domain != domain:
                     raise BackupError(
-                        "目前只支持在同一个备份顶层文件夹内移动",
                         english="Moving is only supported within the same top-level backup folder",
                     )
                 if root.kind == "directory" and beneath(parent, root.path):
                     raise BackupError(
-                        "不能移动到自身或子文件夹",
                         english="Cannot move an item into itself or its child folder",
                     )
                 basename = safe_path(name, root=False) if name is not None else root.name
                 if "/" in basename:
                     raise BackupError(
-                        "名称不能包含文件夹分隔符",
                         english="The name cannot contain folder separators",
                     )
                 target = f"{parent}/{basename}".lstrip("/")
@@ -504,20 +492,17 @@ class SessionOverlay:
                     elif collision == "replace":
                         if target in reserved_targets:
                             raise BackupError(
-                                f"多个源项目的目标名称相同：{basename}",
                                 english="Multiple source items have the same destination name: {name}",
                                 values={"name": basename},
                             )
                         if root.path.startswith(target + "/"):
                             raise BackupError(
-                                "不能覆盖包含源项目的上层文件夹",
                                 english="Cannot overwrite a parent folder containing the source item",
                             )
                         for entry in self.subtree(existing):
                             work.remove(entry.token)
                     else:
                         raise BackupError(
-                            f"目标已存在：{basename}",
                             english="Destination already exists: {name}",
                             values={"name": basename},
                         )
@@ -537,7 +522,7 @@ class SessionOverlay:
         with self.mutation(cancel=cancel) as work:
             entry = self.get(token)
             if entry.kind != "file":
-                raise BackupError("只能编辑普通文件", english="Only regular files can be edited")
+                raise BackupError(english="Only regular files can be edited")
             staged, size = work.file(token, source=path)
             work.put(replace(entry, staged=staged, size=size, mtime=int(time.time())))
 
@@ -545,7 +530,7 @@ class SessionOverlay:
         with self.mutation(cancel=cancel) as work:
             entry = self.get(token)
             if entry.kind != "file":
-                raise BackupError("只能编辑普通文件", english="Only regular files can be edited")
+                raise BackupError(english="Only regular files can be edited")
             staged, size = work.file(token, data=data)
             work.put(replace(entry, staged=staged, size=size, mtime=int(time.time())))
 
@@ -556,14 +541,12 @@ class SessionOverlay:
             target = self.at(domain, parent)
             if not target or target.kind != "directory":
                 raise BackupError(
-                    "请先进入可添加项目的文件夹",
                     english="Open a folder where items can be added first",
                 )
             for source in map(Path, paths):
                 check_cancel(cancel)
                 if source.is_symlink() or not (source.is_file() or source.is_dir()):
                     raise BackupError(
-                        f"不支持导入此文件类型：{source.name}",
                         english="Importing this file type is not supported: {name}",
                         values={"name": source.name},
                     )
@@ -584,7 +567,6 @@ class SessionOverlay:
                             work.remove(entry.token)
                     else:
                         raise BackupError(
-                            f"目标已存在：{source.name}",
                             english="Destination already exists: {name}",
                             values={"name": source.name},
                         )
@@ -594,7 +576,6 @@ class SessionOverlay:
                     src, virtual = todo.pop()
                     if src.is_symlink() or not (src.is_dir() or src.is_file()):
                         raise BackupError(
-                            f"不支持链接或特殊文件：{src.name}",
                             english="Links or special files are not supported: {name}",
                             values={"name": src.name},
                         )
@@ -738,14 +719,12 @@ class SessionOverlay:
                 if parent or (existing and existing.token not in updates):
                     if (parent or existing).kind != "directory":
                         raise BackupError(
-                            "还原目标的父路径不是文件夹",
                             english="The parent of the restore destination is not a folder",
                         )
                     continue
                 base_parent = self.baseline_at(entry.domain, entry.parent)
                 if not base_parent or self.find(base_parent.token):
                     raise BackupError(
-                        f"无法还原父文件夹：{entry.parent}",
                         english="Unable to restore parent folder: {path}",
                         values={"path": entry.parent},
                     )
@@ -757,7 +736,6 @@ class SessionOverlay:
                     occupant = self.at(entry.domain, entry.path)
                     if occupant and occupant.token != key and occupant.token not in updates:
                         raise BackupError(
-                            f"还原路径已被占用：{full_path(entry)}；请先处理该路径上的更改",
                             english="Restore path is occupied: {path}; resolve changes at that path first",
                             values={"path": full_path(entry)},
                         )
@@ -767,7 +745,6 @@ class SessionOverlay:
         with self.mutation(progress=progress, cancel=cancel) as work:
             if plan.revision != self.signature:
                 raise BackupError(
-                    "更改列表已变化，请重新选择要放弃更改的项目",
                     english="The change list has changed; select the change to discard again",
                 )
             for key in plan.updates:

@@ -504,7 +504,7 @@ def test_dynamic_backup_error_translates_template_not_filename(tmp_path):
         load_plist(path)
     assert '文件{奇怪}.plist' in str(caught.value)
     assert LanguageContext(ENGLISH).error(caught.value) == 'Unable to read 文件{奇怪}.plist'
-    assert LanguageContext(SIMPLIFIED_CHINESE).error(caught.value) == str(caught.value)
+    assert LanguageContext(SIMPLIFIED_CHINESE).error(caught.value) == '无法读取 文件{奇怪}.plist'
 
 
 def test_plist_xml_unavailable_tooltip_switches_language(qtbot):

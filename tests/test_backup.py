@@ -226,7 +226,7 @@ def test_missing_payload_refuses_save(backup_root, tmp_path):
         missing = s.at("HomeDomain", "Documents/a.txt")
         s.payload_path(missing.original_id).unlink()
         s.new_directory("HomeDomain", "", "pending")
-        with pytest.raises(BackupError, match="缺少文件数据"):
+        with pytest.raises(BackupError, match="missing file data"):
             s.save(tmp_path / "invalid")
         assert s.dirty
         assert not (tmp_path / "invalid").exists()
@@ -402,7 +402,7 @@ def test_missing_staged_content_never_falls_back_to_original(backup_root, tmp_pa
             lambda: session.save(tmp_path / "output"),
         ]
         for operation in operations:
-            with pytest.raises(BackupError, match="暂挂的编辑内容不可用"):
+            with pytest.raises(BackupError, match="Staged edited content is unavailable"):
                 operation()
             assert session.dirty and not staged.exists()
         assert not (tmp_path / "output").exists()
@@ -426,7 +426,7 @@ def test_missing_required_payload_fails_before_copy(backup_root, tmp_path, monke
             return original(*args, **kwargs)
 
         monkeypatch.setattr(module, "copy_file", track_copy)
-        with pytest.raises(BackupError, match="缺少文件数据"):
+        with pytest.raises(BackupError, match="missing file data"):
             session.save(tmp_path / "output")
         assert not copies and session.dirty and not (tmp_path / "output").exists()
     finally:
@@ -477,7 +477,7 @@ def test_staged_file_disappearing_during_check_never_uses_original(
             return path
 
         monkeypatch.setattr(module, "checked_staged_path", disappear)
-        with pytest.raises(BackupError, match="暂挂的编辑内容不可用"):
+        with pytest.raises(BackupError, match="Staged edited content is unavailable"):
             if operation == "extract":
                 session.extract_file(token, tmp_path / "output")
             else:
@@ -503,7 +503,7 @@ def test_staged_content_disappearing_during_save_reports_error(backup_root, tmp_
             return original(path, *args, **kwargs)
 
         monkeypatch.setattr(module, "digest", disappear)
-        with pytest.raises(BackupError, match="暂挂的编辑内容不可用"):
+        with pytest.raises(BackupError, match="Staged edited content is unavailable"):
             session.save(tmp_path / "output")
         assert session.dirty and not (tmp_path / "output").exists()
     finally:
