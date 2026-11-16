@@ -619,7 +619,7 @@ def test_transfer_import_failure_rolls_back_target_and_releases_lease(
 
     def fail(*args, progress=None, **kwargs):
         def notify(text, done, total):
-            if text == "正在更新更改列表…" and done:
+            if text.phase.name == "UPDATE_CHANGES" and done:
                 raise OSError("injected failure after cache install")
 
         return original(*args, progress=notify, **kwargs)

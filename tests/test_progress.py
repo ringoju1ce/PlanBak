@@ -1,11 +1,12 @@
 import threading
 
+import pytest
 from conftest import PASSWORD
 from test_ui import window as window
 
 from planbak.app import Task
 from planbak.backup import BackupSession
-from planbak.i18n import ENGLISH, SIMPLIFIED_CHINESE, LanguageContext
+from planbak.i18n import ENGLISH, SIMPLIFIED_CHINESE, LanguageContext, translate_progress
 from planbak.progress import ProgressMessage, ProgressPhase
 
 
@@ -26,9 +27,21 @@ def test_structured_task_progress_preserves_phase_parameters_and_large_counts(mo
     assert seen[0][0].values["name"] == "x：y"
     assert seen[0][2] == large
     language = LanguageContext(ENGLISH)
-    assert seen[0][0].translate(language) == "Writing: x：y"
+    assert translate_progress(language, seen[0][0]) == "Writing: x：y"
     language.set_language(SIMPLIFIED_CHINESE)
-    assert seen[0][0].translate(language) == "写入：x：y"
+    assert translate_progress(language, seen[0][0]) == "写入：x：y"
+
+
+def test_all_progress_phases_have_translations_and_immutable_parameters():
+    language = LanguageContext(SIMPLIFIED_CHINESE)
+    english = LanguageContext(ENGLISH)
+    for phase in ProgressPhase:
+        message = ProgressMessage(phase, name="example")
+        assert translate_progress(language, message) != translate_progress(english, message)
+        with pytest.raises(TypeError):
+            message.values["name"] = "changed"
+        with pytest.raises(AttributeError):
+            message.phase = ProgressPhase.APPLY
 
 
 def test_cancellation_after_apply_phase_does_not_interrupt_install(backup_root, tmp_path):

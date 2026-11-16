@@ -14,6 +14,7 @@ from .backup import digest
 from .codec import CHUNK, BackupError, check_cancel
 from .dialogs import FixedMessageBox as QMessageBox
 from .hex_viewer import HexViewer
+from .progress import ProgressPhase
 from .sqlite_database import DatabaseSnapshot, companions, prepare_snapshot
 from .sqlite_viewer import SQLiteViewer
 
@@ -76,11 +77,7 @@ class ReadOnlyWindows:
         )
 
     def show_database(self, token, snapshot):
-        if (
-            self.owner._transitioning
-            or self.owner.transfers.active
-            or self.owner._readonly_closing
-        ):
+        if self.owner._transitioning or self.owner.transfers.active or self.owner._readonly_closing:
             shutil.rmtree(snapshot.directory, ignore_errors=True)
             return
         session = self.owner.session
@@ -151,7 +148,9 @@ class ReadOnlyWindows:
             if token not in self.hex_viewers:
                 shutil.rmtree(path.parent, ignore_errors=True)
 
-        self.owner.run_task("打开文件", prepare, opened, on_done=cleanup)
+        self.owner.run_task(
+            "打开文件", prepare, opened, status_phase=ProgressPhase.OPEN_FILE, on_done=cleanup
+        )
 
     def reload_hex(self, record, *, automatic=False):
         if record.detached:
@@ -214,15 +213,17 @@ class ReadOnlyWindows:
                 shutil.rmtree(path.parent, ignore_errors=True)
 
         self.owner.run_task(
-            "重新加载文件", prepare, loaded, silent=automatic, on_error=failed, on_done=cleanup
+            "重新加载文件",
+            prepare,
+            loaded,
+            silent=automatic,
+            status_phase=ProgressPhase.RELOAD_FILE,
+            on_error=failed,
+            on_done=cleanup,
         )
 
     def check_hex_viewers(self):
-        if (
-            self.owner.transfers.active
-            or self.owner._transitioning
-            or self.owner._readonly_closing
-        ):
+        if self.owner.transfers.active or self.owner._transitioning or self.owner._readonly_closing:
             return False
         if self.owner._focus_owned_modal(focus=False):
             return False
@@ -333,7 +334,9 @@ class ReadOnlyWindows:
             if not retained:
                 shutil.rmtree(path.parent, ignore_errors=True)
 
-        self.owner.run_task("打开项目", prepare, opened, on_done=cleanup)
+        self.owner.run_task(
+            "打开项目", prepare, opened, status_phase=ProgressPhase.OPEN_ITEM, on_done=cleanup
+        )
 
     def reload_database(self, record, *, automatic=False):
         if (
@@ -397,16 +400,13 @@ class ReadOnlyWindows:
             ),
             loaded,
             silent=automatic,
+            status_phase=ProgressPhase.RELOAD_FILE,
             on_error=failed,
             on_done=cleanup,
         )
 
     def check_database_viewers(self):
-        if (
-            self.owner.transfers.active
-            or self.owner._transitioning
-            or self.owner._readonly_closing
-        ):
+        if self.owner.transfers.active or self.owner._transitioning or self.owner._readonly_closing:
             return False
         if self.owner._focus_owned_modal(focus=False):
             return False

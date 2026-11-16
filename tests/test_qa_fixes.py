@@ -12,6 +12,7 @@ from planbak.backup import BackupSession, digest, stale_workspaces
 from planbak.codec import BackupError, file_id
 from planbak.external_edits import OpenedFile, file_stamp
 from planbak.plist_editor import PlistNode, ValueDialog
+from planbak.progress import ProgressMessage, ProgressPhase
 
 
 def tree_bytes(root):
@@ -21,7 +22,7 @@ def tree_bytes(root):
 def test_progress_accepts_backup_sizes_above_two_gib(qapp):
     seen = []
     total = 3 * 1024**3
-    task = Task(lambda notify, cancel: notify('创建副本…', total, total))
+    task = Task(lambda notify, cancel: notify(ProgressMessage(ProgressPhase.COPY_BACKUP), total, total))
     task.progress.connect(lambda text, done, size: seen.append((done, size)))
     task.run()
     print('progress error=', repr(task.error), 'delivered=', seen)

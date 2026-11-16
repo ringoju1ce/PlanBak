@@ -83,7 +83,7 @@ from .dialogs import FixedMessageBox as QMessageBox
 from .dialogs import FixedProgressDialog
 from .external_edits import ExternalEdits, file_stamp
 from .file_opening import identify_file, source_revision
-from .i18n import ENGLISH, SIMPLIFIED_CHINESE, LanguageContext
+from .i18n import ENGLISH, SIMPLIFIED_CHINESE, LanguageContext, translate_progress
 from .icons import ApplicationIcons
 from .image_session import ImageWindows
 from .navigation import Location, ViewState, split_domain
@@ -178,7 +178,7 @@ class Task(QThread):
         def notify(text, done, total):
             now = time.monotonic()
             # 阶段切换不能被限频吞掉；同阶段的逐文件/字节通知仍限频。
-            phase = text.phase if isinstance(text, ProgressMessage) else text.partition("：")[0]
+            phase = text.phase
             if (
                 phase != last_progress[1]
                 or now - last_progress[0] > 0.07
@@ -1467,51 +1467,12 @@ class MainWindow(QMainWindow):
             jobs[-1],
         )
         preloading = job in self._prefetch_jobs
-        progress_sources = {
-            "正在读取备份…": "Reading backup…",
-            "正在建立备份索引…": "Building backup index…",
-            "正在创建备份副本…": "Creating backup copy…",
-            "正在打开文件…": "Opening file…",
-            "正在向其他备份复制项目…": "Copying items to another backup…",
-            "正在复制项目到当前备份…": "Copying items to this backup…",
-            "正在清理旧会话缓存…": "Cleaning old session cache…",
-        }
-        operations = {
-            "切换到备份副本": "Switching to backup copy",
-            "应用外部编辑": "Applying external edits",
-            "读取备份": "Reading backup",
-            "关闭备份并清理缓存": "Closing backup and clearing cache",
-            "添加项目": "Adding items",
-            "删除项目": "Deleting items",
-            "放弃更改": "Discarding changes",
-            "准备放弃更改": "Preparing to discard changes",
-            "导出项目": "Exporting items",
-            "打开文件": "Opening file",
-            "重新加载文件": "Reloading file",
-            "打开项目": "Opening item",
-            "保存外部编辑": "Saving external edits",
-            "移动项目": "Moving items",
-            "复制项目到当前备份": "Copying items to this backup",
-            "清理旧会话缓存": "Cleaning old session cache",
-        }
         if preloading:
             text = self.language_context.translate(
                 "Preloading file: {name}", name=self._prefetch_jobs[job]
             )
-        elif isinstance(text, ProgressMessage):
-            text = text.translate(self.language_context)
-        elif text in progress_sources:
-            text = self.language_context.translate(progress_sources[text])
-        elif text.startswith("正在") and text.endswith("…") and text[2:-1] in operations:
-            text = self.language_context.translate(operations[text[2:-1]] + "…")
-        elif text.startswith("正在加载文件："):
-            text = self.language_context.translate(
-                "Loading file: {name}", name=text[len("正在加载文件：") :]
-            )
-        elif text.startswith("正在导出："):
-            text = self.language_context.translate(
-                "Exporting: {name}", name=text[len("正在导出：") :]
-            )
+        else:
+            text = translate_progress(self.language_context, text)
         self.work_label.setText(text)
         if preloading:
             self.work_progress.hide()
@@ -1583,7 +1544,7 @@ class MainWindow(QMainWindow):
             self,
         )
         self.copy_task = job
-        self.track_status_job(job, "正在创建备份副本…")
+        self.track_status_job(job, ProgressMessage(ProgressPhase.COPY_BACKUP))
 
         def finished():
             self.copy_task = None
@@ -1657,6 +1618,7 @@ class MainWindow(QMainWindow):
         *,
         silent=False,
         dialog_progress=False,
+        status_phase=ProgressPhase.WORKING,
         on_error=None,
         on_done=None,
     ):
@@ -1667,7 +1629,7 @@ class MainWindow(QMainWindow):
         dialog = None
         tracked_status = not silent and not dialog_progress
         if tracked_status:
-            self.track_status_job(job, "正在" + title + "…")
+            self.track_status_job(job, ProgressMessage(status_phase))
         if not silent and dialog_progress:
             dialog = FixedProgressDialog(
                 self.language_context.translate("Apply Changes"),
@@ -1681,30 +1643,14 @@ class MainWindow(QMainWindow):
             dialog.setWindowModality(Qt.WindowModality.WindowModal)
             dialog.canceled.connect(job.cancelled.set)
 
-            progress_text = [title]
+            progress_text = [ProgressMessage(ProgressPhase.APPLY_CHANGES)]
 
-            def translate_progress():
-                labels = {
-                    "应用更改": "Apply Changes",
-                    "正在应用更改…": "Applying changes…",
-                    "估算备份大小…": "Estimating backup size…",
-                    "复制备份到独立输出文件夹…": "Copying backup to output folder…",
-                    "重新封装并验证清单…": "Repacking and verifying manifest…",
-                    "建立新的保存基线…": "Establishing the new save baseline…",
-                }
-                text = progress_text[0]
-                if isinstance(text, ProgressMessage):
-                    text = text.translate(self.language_context)
-                elif text.startswith("写入："):
-                    text = self.language_context.translate(
-                        "Writing: {name}", name=text[len("写入：") :]
-                    )
-                elif text in labels:
-                    text = self.language_context.translate(labels[text])
+            def refresh_progress_text():
+                text = translate_progress(self.language_context, progress_text[0])
                 dialog.setLabelText(text)
                 dialog._cancel_button.setText(self.language_context.translate("Cancel"))
 
-            self.language_context.changed.connect(translate_progress)
+            self.language_context.changed.connect(refresh_progress_text)
 
             def progress(text, done, total):
                 progress_text[0] = text
@@ -1713,10 +1659,8 @@ class MainWindow(QMainWindow):
                     dialog.setValue(min(999, int(done / total * 1000)))
                 else:
                     dialog.setRange(0, 0)
-                translate_progress()
-                if (
-                    isinstance(text, ProgressMessage) and text.phase is ProgressPhase.APPLY
-                ) or text == "正在应用更改…":
+                refresh_progress_text()
+                if text.phase is ProgressPhase.APPLY:
                     dialog.set_cancellable(False)
 
             job.progress.connect(progress)
@@ -1728,7 +1672,7 @@ class MainWindow(QMainWindow):
             if tracked_status:
                 self.untrack_status_job(job)
             if dialog:
-                self.language_context.changed.disconnect(translate_progress)
+                self.language_context.changed.disconnect(refresh_progress_text)
                 self.progress_dialog = None
                 dialog.finish()
                 dialog.deleteLater()
@@ -1885,6 +1829,7 @@ class MainWindow(QMainWindow):
                 "应用外部编辑",
                 stage_external,
                 done,
+                status_phase=ProgressPhase.STAGE_EXTERNAL,
                 on_done=lambda: cancelled() if not succeeded[0] and cancelled else None,
             )
         elif result == QMessageBox.StandardButton.Discard:
@@ -2039,6 +1984,7 @@ class MainWindow(QMainWindow):
                 Path(path), password, progress=progress, cancel=cancel
             ),
             loaded,
+            status_phase=ProgressPhase.READ,
             on_done=finished,
         )
 
@@ -2104,7 +2050,14 @@ class MainWindow(QMainWindow):
             self._cancel_open()
             message(self, "无法完成清理", exc, QMessageBox.Icon.Warning)
 
-        self.run_task("关闭备份并清理缓存", cleanup, cleaned, on_error=failed, on_done=release)
+        self.run_task(
+            "关闭备份并清理缓存",
+            cleanup,
+            cleaned,
+            status_phase=ProgressPhase.CLOSE_BACKUP,
+            on_error=failed,
+            on_done=release,
+        )
 
     def clear_opened_files(self, *, clear_images=True):
         if clear_images:
@@ -2163,6 +2116,7 @@ class MainWindow(QMainWindow):
                     paths, domain, parent, collision=policy, progress=progress, cancel=cancel
                 ),
                 lambda _: self.refresh(),
+                status_phase=ProgressPhase.ADD_ITEMS,
             )
 
     def new_folder(self):
@@ -2278,6 +2232,7 @@ class MainWindow(QMainWindow):
                 "删除项目",
                 lambda progress, cancel: self.session.delete(tokens),
                 lambda _: self.refresh(focus_browser=focus_browser),
+                status_phase=ProgressPhase.DELETE_ITEMS,
             )
 
     def pending_context_menu(self, point):
@@ -2345,12 +2300,14 @@ class MainWindow(QMainWindow):
                 "放弃更改",
                 lambda progress, cancel: session.revert(plan, progress=progress, cancel=cancel),
                 lambda _: self.refresh_after_revert(directory.token if directory else None),
+                status_phase=ProgressPhase.DISCARD,
             )
 
         self.run_task(
             "准备放弃更改",
             lambda progress, cancel: session.plan_revert(token, cancel=cancel),
             prepared,
+            status_phase=ProgressPhase.PREPARE_DISCARD,
         )
 
     def discard(self):
@@ -2392,6 +2349,7 @@ class MainWindow(QMainWindow):
                 lambda _: self.statusBar().setToolTip(
                     self.language_context.translate("Exported to {path}", path=target)
                 ),
+                status_phase=ProgressPhase.EXPORT_ITEMS,
             )
 
     def open_file(self, *, external=False):
@@ -2561,7 +2519,9 @@ class MainWindow(QMainWindow):
             if resources["snapshot"]:
                 shutil.rmtree(resources["snapshot"].directory, ignore_errors=True)
 
-        self.run_task("打开文件", prepare, opened, on_done=cleanup)
+        self.run_task(
+            "打开文件", prepare, opened, status_phase=ProgressPhase.OPEN_FILE, on_done=cleanup
+        )
 
     def close_readonly_viewers(self, after):
         if self._readonly_closing:
@@ -2695,7 +2655,9 @@ class MainWindow(QMainWindow):
                 shutil.rmtree(directory, ignore_errors=True)
 
         if prepared is None:
-            self.run_task("打开文件", prepare, opened, on_done=cleanup)
+            self.run_task(
+                "打开文件", prepare, opened, status_phase=ProgressPhase.OPEN_FILE, on_done=cleanup
+            )
         else:
             directory.mkdir(parents=True, exist_ok=True)
             try:
@@ -3100,6 +3062,7 @@ class MainWindow(QMainWindow):
                         tokens, domain, parent, collision=policy
                     ),
                     lambda _: self.refresh(),
+                    status_phase=ProgressPhase.MOVE_ITEMS,
                 )
                 return True
             except (ValueError, KeyError, TypeError, BackupError) as exc:
@@ -3122,7 +3085,9 @@ class MainWindow(QMainWindow):
         )
 
     def outgoing_transfer_started(self, token):
-        self.track_status_job(token, "正在向其他备份复制项目…", connect_progress=False)
+        self.track_status_job(
+            token, ProgressMessage(ProgressPhase.COPY_FROM), connect_progress=False
+        )
 
     def borrow_transfer(self, session_id):
         source = self.manager.window_for_session(session_id)
@@ -3161,7 +3126,11 @@ class MainWindow(QMainWindow):
                 borrowed.copy_to(session, tokens, domain, parent, policy, progress, cancel)
 
             job = self.run_task(
-                "复制项目到当前备份", copy, lambda _: self.refresh(), on_done=borrowed.release
+                "复制项目到当前备份",
+                copy,
+                lambda _: self.refresh(),
+                status_phase=ProgressPhase.COPY_TO,
+                on_done=borrowed.release,
             )
             borrowed.started = job is not None
             return borrowed.started
@@ -3204,6 +3173,7 @@ class MainWindow(QMainWindow):
             "导出项目",
             export,
             done,
+            status_phase=ProgressPhase.EXPORT_ITEMS,
             on_done=loop.quit,
         )
         if job is None:
@@ -3291,7 +3261,7 @@ class MainWindow(QMainWindow):
                     progress(ProgressMessage(ProgressPhase.CLEANUP), number, len(paths))
                     shutil.rmtree(path)
 
-        self.run_task("清理旧会话缓存", cleanup, on_done=after)
+        self.run_task("清理旧会话缓存", cleanup, status_phase=ProgressPhase.CLEANUP, on_done=after)
 
 
 def main():

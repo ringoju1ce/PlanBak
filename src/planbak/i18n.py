@@ -8,6 +8,8 @@ from importlib.resources import files
 
 from PySide6.QtCore import QLocale, QObject, Signal
 
+from .progress import ProgressMessage, ProgressPhase
+
 ENGLISH = "en"
 SIMPLIFIED_CHINESE = "zh_CN"
 SUPPORTED_LANGUAGES = (SIMPLIFIED_CHINESE, ENGLISH)
@@ -65,3 +67,41 @@ class LanguageContext(QObject):
             if source
             else str(error)
         )
+
+
+_PROGRESS_LABELS = {
+    ProgressPhase.READ: "Reading backup…",
+    ProgressPhase.INDEX: "Building backup index…",
+    ProgressPhase.COPY_BACKUP: "Creating backup copy…",
+    ProgressPhase.EXPORT: "Exporting: {name}",
+    ProgressPhase.ESTIMATE: "Estimating backup size…",
+    ProgressPhase.COPY_OUTPUT: "Copying backup to output folder…",
+    ProgressPhase.WRITE: "Writing: {name}",
+    ProgressPhase.VERIFY: "Repacking and verifying manifest…",
+    ProgressPhase.BASELINE: "Establishing the new save baseline…",
+    ProgressPhase.APPLY: "Applying changes…",
+    ProgressPhase.UPDATE_CHANGES: "Updating changes…",
+    ProgressPhase.ADD: "Adding: {name}",
+    ProgressPhase.LOAD_IMAGE: "Loading file: {name}",
+    ProgressPhase.OPEN_FILE: "Opening file…",
+    ProgressPhase.CLEANUP: "Cleaning old session cache…",
+    ProgressPhase.COPY_TO: "Copying items to this backup…",
+    ProgressPhase.COPY_FROM: "Copying items to another backup…",
+    ProgressPhase.WORKING: "Working…",
+    ProgressPhase.STAGE_EXTERNAL: "Applying external edits…",
+    ProgressPhase.CLOSE_BACKUP: "Closing backup and clearing cache…",
+    ProgressPhase.ADD_ITEMS: "Adding items…",
+    ProgressPhase.DELETE_ITEMS: "Deleting items…",
+    ProgressPhase.DISCARD: "Discarding changes…",
+    ProgressPhase.PREPARE_DISCARD: "Preparing to discard changes…",
+    ProgressPhase.EXPORT_ITEMS: "Exporting items…",
+    ProgressPhase.RELOAD_FILE: "Reloading file…",
+    ProgressPhase.OPEN_ITEM: "Opening item…",
+    ProgressPhase.SAVE_EXTERNAL: "Saving external edits…",
+    ProgressPhase.MOVE_ITEMS: "Moving items…",
+    ProgressPhase.APPLY_CHANGES: "Apply Changes",
+}
+
+
+def translate_progress(context: LanguageContext, message: ProgressMessage) -> str:
+    return context.translate(_PROGRESS_LABELS[message.phase], **message.values)

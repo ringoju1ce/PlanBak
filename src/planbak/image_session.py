@@ -39,11 +39,7 @@ class ImageWindows:
         return self.cache
 
     def open(self, token):
-        if (
-            self.owner._readonly_closing
-            or self.owner._transitioning
-            or self.owner.transfers.active
-        ):
+        if self.owner._readonly_closing or self.owner._transitioning or self.owner.transfers.active:
             return None
         if viewer := self.reuse(token):
             return viewer
@@ -60,9 +56,7 @@ class ImageWindows:
         cache = self.session_cache()
 
         def load(current, cancel, *, force=False, progress=None, on_miss=None):
-            return cache.load(
-                current, cancel, force=force, progress=progress, on_miss=on_miss
-            )
+            return cache.load(current, cancel, force=force, progress=progress, on_miss=on_miss)
 
         def accept(viewer, image, region=False):
             allocations = {image.cacheKey(): image.sizeInBytes()}
@@ -111,4 +105,4 @@ class ImageWindows:
         self.owner.untrack_status_job(task)
 
     def _prefetch_started(self, task, name):
-        self.owner.track_status_job(task, "", connect_progress=False, prefetch_name=name)
+        self.owner.track_status_job(task, None, connect_progress=False, prefetch_name=name)

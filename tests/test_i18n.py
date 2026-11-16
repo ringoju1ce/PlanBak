@@ -298,7 +298,9 @@ def test_main_language_switch_preserves_navigation_and_progress(factory, qtbot, 
     original_location = w.current_location()
     old_rows = w.model.rows
     marker = object()
-    w._status_jobs[marker] = ('正在建立备份索引…', 5, 10)
+    from planbak.progress import ProgressMessage, ProgressPhase
+
+    w._status_jobs[marker] = (ProgressMessage(ProgressPhase.INDEX), 5, 10)
     w.update_work_status()
     w.language_context.set_language(ENGLISH)
     assert w.current_location() == original_location

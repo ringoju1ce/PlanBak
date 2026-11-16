@@ -10,6 +10,7 @@ from PySide6.QtGui import QDesktopServices
 from .backup import digest
 from .codec import BackupError
 from .dialogs import FixedMessageBox as QMessageBox
+from .progress import ProgressPhase
 
 
 def file_stamp(path):
@@ -228,6 +229,7 @@ class ExternalEdits:
                     record.token, record.path, cancel
                 ),
                 staged,
+                status_phase=ProgressPhase.SAVE_EXTERNAL,
             )
         elif box.clickedButton() == ignore:
             record.fingerprint, record.stamp, record.unreviewed = fingerprint, stamp, False

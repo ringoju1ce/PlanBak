@@ -377,22 +377,25 @@ def test_direct_install_failure_has_no_recovery_and_does_not_touch_original(back
 
 def test_progress_phase_changes_are_not_throttled(qapp, monkeypatch):
     from planbak.app import Task
+    from planbak.progress import ProgressMessage, ProgressPhase
     monkeypatch.setattr('planbak.app.time.monotonic', lambda: 100)
     def work(progress, cancel):
-        progress('读取备份…', 0, 0)
-        progress('写入：a', 1, 3)
-        progress('写入：b', 2, 3)
-        progress('正在应用更改…', 0, 0)
+        progress(ProgressMessage(ProgressPhase.READ), 0, 0)
+        progress(ProgressMessage(ProgressPhase.WRITE, name='a'), 1, 3)
+        progress(ProgressMessage(ProgressPhase.WRITE, name='b'), 2, 3)
+        progress(ProgressMessage(ProgressPhase.APPLY), 0, 0)
     task = Task(work)
     messages = []
     task.progress.connect(lambda text, *args: messages.append(text))
     task.run()
-    assert messages == ['读取备份…', '写入：a', '正在应用更改…']
+    assert [message.phase for message in messages] == [ProgressPhase.READ, ProgressPhase.WRITE, ProgressPhase.APPLY]
 
 
 @pytest.mark.parametrize('width', [1160, 1788])
 def test_status_keeps_backup_summary_and_places_work_near_three_quarters(window, qtbot, width):
     from PySide6.QtCore import QPoint
+
+    from planbak.progress import ProgressMessage, ProgressPhase
     w = window
     w.resize(width, 760)
     qtbot.waitUntil(lambda: w.width() == width)
@@ -400,7 +403,7 @@ def test_status_keeps_backup_summary_and_places_work_near_three_quarters(window,
     assert '原始备份' in w.backup_status.text() and '个项目' in w.backup_status.text()
     assert '未加密' in w.backup_status.text()
     job = object()
-    w._status_jobs[job] = ('正在创建备份副本…', 1, 2)
+    w._status_jobs[job] = (ProgressMessage(ProgressPhase.COPY_BACKUP), 1, 2)
     w.update_work_status()
     qtbot.waitUntil(lambda: w.work_progress.isVisible())
     qtbot.waitUntil(lambda: abs(w.work_panel.x() - w.status_panel.width() * 0.75) <= 1)
@@ -410,11 +413,11 @@ def test_status_keeps_backup_summary_and_places_work_near_three_quarters(window,
     assert line - label_right == 8
     assert w.summary_panel.width() == w.work_panel.x()
     initial_line = line
-    w._status_jobs[job] = ('读取备份…', 1, 2)
+    w._status_jobs[job] = (ProgressMessage(ProgressPhase.READ), 1, 2)
     w.update_work_status()
     qtbot.waitUntil(lambda: w.work_progress.mapTo(w, QPoint()).x() == initial_line)
     assert w.work_label.mapTo(w, QPoint(w.work_label.width(), 0)).x() == initial_line - 8
-    w._status_jobs[job] = ('正在创建备份副本…', 1, 2)
+    w._status_jobs[job] = (ProgressMessage(ProgressPhase.COPY_BACKUP), 1, 2)
     w.update_work_status()
     before = w.backup_status.text()
     w.session.new_directory('HomeDomain', '', 'status-update')
@@ -430,16 +433,16 @@ def test_status_keeps_backup_summary_and_places_work_near_three_quarters(window,
 
 def test_prefetch_priority_is_explicit_and_localized(window):
     from planbak.i18n import ENGLISH, SIMPLIFIED_CHINESE
+    from planbak.progress import ProgressMessage, ProgressPhase
 
     w = window
     w.language_context.set_language(SIMPLIFIED_CHINESE)
     prefetch, foreground = object(), object()
-    w.track_status_job(prefetch, "", connect_progress=False, prefetch_name="image.heic")
+    w.track_status_job(prefetch, None, connect_progress=False, prefetch_name="image.heic")
     assert w.work_label.text() == "预加载文件：image.heic"
     assert not w.work_progress.isVisible()
-    # A foreground label that happens to look like the old prefetch message stays foreground.
-    w.track_status_job(foreground, "预加载文件：ordinary", connect_progress=False)
-    assert w.work_label.text() == "预加载文件：ordinary"
+    w.track_status_job(foreground, ProgressMessage(ProgressPhase.LOAD_IMAGE, name="预加载文件：ordinary"), connect_progress=False)
+    assert w.work_label.text() == "正在加载文件：预加载文件：ordinary"
     assert w.work_progress.isVisible()
     w.untrack_status_job(foreground)
     w.language_context.set_language(ENGLISH)
