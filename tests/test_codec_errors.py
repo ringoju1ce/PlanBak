@@ -25,12 +25,12 @@ def test_malformed_keybag_class_fields_raise_backup_error(class_id, wrap):
     )
     if class_id is not None:
         data += field(b"CLAS", class_id)
-    with pytest.raises(BackupError, match="密钥包已损坏"):
+    with pytest.raises(BackupError, match="keybag is damaged"):
         Keybag(data, "synthetic-password")
 
 
 def test_keybag_missing_salt_raises_backup_error():
-    with pytest.raises(BackupError, match="派生盐值"):
+    with pytest.raises(BackupError, match="derivation salt"):
         Keybag(field(b"ITER", struct.pack(">I", 1)), "synthetic-password")
 
 
@@ -45,7 +45,7 @@ def test_corrupt_encrypted_payload_reports_backup_error_and_cleans_output(tmp_pa
     ciphertext = encryptor.update(bytes(16)) + encryptor.finalize()
     source, target = tmp_path / "ciphertext", tmp_path / "output"
     source.write_bytes(ciphertext[:-1] if truncate else ciphertext)
-    with pytest.raises(BackupError, match="损坏或不完整"):
+    with pytest.raises(BackupError, match="damaged or incomplete"):
         crypto_file(source, target, key, encrypt=False)
     assert source.exists() and not target.exists()
 

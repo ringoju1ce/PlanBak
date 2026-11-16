@@ -28,7 +28,9 @@ MAX_METADATA_DEPTH = 128
 class BackupError(Exception):
     """An actionable backup/operation error suitable for display."""
 
-    def __init__(self, message, *, english=None, values=None):
+    def __init__(self, message=None, *, english=None, values=None):
+        if message is None:
+            message = english.format(**(values or {})) if english else ""
         super().__init__(message)
         self.translation_source = english
         self.translation_values = values or {}
@@ -49,25 +51,19 @@ def file_id(domain: str, path: str) -> str:
 
 def safe_path(path: str, *, root: bool = True) -> str:
     if not isinstance(path, str) or "\x00" in path:
-        raise BackupError(
-            "路径包含不受支持的字符", english="The path contains unsupported characters"
-        )
+        raise BackupError(english="The path contains unsupported characters")
     if os.name == "nt" and ("\\" in path or ":" in path):
         raise BackupError(
-            "此 iOS 路径无法安全映射到 Windows 文件系统",
             english="This iOS path cannot be safely mapped to a Windows filesystem",
         )
     if path.startswith("/") or any(p in (".", "..") for p in path.split("/")):
         raise BackupError(
-            "路径不能是绝对路径或包含 . / ..",
             english="The path cannot be absolute or contain . / ..",
         )
     if not root and not path:
-        raise BackupError("名称不能为空", english="The name cannot be empty")
+        raise BackupError(english="The name cannot be empty")
     if path and any(not p for p in path.split("/")):
-        raise BackupError(
-            "路径包含空的文件夹名称", english="The path contains an empty folder name"
-        )
+        raise BackupError(english="The path contains an empty folder name")
     return path
 
 
@@ -96,7 +92,6 @@ def crypto_file(
                         plain = pad.update(transform.update(block))
                     except ValueError as exc:
                         raise BackupError(
-                            "加密备份数据已损坏或不完整，无法解密",
                             english="Encrypted backup data is damaged or incomplete and cannot be decrypted",
                         ) from exc
                     dst.write(plain)
@@ -109,7 +104,6 @@ def crypto_file(
                     plain = pad.update(transform.finalize()) + pad.finalize()
                 except ValueError as exc:
                     raise BackupError(
-                        "加密备份数据已损坏或不完整，无法解密",
                         english="Encrypted backup data is damaged or incomplete and cannot be decrypted",
                     ) from exc
                 dst.write(plain)
@@ -127,14 +121,12 @@ class Keybag:
         offset = 0
         while offset < len(data):
             if offset + 8 > len(data):
-                raise BackupError(
-                    "BackupKeyBag 格式损坏", english="The BackupKeyBag format is damaged"
-                )
+                raise BackupError(english="The BackupKeyBag format is damaged")
             tag = data[offset : offset + 4]
             length = struct.unpack_from(">I", data, offset + 4)[0]
             offset += 8
             if length > len(data) - offset:
-                raise BackupError("BackupKeyBag 长度无效", english="Invalid BackupKeyBag length")
+                raise BackupError(english="Invalid BackupKeyBag length")
             value = data[offset : offset + length]
             offset += length
             if tag == b"UUID":
@@ -151,13 +143,11 @@ class Keybag:
             raw = attrs.get(tag)
             if not isinstance(raw, bytes) or len(raw) != 4:
                 raise BackupError(
-                    "不支持此备份的密钥派生格式",
                     english="The backup key derivation format is not supported",
                 )
             count = struct.unpack(">I", raw)[0]
             if not 1 <= count <= maximum:
                 raise BackupError(
-                    "备份的密钥派生迭代次数超出安全范围",
                     english="The backup key derivation iteration count is outside the safe range",
                 )
             return count
@@ -165,7 +155,6 @@ class Keybag:
         salt = attrs.get(b"SALT")
         if not isinstance(salt, bytes) or not salt:
             raise BackupError(
-                "备份密钥包缺少有效的派生盐值",
                 english="The backup keybag is missing a valid derivation salt",
             )
         secret = password.encode("utf-8")
@@ -173,9 +162,7 @@ class Keybag:
             secret = hashlib.pbkdf2_hmac(
                 "sha256", secret, attrs[b"DPSL"], number(b"DPIC", 50_000_000), 32
             )
-        derived = hashlib.pbkdf2_hmac(
-            "sha1", secret, salt, number(b"ITER", 10_000_000), 32
-        )
+        derived = hashlib.pbkdf2_hmac("sha1", secret, salt, number(b"ITER", 10_000_000), 32)
         self.keys: dict[int, bytes] = {}
         try:
             for item in classes:
@@ -187,34 +174,30 @@ class Keybag:
                     self.keys[clas] = aes_key_unwrap(derived, item[b"WPKY"])
         except (InvalidUnwrap, ValueError, KeyError, struct.error) as exc:
             raise BackupError(
-                "备份密码不正确，或密钥包已损坏",
                 english="The backup password is incorrect or the keybag is damaged",
             ) from exc
         if not self.keys:
             raise BackupError(
-                "备份没有可用的密码保护密钥",
                 english="The backup has no usable password-protected key",
             )
 
     def unwrap(self, wrapped: bytes) -> tuple[int, bytes]:
         if len(wrapped) < 28:
-            raise BackupError("文件加密密钥无效", english="Invalid file encryption key")
+            raise BackupError(english="Invalid file encryption key")
         clas = struct.unpack_from("<I", wrapped)[0]
         if clas not in self.keys:
             raise BackupError(
-                f"缺少保护类别 {clas} 的密钥",
                 english="Missing key for protection class {class_id}",
                 values={"class_id": clas},
             )
         try:
             return clas, aes_key_unwrap(self.keys[clas], wrapped[4:])
         except InvalidUnwrap as exc:
-            raise BackupError("文件密钥校验失败", english="File key verification failed") from exc
+            raise BackupError(english="File key verification failed") from exc
 
     def new_key(self, clas: int) -> tuple[bytes, bytes]:
         if clas not in self.keys:
             raise BackupError(
-                f"不能为保护类别 {clas} 创建文件",
                 english="Cannot create a file for protection class {class_id}",
                 values={"class_id": clas},
             )
@@ -228,7 +211,6 @@ class Metadata:
     def __init__(self, blob: bytes):
         if len(blob) > MAX_METADATA_BYTES:
             raise BackupError(
-                "文件元数据超过程序的 8 MiB 资源上限",
                 english="File metadata exceeds the application’s 8 MiB limit",
             )
         if blob.startswith(b"bplist00") and len(blob) >= 32:
@@ -236,7 +218,6 @@ class Metadata:
             count = int.from_bytes(blob[-24:-16], "big")
             if count > MAX_METADATA_OBJECTS:
                 raise BackupError(
-                    "文件元数据的对象数量超过资源上限",
                     english="File metadata contains too many objects",
                 )
         try:
@@ -250,7 +231,6 @@ class Metadata:
                 raise ValueError("not MBFile")
         except (ValueError, KeyError, TypeError, IndexError, AttributeError, RecursionError) as exc:
             raise BackupError(
-                "文件元数据不是支持的 MBFile 归档",
                 english="File metadata is not a supported MBFile archive",
             ) from exc
 
@@ -262,7 +242,6 @@ class Metadata:
             value, depth = pending.pop()
             if depth > MAX_METADATA_DEPTH:
                 raise BackupError(
-                    "文件元数据的嵌套深度超过资源上限",
                     english="File metadata exceeds the nesting limit",
                 )
             if not isinstance(value, (list, dict)) or id(value) in visited:
@@ -271,7 +250,6 @@ class Metadata:
             items += len(value) * (2 if isinstance(value, dict) else 1)
             if items > MAX_METADATA_ITEMS:
                 raise BackupError(
-                    "文件元数据的容器条目数量超过资源上限",
                     english="File metadata exceeds the container entry limit",
                 )
             children = value.values() if isinstance(value, dict) else value
@@ -317,12 +295,10 @@ class Metadata:
         # 同一约束用于输入和发布，不能生成程序无法重新打开的归档。
         if len(blob) > MAX_METADATA_BYTES:
             raise BackupError(
-                "修改后的文件元数据超过程序的 8 MiB 资源上限，未应用更改",
                 english="Modified file metadata exceeds the 8 MiB limit; changes were not applied",
             )
         if int.from_bytes(blob[-24:-16], "big") > MAX_METADATA_OBJECTS:
             raise BackupError(
-                "修改后的文件元数据对象数量超过资源上限，未应用更改",
                 english="Modified file metadata contains too many objects; changes were not applied",
             )
         return blob

@@ -125,7 +125,7 @@ def test_wrong_password_and_detection(tmp_path):
 
     root = make_backup(tmp_path / "encrypted", True)
     assert detect_backups(tmp_path) == [root]
-    with pytest.raises(BackupError, match="密码"):
+    with pytest.raises(BackupError, match="password"):
         BackupSession(root, "wrong")
     for path in ["../outside", "a/../../x", "/absolute", "a//b", "nul\x00"]:
         with pytest.raises(BackupError):

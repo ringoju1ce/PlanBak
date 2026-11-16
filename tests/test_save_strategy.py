@@ -545,9 +545,9 @@ def test_previous_backup_roots_remain_protected_after_switch(backup_root, tmp_pa
         session.use_copy(copied)
         token = session.at("HomeDomain", "Documents/a.txt").token
         session.stage_bytes(token, b"changed")
-        with pytest.raises(BackupError, match="受保护的备份重叠"):
+        with pytest.raises(BackupError, match="overlap a protected backup"):
             session.create_copy(backup_root / "nested-copy")
-        with pytest.raises(BackupError, match="受保护的备份重叠"):
+        with pytest.raises(BackupError, match="overlap a protected backup"):
             session.save(backup_root / "nested-save")
         alias = tmp_path / "source-alias"
         try:
@@ -555,9 +555,9 @@ def test_previous_backup_roots_remain_protected_after_switch(backup_root, tmp_pa
         except OSError:
             pass  # Creating symlinks may require special permissions on Windows.
         else:
-            with pytest.raises(BackupError, match="受保护的备份重叠"):
+            with pytest.raises(BackupError, match="overlap a protected backup"):
                 session.create_copy(alias / "nested-alias")
-        with pytest.raises(BackupError, match="受保护的备份重叠"):
+        with pytest.raises(BackupError, match="overlap a protected backup"):
             session.use_copy(replace(copied, source=session.root, path=backup_root))
         assert session.root == copied.path and session.dirty
         assert hashes(backup_root) == before

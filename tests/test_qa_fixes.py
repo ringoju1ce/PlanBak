@@ -300,7 +300,7 @@ def test_output_cannot_enter_another_live_session_workspace(tmp_path):
     try:
         first.new_directory('HomeDomain','','pending')
         for operation in (first.save,first.create_copy):
-            with pytest.raises(BackupError,match='临时'):
+            with pytest.raises(BackupError,match='session temporary folder'):
                 operation(second.workspace/'output')
         assert not (second.workspace/'output').exists()
     finally:
@@ -401,7 +401,7 @@ def test_metadata_crossing_resource_budget_is_not_published(tmp_path,direct):
             s.use_copy(s.create_copy(tmp_path/'copy'))
         before=hashlib.sha256((s.root/'Manifest.db').read_bytes()).digest()
         s.stage_bytes(s.at('HomeDomain','Documents/a.txt').token,b'edit')
-        with pytest.raises(BackupError,match='元数据'):
+        with pytest.raises(BackupError,match='metadata'):
             s.save(None if direct else tmp_path/'rejected-output')
         assert s.dirty
         assert hashlib.sha256((s.root/'Manifest.db').read_bytes()).digest()==before
@@ -416,7 +416,7 @@ def test_metadata_object_count_rejected_before_plistlib_allocates(monkeypatch):
     blob=bytearray(archive(data=b'qa'))
     blob[-24:-16]=(module.MAX_METADATA_OBJECTS+1).to_bytes(8,'big')
     monkeypatch.setattr(module.plistlib,'loads',lambda *a:pytest.fail('object table must be rejected before parsing'))
-    with pytest.raises(BackupError,match='对象数量'):
+    with pytest.raises(BackupError,match='objects'):
         module.Metadata(bytes(blob))
 
 
@@ -429,5 +429,5 @@ def test_metadata_container_and_depth_budgets():
                 value=[value]
         blob=plistlib.loads(archive(data=b'qa'))
         blob['$objects'].append(value)
-        with pytest.raises(BackupError,match='元数据'):
+        with pytest.raises(BackupError,match='metadata'):
             module.Metadata(plistlib.dumps(blob,fmt=plistlib.FMT_BINARY))

@@ -63,7 +63,6 @@ def check_persistent_location(destination, workspace=None):
     destination = Path(destination).expanduser().resolve()
     if workspace is not None and destination.is_relative_to(Path(workspace).resolve()):
         raise BackupError(
-            "备份输出不能位于会话临时文件夹内",
             english="The backup output cannot be inside a session temporary folder",
         )
     for parent in (destination, *destination.parents):
@@ -73,7 +72,6 @@ def check_persistent_location(destination, workspace=None):
                 value = json.loads(marker.read_text())
                 if isinstance(value, dict) and value.get("application") == "PlanBak":
                     raise BackupError(
-                        "备份输出不能位于会话临时文件夹内",
                         english="The backup output cannot be inside a session temporary folder",
                     )
         except (OSError, ValueError):
@@ -86,7 +84,6 @@ def check_backup_overlap(destination, roots):
         root = Path(root).resolve()
         if destination == root or root in destination.parents or destination in root.parents:
             raise BackupError(
-                "保存位置不能与受保护的备份重叠",
                 english="The save location cannot overlap a protected backup",
             )
 
@@ -95,7 +92,6 @@ def output_location(source, destination, *, workspace=None, protected_roots=()):
     destination = Path(destination).expanduser().absolute()
     if destination.exists() or destination.is_symlink():
         raise BackupError(
-            "保存目标已存在，请选择一个新的文件夹名称",
             english="The destination already exists; choose a new folder name",
         )
     destination = destination.parent.resolve() / destination.name
@@ -118,7 +114,6 @@ def copy_backup(source, destination, stamp, progress, cancel=None, *, container=
     destination = output_location(source, destination)
     if backup_stamp(source) != stamp:
         raise BackupError(
-            "原备份在打开后已改变，请重新打开备份",
             english="The original backup changed after opening; reopen the backup",
         )
     progress(ProgressMessage(ProgressPhase.COPY_BACKUP), 0, 0)
@@ -130,7 +125,6 @@ def copy_backup(source, destination, stamp, progress, cancel=None, *, container=
             total += path.stat().st_size
     if shutil.disk_usage(destination.parent).free < total:
         raise BackupError(
-            "目标磁盘空间不足以创建备份副本",
             english="There is not enough disk space to create the backup copy",
         )
     work = Path(tempfile.mkdtemp(prefix=".planbak-save-", dir=destination.parent))
@@ -152,13 +146,11 @@ def copy_backup(source, destination, stamp, progress, cancel=None, *, container=
         check_cancel(cancel)
         if backup_stamp(source) != stamp or backup_stamp(backup) != stamp:
             raise BackupError(
-                "复制期间原备份发生变化，副本未发布",
                 english="The original backup changed during copying; the copy was not published",
             )
         write_marker(backup)
         if destination.exists() or destination.is_symlink():
             raise BackupError(
-                "保存目标已被创建，未覆盖现有文件夹",
                 english="The destination was created by another process; the existing folder was not overwritten",
             )
         work.rename(destination)

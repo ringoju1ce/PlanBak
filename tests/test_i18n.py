@@ -489,9 +489,9 @@ def test_backup_validation_error_remains_stable_and_translates():
 
     with pytest.raises(BackupError) as caught:
         safe_path('/absolute')
-    assert str(caught.value) == '路径不能是绝对路径或包含 . / ..'
+    assert str(caught.value) == 'The path cannot be absolute or contain . / ..'
     assert LanguageContext(ENGLISH).error(caught.value) == 'The path cannot be absolute or contain . / ..'
-    assert LanguageContext(SIMPLIFIED_CHINESE).error(caught.value) == str(caught.value)
+    assert LanguageContext(SIMPLIFIED_CHINESE).error(caught.value) == '路径不能是绝对路径或包含 . / ..'
 
 
 def test_dynamic_backup_error_translates_template_not_filename(tmp_path):
