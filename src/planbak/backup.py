@@ -706,14 +706,22 @@ class BackupSession(SessionOverlay):
             return exported
 
     def _new_metadata(self, entry):
-        parent = self.at(entry.domain, entry.parent)
-        template = self.metadata(parent) if parent else None
+        path = entry.parent
+        template = None
+        while True:
+            parent = self.at(entry.domain, path)
+            template = self.metadata(parent) if parent else None
+            if template or not path:
+                break
+            path = path.rpartition("/")[0]
         owner = (
             0
             if entry.domain in ("SystemPreferencesDomain", "RootDomain", "ManagedPreferencesDomain")
             else 501
         )
-        clas = template.get("ProtectionClass", 3) if template else 3
+        clas = (
+            3 if entry.kind == "file" else (template.get("ProtectionClass", 3) if template else 3)
+        )
         return Metadata.new(
             directory=entry.kind == "directory",
             timestamp=entry.mtime,
@@ -721,6 +729,28 @@ class BackupSession(SessionOverlay):
             gid=template.get("GroupID", owner) if template else owner,
             clas=clas,
         )
+
+    def _file_write_class(self, entry, meta):
+        clas = meta.get("ProtectionClass")
+        if type(clas) is not int:
+            raise BackupError(
+                f"文件的保护类别无效：{entry.name}",
+                english="The file has an invalid protection class: {name}",
+                values={"name": entry.name},
+            )
+        if self.encrypted and clas not in self.keybag.keys:
+            raise BackupError(
+                f"文件的保护类别 {clas} 在备份密钥包中没有对应密钥：{entry.name}",
+                english="The backup keybag has no key for the file's protection class {class_id}: {name}",
+                values={"class_id": clas, "name": entry.name},
+            )
+        if clas <= 0:
+            raise BackupError(
+                f"文件的保护类别无效：{entry.name}",
+                english="The file has an invalid protection class: {name}",
+                values={"name": entry.name},
+            )
+        return clas
 
     def estimate_save_bytes(self):
         return sum(p.stat().st_size for p in self.root.rglob("*") if p.is_file())
@@ -778,7 +808,9 @@ class BackupSession(SessionOverlay):
                 destination = self.root
             else:
                 destination = output_location(
-                    self.root, destination, workspace=self.workspace,
+                    self.root,
+                    destination,
+                    workspace=self.workspace,
                     protected_roots=self._protected_roots,
                 )
             check_persistent_location(destination, self.workspace)
@@ -849,12 +881,21 @@ class BackupSession(SessionOverlay):
                     for i, entry in enumerate(changed, 1):
                         check_cancel(cancel)
                         progress(f"写入：{entry.name}", i, len(changed))
-                        meta = self.metadata(entry) or self._new_metadata(entry)
+                        meta = self.metadata(entry)
+                        if meta is None:
+                            if entry.original_id:
+                                raise BackupError(
+                                    f"文件缺少原始元数据：{entry.name}",
+                                    english="The file's original metadata is missing: {name}",
+                                    values={"name": entry.name},
+                                )
+                            meta = self._new_metadata(entry)
                         fid = file_id(entry.domain, entry.path)
                         meta.set("RelativePath", entry.path)
                         if entry.kind == "file":
                             output = work / fid[:2] / fid
                             if entry.staged:
+                                clas = self._file_write_class(entry, meta)
                                 staged = checked_staged_path(entry)
                                 try:
                                     staged_size = staged.stat().st_size
@@ -863,10 +904,11 @@ class BackupSession(SessionOverlay):
                                     meta.set("LastStatusChange", int(time.time()))
                                     sha1 = digest(staged, "sha1", cancel)
                                     if self.encrypted:
-                                        clas = int(meta.get("ProtectionClass", 3))
                                         key, wrapped = self.keybag.new_key(clas)
                                         meta.set("EncryptionKey", wrapped)
-                                        crypto_file(staged, output, key, encrypt=True, cancel=cancel)
+                                        crypto_file(
+                                            staged, output, key, encrypt=True, cancel=cancel
+                                        )
                                     else:
                                         meta.root.pop("EncryptionKey", None)
                                         copy_file(staged, output, cancel)
