@@ -303,7 +303,10 @@ class DateValue(QWidget):
         if not all(
             control.hasAcceptableInput() for control in (self.date, self.time, self.fraction)
         ):
-            raise ValueError("请输入合法的 UTC 日期、时间及六位小数秒")
+            raise PlistValidationError(
+                "请输入合法的 UTC 日期、时间及六位小数秒",
+                english="Enter a valid UTC date, time, and six fractional digits",
+            )
         day, time = self.date.date(), self.time.time()
         return datetime(
             day.year(),
@@ -522,10 +525,15 @@ class ValueDialog(FixedDialog):
             if self.parent_kind == "Dictionary" and any(
                 n is not self.node and n.key == key for n in self.siblings
             ):
-                raise ValueError("该字典已存在同名键")
+                raise PlistValidationError(
+                    "该字典已存在同名键", english="This dictionary already contains that key"
+                )
             kind = self.type_field.currentText()
             if self.node.container and self.node.children and kind != self.node.kind:
-                raise ValueError("请先清空容器的子项目，再更改类型")
+                raise PlistValidationError(
+                    "请先清空容器的子项目，再更改类型",
+                    english="Remove the container's children before changing its type",
+                )
             children = self.node.children if kind == self.node.kind and self.node.container else []
             if kind in ("Dictionary", "Array", "Null"):
                 value = None
@@ -554,17 +562,13 @@ class ValueDialog(FixedDialog):
                 probe = {key: value}
                 encoded = plistlib.dumps(probe, fmt=fmt, sort_keys=False)
                 if not same_value(plistlib.loads(encoded), probe):
-                    raise ValueError("当前格式无法无损保存该值；XML 日期只支持整秒")
+                    raise PlistValidationError(
+                        "当前格式无法无损保存该值；XML 日期只支持整秒",
+                        english="This value cannot be saved without loss; XML dates support whole seconds only",
+                    )
             self.result_node = PlistNode(kind, key, value, children)
         except (ValueError, TypeError, OverflowError) as exc:
-            self._error_source = {
-                "该字典已存在同名键": "This dictionary already contains that key",
-                "请先清空容器的子项目，再更改类型": "Remove the container's children before changing its type",
-                "请输入合法的 UTC 日期、时间及六位小数秒": "Enter a valid UTC date, time, and six fractional digits",
-                "整数必须介于 -2⁶³ 和 2⁶⁴−1 之间": "The integer must be between -2⁶³ and 2⁶⁴−1",
-                "请输入有限实数": "Enter a finite real number",
-                "当前格式无法无损保存该值；XML 日期只支持整秒": "This value cannot be saved without loss; XML dates support whole seconds only",
-            }.get(str(exc))
+            self._error_source = getattr(exc, "translation_source", None)
             self.error.setText(
                 self.language_context.translate(self._error_source)
                 if self._error_source
@@ -729,14 +733,24 @@ class PlistEditor(DocumentWindow):
             while pending:
                 node = pending.pop()
                 if node.kind in ("UID", "Null"):
-                    raise ValueError(f"标准 plist XML 无法表示 {node.kind} 类型")
+                    raise PlistValidationError(
+                        f"标准 plist XML 无法表示 {node.kind} 类型",
+                        english="Standard plist XML cannot represent the {type} type",
+                        values={"type": node.kind},
+                    )
                 if node.kind == "Date" and node.value.microsecond:
-                    raise ValueError("此 Date 包含小数秒，XML 日期只支持整秒")
+                    raise PlistValidationError(
+                        "此 Date 包含小数秒，XML 日期只支持整秒",
+                        english="This Date contains fractional seconds; XML dates support whole seconds only",
+                    )
                 pending.extend(node.children)
             value = self.document.root.to_value()
             data = plistlib.dumps(value, fmt=plistlib.FMT_XML, sort_keys=False)
             if not same_value(parse_xml(data.decode("utf-8")), value):
-                raise ValueError("当前值无法无损转换为 XML（日期的小数秒会丢失）")
+                raise PlistValidationError(
+                    "当前值无法无损转换为 XML（日期的小数秒会丢失）",
+                    english="The current value cannot be converted to XML without losing fractional seconds",
+                )
             self._xml_cache = data.decode("utf-8")
             self.xml_reason = ""
             self._xml_reason_error = None
@@ -753,17 +767,11 @@ class PlistEditor(DocumentWindow):
         if error is None:
             self.xml_button.defaultAction().setToolTip(tr("Edit this plist as XML"))
             return
-        detail = str(error)
-        known = {
-            "此 Date 包含小数秒，XML 日期只支持整秒": "This Date contains fractional seconds; XML dates support whole seconds only",
-            "当前值无法无损转换为 XML（日期的小数秒会丢失）": "The current value cannot be converted to XML without losing fractional seconds",
-        }
-        if detail in known:
-            detail = tr(known[detail])
-        elif detail in ("标准 plist XML 无法表示 UID 类型", "标准 plist XML 无法表示 Null 类型"):
-            detail = tr(
-                "Standard plist XML cannot represent the {type} type", type=detail.split(" ")[-2]
-            )
+        detail = (
+            error.localized(tr)
+            if isinstance(error, PlistXmlError)
+            else self.language_context.error(error)
+        )
         self.xml_button.defaultAction().setToolTip(
             tr("XML mode is unavailable: {reason}", reason=detail)
         )

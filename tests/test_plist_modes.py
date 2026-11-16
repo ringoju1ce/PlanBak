@@ -74,12 +74,24 @@ def test_xml_entities_unicode_and_duplicate_keys():
     assert parse_xml("<plist><dict><key>中文</key><string>😀 &amp; x</string></dict></plist>") == {
         "中文": "😀 & x"
     }
-    with pytest.raises(PlistXmlError, match="重复键"):
+    with pytest.raises(PlistXmlError, match="Duplicate dictionary key"):
         parse_xml("<plist><dict><key>a&amp;b</key><true/><key>a&#38;b</key><false/></dict></plist>")
-    with pytest.raises(PlistXmlError, match="实体"):
+    with pytest.raises(PlistXmlError, match="entities"):
         parse_xml(
             '<!DOCTYPE plist [<!ENTITY hidden SYSTEM "file:///etc/passwd">]><plist><string>&hidden;</string></plist>'
         )
+
+
+def test_xml_error_retains_parameters_independently_of_display_language():
+    from planbak.i18n import ENGLISH, SIMPLIFIED_CHINESE, LanguageContext
+
+    with pytest.raises(PlistXmlError) as caught:
+        parse_xml("<plist><dict><key>名字：{x}</key><true/><key>名字：{x}</key><false/></dict></plist>")
+    error = caught.value
+    assert error.source == "Duplicate dictionary key: {key}"
+    assert error.values == {"key": "名字：{x}"}
+    assert "重复键：名字：{x}" in error.localized(LanguageContext(SIMPLIFIED_CHINESE).translate)
+    assert "Duplicate dictionary key: 名字：{x}" in error.localized(LanguageContext(ENGLISH).translate)
 
 
 @pytest.mark.parametrize(

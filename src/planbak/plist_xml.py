@@ -36,42 +36,18 @@ from .document_ui import DocumentStatus, DocumentToolBar, translate_command
 
 
 class PlistXmlError(ValueError):
-    def __init__(self, message, line=1, column=1):
-        self.line, self.column, self.message = line, column, message
-        super().__init__(f"第 {line} 行，第 {column} 列：{message}")
+    def __init__(self, source, line=1, column=1, **values):
+        self.line, self.column = line, column
+        self.source, self.values = source, values
+        detail = source.format(**values) if values else source
+        super().__init__(f"Line {line}, column {column}: {detail}")
 
     def localized(self, translate):
-        known = {
-            "XML 编辑模式使用 UTF-8 编码，请修改 encoding 声明": "XML editing uses UTF-8; change the encoding declaration",
-            "根元素必须是唯一的 plist": "The root element must be a single plist",
-            "plist 必须且只能包含一个值": "A plist must contain exactly one value",
-            "字典键后必须是有效的值": "A dictionary key must be followed by a valid value",
-            "字典中的值必须有对应的 key": "A dictionary value must have a key",
-            "数组中必须是有效的 plist 值": "Arrays must contain valid plist values",
-            "此值不能包含子元素": "This value cannot contain child elements",
-            "不支持的元素属性": "Unsupported element attributes",
-            "此元素不能包含文本值": "This element cannot contain text",
-            "plist 必须包含一个值": "A plist must contain a value",
-            "字典键缺少对应的值": "A dictionary key is missing its value",
-            "不支持自定义或外部 XML 实体": "Custom or external XML entities are not supported",
-        }
-        message = self.message
-        if message in known:
-            message = translate(known[message])
-        elif message.startswith("不支持的 plist XML 元素："):
-            message = translate(
-                "Unsupported plist XML element: {tag}", tag=message.split("：", 1)[1]
-            )
-        elif message.startswith("字典中存在重复键："):
-            message = translate("Duplicate dictionary key: {key}", key=message.split("：", 1)[1])
-        elif message.startswith("无效的 ") and " 值：" in message:
-            tag, detail = message[len("无效的 ") :].split(" 值：", 1)
-            message = translate("Invalid {tag} value: {error}", tag=tag, error=detail)
         return translate(
             "Line {line}, column {column}: {message}",
             line=self.line,
             column=self.column,
-            message=message,
+            message=translate(self.source, **self.values),
         )
 
 
@@ -82,46 +58,46 @@ def parse_xml(text):
     values = {"dict", "array", "string", "integer", "real", "true", "false", "date", "data"}
     roots = 0
 
-    def fail(message, frame=None):
+    def fail(source, frame=None, **values):
         line, column = (
             (frame["line"], frame["column"])
             if frame
             else (parser.CurrentLineNumber, parser.CurrentColumnNumber + 1)
         )
-        raise PlistXmlError(message, line, column)
+        raise PlistXmlError(source, line, column, **values)
 
     def declaration(version, encoding, standalone):
         if encoding and encoding.lower().replace("-", "") != "utf8":
-            fail("XML 编辑模式使用 UTF-8 编码，请修改 encoding 声明")
+            fail("XML editing uses UTF-8; change the encoding declaration")
 
     def start(tag, attrs):
         nonlocal roots
         if not stack:
             if tag != "plist" or roots:
-                fail("根元素必须是唯一的 plist")
+                fail("The root element must be a single plist")
             roots += 1
         else:
             parent = stack[-1]
             if parent["tag"] == "plist":
                 if tag not in values or parent["count"]:
-                    fail("plist 必须且只能包含一个值")
+                    fail("A plist must contain exactly one value")
             elif parent["tag"] == "dict":
                 if parent["pending"]:
                     if tag not in values:
-                        fail("字典键后必须是有效的值")
+                        fail("A dictionary key must be followed by a valid value")
                     parent["pending"] = False
                 elif tag != "key":
-                    fail("字典中的值必须有对应的 key")
+                    fail("A dictionary value must have a key")
             elif parent["tag"] == "array":
                 if tag not in values:
-                    fail("数组中必须是有效的 plist 值")
+                    fail("Arrays must contain valid plist values")
             else:
-                fail("此值不能包含子元素")
+                fail("This value cannot contain child elements")
             parent["count"] += 1
         if tag not in values | {"plist", "key"}:
-            fail(f"不支持的 plist XML 元素：{tag}")
+            fail("Unsupported plist XML element: {tag}", tag=tag)
         if attrs and not (tag == "plist" and attrs == {"version": "1.0"}):
-            fail("不支持的元素属性")
+            fail("Unsupported element attributes")
         stack.append(
             dict(
                 tag=tag,
@@ -138,15 +114,15 @@ def parse_xml(text):
         frame = stack.pop()
         value = "".join(frame["text"])
         if tag in {"dict", "array", "plist", "true", "false"} and value.strip():
-            fail("此元素不能包含文本值", frame)
+            fail("This element cannot contain text", frame)
         if tag == "plist" and frame["count"] != 1:
-            fail("plist 必须包含一个值", frame)
+            fail("A plist must contain a value", frame)
         if tag == "dict" and frame["pending"]:
-            fail("字典键缺少对应的值", frame)
+            fail("A dictionary key is missing its value", frame)
         if tag == "key":
             parent = stack[-1]
             if value in parent["keys"]:
-                fail(f"字典中存在重复键：{value}", frame)
+                fail("Duplicate dictionary key: {key}", frame, key=value)
             parent["keys"].add(value)
             parent["pending"] = True
         try:
@@ -156,14 +132,14 @@ def parse_xml(text):
                 # Isolate scalar parsing to report the offending element's location.
                 plistlib.loads(f'<plist version="1.0"><{tag}>{value}</{tag}></plist>'.encode())
         except Exception as exc:
-            fail(f"无效的 {tag} 值：{exc}", frame)
+            fail("Invalid {tag} value: {error}", frame, tag=tag, error=str(exc))
 
     def characters(text):
         if stack:
             stack[-1]["text"].append(text)
 
     def entity(*args):
-        fail("不支持自定义或外部 XML 实体")
+        fail("Custom or external XML entities are not supported")
 
     parser.XmlDeclHandler = declaration
     parser.StartElementHandler = start

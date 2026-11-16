@@ -122,7 +122,10 @@ def test_plist_lazy_tree_data_import_export_and_shortcut(qtbot, tmp_path, monkey
     array.setExpanded(True)
     assert array.childCount() == 1 and array.child(0).childCount() == 0
     blob = root.child(1)
+    editor.tree.clearSelection()
     editor.tree.setCurrentItem(blob)
+    blob.setSelected(True)
+    assert editor.selected_node() is editor.document.root.children[1]
     path = tmp_path / "bytes.bin"
     path.write_bytes(b"\x00\xffnew")
     monkeypatch.setattr(FixedFileDialog, "getOpenFileName", lambda *a: (str(path), ""))
