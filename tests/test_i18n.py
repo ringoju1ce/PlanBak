@@ -699,3 +699,25 @@ def test_structured_error_templates_have_chinese_translations():
                     continue
                 assert fields(text) == fields(catalog[text]), f'{path.name}:{node.lineno}: {text}'
     assert not missing, '\n'.join(missing)
+
+
+def test_literal_translation_keys_have_chinese_entries():
+    import ast
+    import json
+    from pathlib import Path
+
+    source = Path(__file__).resolve().parents[1] / 'src' / 'planbak'
+    catalog = json.loads((source / 'translations' / 'zh_CN.json').read_text(encoding='utf-8'))
+    missing = []
+    for path in source.rglob('*.py'):
+        for node in ast.walk(ast.parse(path.read_text(encoding='utf-8'))):
+            if not isinstance(node, ast.Call) or not node.args:
+                continue
+            function = node.func
+            if not ((isinstance(function, ast.Name) and function.id == 'tr') or
+                    (isinstance(function, ast.Attribute) and function.attr == 'translate')):
+                continue
+            key = node.args[0]
+            if isinstance(key, ast.Constant) and isinstance(key.value, str) and key.value not in catalog:
+                missing.append(f'{path.name}:{node.lineno}: {key.value}')
+    assert not missing, '\n'.join(missing)

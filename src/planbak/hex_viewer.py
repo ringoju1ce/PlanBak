@@ -124,48 +124,79 @@ class HexViewer(DocumentWindow):
         self.available, self.stale = True, False
         self._status_source, self._status_values = None, {}
         layout = QVBoxLayout(self)
-        toolbar = self.toolbar = DocumentToolBar("十六进制导航", self)
+        toolbar = self.toolbar = DocumentToolBar(
+            self.language_context.translate("Hexadecimal navigation"), self
+        )
         self.previous_button = toolbar.command(
-            "上一页", lambda: self.go(max(0, self.offset - PAGE_SIZE)), icon="go-previous"
+            self.language_context.translate("Previous Page"),
+            lambda: self.go(max(0, self.offset - PAGE_SIZE)),
+            icon="go-previous",
         )
         self.next_button = toolbar.command(
-            "下一页", lambda: self.go(self.offset + PAGE_SIZE), icon="go-next"
+            self.language_context.translate("Next Page"),
+            lambda: self.go(self.offset + PAGE_SIZE),
+            icon="go-next",
         )
         toolbar.addSeparator()
         self.address = QLineEdit()
-        self.address.setPlaceholderText("偏移：十进制或 0x…")
-        self.address.setAccessibleName("跳转偏移")
-        self.address.setToolTip("输入十进制或 0x 开头的偏移，按 Enter 跳转；Ctrl+G 定位此输入框")
+        self.address.setPlaceholderText(self.language_context.translate("Offset: decimal or 0x…"))
+        self.address.setAccessibleName(self.language_context.translate("Jump to offset"))
+        self.address.setToolTip(
+            self.language_context.translate(
+                "Enter a decimal or 0x-prefixed offset and press Enter; Ctrl+G focuses this field."
+            )
+        )
         self.address.setMinimumWidth(
             self.address.fontMetrics().horizontalAdvance("0x00000000") + 24
         )
         self.address.returnPressed.connect(self.jump)
         toolbar.addWidget(self.address)
-        self.jump_button = toolbar.command("跳转", self.jump)
+        self.jump_button = toolbar.command(self.language_context.translate("Go"), self.jump)
         toolbar.addSeparator()
-        self.reload_button = toolbar.command("重新加载", self.reload_requested, icon="view-refresh")
+        self.reload_button = toolbar.command(
+            self.language_context.translate("Reload"), self.reload_requested, icon="view-refresh"
+        )
         layout.addWidget(toolbar)
-        search = self.search_toolbar = DocumentToolBar("十六进制搜索", self)
+        search = self.search_toolbar = DocumentToolBar(
+            self.language_context.translate("Hexadecimal search"), self
+        )
         self.search_mode = QComboBox()
-        self.search_mode.setAccessibleName("搜索内容类型")
-        self.search_mode.addItems(["十六进制字节", "UTF-8 文本"])
+        self.search_mode.setAccessibleName(self.language_context.translate("Search type"))
+        self.search_mode.addItems(
+            [
+                self.language_context.translate("Hexadecimal bytes"),
+                self.language_context.translate("UTF-8 text"),
+            ]
+        )
         search.addWidget(self.search_mode)
         self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("搜索内容（Ctrl+F）")
-        self.search_input.setAccessibleName("搜索内容")
-        self.search_input.setToolTip("Enter 查找下一个匹配；Ctrl+F 定位此输入框")
+        self.search_input.setPlaceholderText(self.language_context.translate("Search (Ctrl+F)"))
+        self.search_input.setAccessibleName(self.language_context.translate("Search text"))
+        self.search_input.setToolTip(
+            self.language_context.translate(
+                "Press Enter to find the next match; Ctrl+F focuses this field."
+            )
+        )
         self.search_input.returnPressed.connect(self.find_next)
         search.addWidget(self.search_input)
         self.find_previous_button = search.command(
-            "上一个", lambda: self.find_next(backwards=True), icon="go-previous"
+            self.language_context.translate("Previous"),
+            lambda: self.find_next(backwards=True),
+            icon="go-previous",
         )
-        self.find_next_button = search.command("下一个", self.find_next, icon="go-next")
-        self.cancel_button = search.command("取消搜索", self.cancel_search, icon="process-stop")
+        self.find_next_button = search.command(
+            self.language_context.translate("Next"), self.find_next, icon="go-next"
+        )
+        self.cancel_button = search.command(
+            self.language_context.translate("Cancel Search"),
+            self.cancel_search,
+            icon="process-stop",
+        )
         layout.addWidget(search)
         self.table = QTableView()
         self.model = HexModel(self)
         self.table.setModel(self.model)
-        self.table.setAccessibleName("十六进制字节与 ASCII")
+        self.table.setAccessibleName(self.language_context.translate("Hexadecimal bytes and ASCII"))
         self.table.setFont(QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont))
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)

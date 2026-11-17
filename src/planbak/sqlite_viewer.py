@@ -32,26 +32,22 @@ from PySide6.QtWidgets import (
 
 from .dialogs import DocumentWindow, FixedDialog
 from .document_ui import DocumentStatus, DocumentToolBar, document_buttons, translate_command
-from .i18n import LanguageContext
+from .i18n import SIMPLIFIED_CHINESE, LanguageContext
 from .pane_focus import BrowserPaneFocus
 from .sqlite_database import PAGE_SIZE, QueryResult, query, quote_identifier, schema
 from .viewer_tasks import ViewerTask
 
 
 def cell_text(value, limit=512, translate=None):
+    if translate is None:
+        translate = LanguageContext(SIMPLIFIED_CHINESE).translate
     if value is None:
         return "NULL"
     if isinstance(value, bytes):
-        prefix = (
-            translate("BLOB ({count} bytes)", count=len(value))
-            if translate
-            else f"BLOB ({len(value)} 字节)"
-        )
+        prefix = translate("BLOB ({count} bytes)", count=len(value))
         text = prefix + "  " + value[: limit // 2].hex(" ")
     elif isinstance(value, str):
-        text = (
-            value if value else (translate('"" (empty string)') if translate else '"" （空字符串）')
-        )
+        text = value if value else translate('"" (empty string)')
     else:
         text = str(value)
     return text[:limit] + ("…" if len(text) > limit else "")
@@ -125,18 +121,29 @@ class SQLiteViewer(DocumentWindow):
         self.mode = "table"
         self.objects = []
         self._pending_object = None
-        self.setWindowTitle(f"{name} — SQLite 查看器（只读）")
+        self.update_title()
         self.setModal(False)
         layout = QVBoxLayout(self)
-        toolbar = self.toolbar = DocumentToolBar("SQLite 操作", self)
-        self.reload_button = toolbar.command("重新加载", self.reload_requested, icon="view-refresh")
-        self.cancel_button = toolbar.command("取消查询", self.cancel_query, icon="process-stop")
+        toolbar = self.toolbar = DocumentToolBar(
+            self.language_context.translate("SQLite actions"), self
+        )
+        self.reload_button = toolbar.command(
+            self.language_context.translate("Reload"), self.reload_requested, icon="view-refresh"
+        )
+        self.cancel_button = toolbar.command(
+            self.language_context.translate("Cancel Query"), self.cancel_query, icon="process-stop"
+        )
         toolbar.stretch()
         layout.addWidget(toolbar)
         splitter = QSplitter()
         self.tree = QTreeWidget()
-        self.tree.setHeaderLabels(["表与视图", "类型"])
-        self.tree.setAccessibleName("数据库表与视图")
+        self.tree.setHeaderLabels(
+            [
+                self.language_context.translate("Tables and Views"),
+                self.language_context.translate("Type"),
+            ]
+        )
+        self.tree.setAccessibleName(self.language_context.translate("Database tables and views"))
         self.tree.setMinimumWidth(150)
         self.tree.setRootIsDecorated(False)
         self.tree.setTabKeyNavigation(False)
@@ -152,7 +159,7 @@ class SQLiteViewer(DocumentWindow):
         self.table = QTableView()
         self.model = ResultModel(self)
         self.table.setModel(self.model)
-        self.table.setAccessibleName("只读查询结果")
+        self.table.setAccessibleName(self.language_context.translate("Read-only query results"))
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.table.setTabKeyNavigation(False)
@@ -164,38 +171,54 @@ class SQLiteViewer(DocumentWindow):
         self.table.doubleClicked.connect(self.show_cell)
         self.table.horizontalHeader().setDefaultSectionSize(160)
         page_layout.addWidget(self.table)
-        pages = self.pages = DocumentToolBar("查询结果分页", self)
+        pages = self.pages = DocumentToolBar(
+            self.language_context.translate("Query result pages"), self
+        )
         self.previous_button = pages.command(
-            "上一页", lambda: self.load_page(-PAGE_SIZE), icon="go-previous"
+            self.language_context.translate("Previous Page"),
+            lambda: self.load_page(-PAGE_SIZE),
+            icon="go-previous",
         )
         self.next_button = pages.command(
-            "下一页", lambda: self.load_page(PAGE_SIZE), icon="go-next"
+            self.language_context.translate("Next Page"),
+            lambda: self.load_page(PAGE_SIZE),
+            icon="go-next",
         )
         self.page_label = QLabel()
         self.page_label.setTextFormat(Qt.TextFormat.PlainText)
         pages.addWidget(self.page_label)
         pages.stretch()
         page_layout.addWidget(pages)
-        self.tabs.addTab(page, "数据")
+        self.tabs.addTab(page, self.language_context.translate("Data"))
         self.structure = QPlainTextEdit()
         self.structure.setReadOnly(True)
-        self.structure.setAccessibleName("表结构与索引 SQL")
+        self.structure.setAccessibleName(
+            self.language_context.translate("Table structure and index SQL")
+        )
         self.structure.setFont(QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont))
-        self.tabs.addTab(self.structure, "结构与索引")
+        self.tabs.addTab(self.structure, self.language_context.translate("Structure and Indexes"))
         sql_page = QWidget()
         sql_layout = QVBoxLayout(sql_page)
         sql_layout.setContentsMargins(0, 0, 0, 0)
-        self.sql_hint = QLabel("输入单条只读 SELECT / WITH 查询；结果显示在“数据”中。")
+        self.sql_hint = QLabel(
+            self.language_context.translate(
+                "Enter a single read-only SELECT / WITH query; results appear under Data."
+            )
+        )
         sql_layout.addWidget(self.sql_hint)
         self.code = QPlainTextEdit()
-        self.code.setAccessibleName("只读 SQL 查询")
+        self.code.setAccessibleName(self.language_context.translate("Read-only SQL query"))
         self.code.setFont(QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont))
         self.code.setPlaceholderText("SELECT * FROM sqlite_schema;")
         sql_layout.addWidget(self.code)
-        query_bar = self.query_bar = DocumentToolBar("SQL 查询操作", self)
-        self.execute_button = query_bar.command("执行查询", self.execute_sql, hint="Ctrl+Return")
+        query_bar = self.query_bar = DocumentToolBar(
+            self.language_context.translate("SQL query actions"), self
+        )
+        self.execute_button = query_bar.command(
+            self.language_context.translate("Run Query"), self.execute_sql, hint="Ctrl+Return"
+        )
         sql_layout.addWidget(query_bar)
-        self.tabs.addTab(sql_page, "SQL 查询")
+        self.tabs.addTab(sql_page, self.language_context.translate("SQL Query"))
         splitter.addWidget(self.tabs)
         splitter.setStretchFactor(1, 1)
         layout.addWidget(splitter, 1)
@@ -203,7 +226,7 @@ class SQLiteViewer(DocumentWindow):
         layout.addWidget(self.status)
         buttons = document_buttons(QDialogButtonBox.StandardButton.Close, self)
         self.close_button = buttons.button(QDialogButtonBox.StandardButton.Close)
-        self.close_button.setText("关闭")
+        self.close_button.setText(self.language_context.translate("Close"))
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
         action = QAction(self)
