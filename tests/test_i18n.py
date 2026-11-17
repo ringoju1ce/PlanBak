@@ -504,6 +504,29 @@ def test_hex_validation_error_translates_by_window_language():
     assert "decimal offset" in LanguageContext(ENGLISH).error(caught.value)
 
 
+@pytest.mark.parametrize(
+    "language, expected",
+    [(SIMPLIFIED_CHINESE, "关闭此备份"), (ENGLISH, "close this backup")],
+)
+def test_leave_prompt_translates_destination(factory, qtbot, tmp_path, monkeypatch, language, expected):
+    from planbak.app import QMessageBox
+
+    window = factory()
+    window.language_context.set_language(language)
+    window.open_path(make_backup(tmp_path / "backup"))
+    ready(window, qtbot)
+    window.session.new_directory("HomeDomain", "", "pending")
+    shown = []
+
+    def cancel(box):
+        shown.append(box.text())
+        return QMessageBox.StandardButton.Cancel
+
+    monkeypatch.setattr(QMessageBox, "exec", cancel)
+    window.confirm_leave(lambda: pytest.fail("must not leave"), purpose="close this backup")
+    assert len(shown) == 1 and expected in shown[0]
+
+
 def test_dynamic_backup_error_translates_template_not_filename(tmp_path):
     from planbak.backup import load_plist
     from planbak.codec import BackupError

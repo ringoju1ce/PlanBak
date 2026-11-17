@@ -1686,7 +1686,9 @@ class MainWindow(QMainWindow):
                 parent = parent.parentWidget()
         return False
 
-    def confirm_leave(self, continuation, *, exiting=False, cancelled=None, purpose="切换备份"):
+    def confirm_leave(
+        self, continuation, *, exiting=False, cancelled=None, purpose="switch backups"
+    ):
         if self.task or self.copy_task or self._copy_pending:
             if cancelled:
                 cancelled()
@@ -1726,13 +1728,7 @@ class MainWindow(QMainWindow):
                 action=save_description,
             )
         else:
-            destination = tr(
-                {
-                    "切换备份": "switch backups",
-                    "关闭当前备份并打开所选备份": "close the current backup and open the selected backup",
-                    "关闭此备份": "close this backup",
-                }.get(purpose, purpose)
-            )
+            destination = tr(purpose)
             description = tr(
                 "There are unsaved changes.\nChoose Apply Changes to {action}, then {purpose}; choose Discard Changes to clear the session and {purpose}.",
                 action=save_description,
@@ -1884,7 +1880,9 @@ class MainWindow(QMainWindow):
             self._clear_backup(lambda: self._load_backup(path, claim, container))
 
         self.confirm_leave(
-            proceed, cancelled=self._cancel_open, purpose="关闭当前备份并打开所选备份"
+            proceed,
+            cancelled=self._cancel_open,
+            purpose="close the current backup and open the selected backup",
         )
 
     def _cancel_open(self):
@@ -1967,7 +1965,7 @@ class MainWindow(QMainWindow):
             self.update_actions()
 
         self.confirm_leave(
-            lambda: self._clear_backup(cancelled), cancelled=cancelled, purpose="关闭此备份"
+            lambda: self._clear_backup(cancelled), cancelled=cancelled, purpose="close this backup"
         )
 
     def _clear_backup(self, after):
