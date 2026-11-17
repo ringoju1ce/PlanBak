@@ -679,6 +679,18 @@ def test_image_read_error_formats_in_both_languages():
     assert LanguageContext(SIMPLIFIED_CHINESE).error(error) == '无法读取图片：raw {detail}'
 
 
+def test_nested_errors_translate_without_changing_parameters():
+    from planbak.codec import BackupError
+
+    inner = BackupError(english='Unable to read {name}', values={'name': '文件{x}.plist'})
+    outer = BackupError(english='Unable to read image: {error}', values={'error': inner})
+    assert LanguageContext(ENGLISH).error(outer) == 'Unable to read image: Unable to read 文件{x}.plist'
+    assert LanguageContext(SIMPLIFIED_CHINESE).error(outer) == '无法读取图片：无法读取 文件{x}.plist'
+
+    outer.translation_values['error'] = outer
+    assert LanguageContext(ENGLISH).error(outer).startswith('Unable to read image:')
+
+
 def test_file_dialog_headers_change_without_renaming_items(qtbot, tmp_path):
     from PySide6.QtCore import Qt
     from PySide6.QtWidgets import QFileDialog, QTreeView
@@ -818,3 +830,31 @@ def test_expat_error_messages_have_chinese_entries():
         .read_text(encoding='utf-8')
     )
     assert not (set(expat.errors.messages.values()) - catalog.keys())
+
+
+def test_pending_change_labels_have_chinese_translations():
+    from planbak.pending_view import CHANGE_LABELS
+    from planbak.staging import ChangeKind
+
+    assert set(CHANGE_LABELS) == set(ChangeKind)
+    english = LanguageContext(ENGLISH)
+    chinese = LanguageContext(SIMPLIFIED_CHINESE)
+    for source in CHANGE_LABELS.values():
+        assert chinese.translate(source) != english.translate(source)
+
+
+def test_metadata_and_plist_diagnostic_templates_have_chinese_entries():
+    import ast
+    import json
+    from pathlib import Path
+
+    source = Path(__file__).resolve().parents[1] / 'src' / 'planbak'
+    catalog = json.loads((source / 'translations' / 'zh_CN.json').read_text(encoding='utf-8'))
+    for filename, call_name in [('image_metadata.py', 'MetadataIssue'), ('plist_xml.py', 'fail')]:
+        tree = ast.parse((source / filename).read_text(encoding='utf-8'))
+        for node in ast.walk(tree):
+            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                    and node.func.id == call_name and node.args
+                    and isinstance(node.args[0], ast.Constant)
+                    and isinstance(node.args[0].value, str)):
+                assert node.args[0].value in catalog, f'{filename}:{node.lineno}'

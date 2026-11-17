@@ -61,12 +61,20 @@ class LanguageContext(QObject):
         return text.format(**values) if values else text
 
     def error(self, error: Exception) -> str:
+        return self._error(error, set())
+
+    def _error(self, error: Exception, seen: set[int]) -> str:
+        if id(error) in seen:
+            return str(error)
+        seen.add(id(error))
         source = getattr(error, "translation_source", None)
-        return (
-            self.translate(source, **getattr(error, "translation_values", {}))
-            if source
-            else str(error)
-        )
+        if not source:
+            return str(error)
+        values = {
+            key: self._error(value, seen.copy()) if isinstance(value, Exception) else value
+            for key, value in getattr(error, "translation_values", {}).items()
+        }
+        return self.translate(source, **values)
 
 
 _PROGRESS_LABELS = {

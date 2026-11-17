@@ -139,7 +139,7 @@ def _decode(path, cancel):
     except (OSError, ValueError) as exc:
         raise BackupError(
             english="Unable to read image: {error}",
-            values={"error": str(exc)},
+            values={"error": exc},
         ) from exc
     with source:
         if (

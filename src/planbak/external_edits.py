@@ -185,7 +185,7 @@ class ExternalEdits:
             self.owner.language_context.translate(
                 "Could not check external edits for {name}: {error}",
                 name=record.path.name,
-                error=str(error),
+                error=self.owner.language_context.error(error),
             ),
             10000,
         )
