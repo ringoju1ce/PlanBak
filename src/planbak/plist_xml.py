@@ -314,16 +314,16 @@ class XmlSearchDialog(FixedDialog):
     def __init__(self, pane):
         super().__init__(pane)
         self.setWindowModality(Qt.WindowModality.NonModal)
-        self.setWindowTitle("搜索与替换")
+        self.setWindowTitle(self.language_context.translate("Find and Replace"))
         layout = QVBoxLayout(self)
         self.find_field = QLineEdit()
-        self.find_field.setPlaceholderText("查找（纯文本）")
-        self.find_field.setAccessibleName("查找文本")
-        self.case_sensitive = QCheckBox("区分大小写")
+        self.find_field.setPlaceholderText(self.language_context.translate("Find (plain text)"))
+        self.find_field.setAccessibleName(self.language_context.translate("Find text"))
+        self.case_sensitive = QCheckBox(self.language_context.translate("Case sensitive"))
         row = QHBoxLayout()
         row.addWidget(self.find_field, 1)
-        self.previous_button = QPushButton("上一个")
-        self.next_button = QPushButton("下一个")
+        self.previous_button = QPushButton(self.language_context.translate("Previous"))
+        self.next_button = QPushButton(self.language_context.translate("Next"))
         for button, reverse in ((self.previous_button, True), (self.next_button, False)):
             button.setAutoDefault(False)
             button.clicked.connect(lambda checked=False, backwards=reverse: pane.find(backwards))
@@ -332,8 +332,8 @@ class XmlSearchDialog(FixedDialog):
         layout.addLayout(row)
         row = QHBoxLayout()
         self.replace_field = QLineEdit()
-        self.replace_field.setPlaceholderText("替换为")
-        self.replace_field.setAccessibleName("替换文本")
+        self.replace_field.setPlaceholderText(self.language_context.translate("Replace with"))
+        self.replace_field.setAccessibleName(self.language_context.translate("Replacement text"))
         row.addWidget(self.replace_field, 1)
         for label, method in (
             ("replace_button", pane.replace_one),
@@ -389,21 +389,34 @@ class XmlPane(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         self.code = XmlTextEdit()
-        self.code.setAccessibleName("plist XML 内容")
+        self.code.setAccessibleName(self.language_context.translate("plist XML content"))
         self.code.palette_changed.connect(self.refresh_matches)
-        toolbar = self.toolbar = DocumentToolBar("XML 编辑操作", self)
+        toolbar = self.toolbar = DocumentToolBar(
+            self.language_context.translate("XML editing"), self
+        )
         self.undo_button = toolbar.command(
-            "撤销", self.code.undo, icon="edit-undo", hint=QKeySequence.StandardKey.Undo
+            self.language_context.translate("Undo"),
+            self.code.undo,
+            icon="edit-undo",
+            hint=QKeySequence.StandardKey.Undo,
         )
         self.redo_button = toolbar.command(
-            "重做", self.code.redo, icon="edit-redo", hint=QKeySequence.StandardKey.Redo
+            self.language_context.translate("Redo"),
+            self.code.redo,
+            icon="edit-redo",
+            hint=QKeySequence.StandardKey.Redo,
         )
         toolbar.addSeparator()
         self.search_button = toolbar.command(
-            "搜索", lambda: self.show_search(), icon="edit-find", hint="Ctrl+F"
+            self.language_context.translate("Find"),
+            lambda: self.show_search(),
+            icon="edit-find",
+            hint="Ctrl+F",
         )
         toolbar.addSeparator()
-        self.tree_button = toolbar.command("树形编辑器", self.tree_requested)
+        self.tree_button = toolbar.command(
+            self.language_context.translate("Tree Editor"), self.tree_requested
+        )
         toolbar.stretch()
         layout.addWidget(toolbar)
         self.undo_button.defaultAction().setEnabled(False)
