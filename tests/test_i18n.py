@@ -543,6 +543,40 @@ def test_hex_validation_error_translates_by_window_language():
     assert "decimal offset" in LanguageContext(ENGLISH).error(caught.value)
 
 
+def test_standalone_folder_model_translates_backup_title(tmp_path, qapp):
+    from planbak.backup import BackupSession
+    from planbak.sidebar import DirectoryTreeModel
+
+    session = BackupSession(make_backup(tmp_path / 'backup'))
+    model = DirectoryTreeModel()
+    try:
+        model.set_session(session)
+        index = model.index(0, 0)
+        model._fallback_language.set_language(ENGLISH)
+        assert index.data() == "Fixture's Backup"
+        model._fallback_language.set_language(SIMPLIFIED_CHINESE)
+        assert index.data() == '“Fixture”的备份'
+    finally:
+        session.close()
+
+
+@pytest.mark.parametrize(
+    'language, expected',
+    [(SIMPLIFIED_CHINESE, '离线浏览与编辑 iOS 备份'), (ENGLISH, 'Browse and edit iOS backups offline')],
+)
+def test_command_line_help_follows_language(monkeypatch, capsys, language, expected):
+    import sys
+
+    from planbak import app
+
+    monkeypatch.setattr(app, 'LanguageContext', lambda: LanguageContext(language))
+    monkeypatch.setattr(sys, 'argv', ['planbak', '--help'])
+    with pytest.raises(SystemExit) as caught:
+        app.main()
+    assert caught.value.code == 0
+    assert expected in capsys.readouterr().out
+
+
 @pytest.mark.parametrize(
     "language, expected",
     [(SIMPLIFIED_CHINESE, "关闭此备份"), (ENGLISH, "close this backup")],

@@ -348,6 +348,8 @@
   "Drop items into a folder where they can be added.": "请将项目拖入可添加项目的文件夹",
   "Create Backup Copy": "创建备份副本",
   "Backup folder (*)": "备份文件夹 (*)",
+  "Browse and edit iOS backups offline": "离线浏览与编辑 iOS 备份",
+  "Backup folder (optional)": "备份文件夹（可选）",
   "Create Backup Copy and Apply Changes": "创建备份副本并应用更改",
   "Changes applied to:\n{path}": "更改已应用到：\n{path}",
   "\n\nOriginal backup preserved at:\n{path}": "\n\n原备份保留在：\n{path}",

@@ -42,7 +42,7 @@ class Cancelled(BackupError):
 
 def check_cancel(cancel: Callable[[], bool] | None = None):
     if cancel and cancel():
-        raise Cancelled("操作已取消")
+        raise Cancelled(english="Operation canceled")
 
 
 def file_id(domain: str, path: str) -> str:

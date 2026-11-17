@@ -3278,8 +3278,9 @@ class MainWindow(QMainWindow):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="离线浏览与编辑 iOS 备份")
-    parser.add_argument("backup", nargs="?", type=Path, help="备份文件夹（可选）")
+    tr = LanguageContext().translate
+    parser = argparse.ArgumentParser(description=tr("Browse and edit iOS backups offline"))
+    parser.add_argument("backup", nargs="?", type=Path, help=tr("Backup folder (optional)"))
     args = parser.parse_args()
     app = QApplication(sys.argv[:1])
     app.setApplicationName("PlanBak")

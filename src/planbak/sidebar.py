@@ -10,6 +10,7 @@ from PySide6.QtWidgets import QAbstractItemView, QApplication, QHeaderView, QSty
 
 from .backup import Entry
 from .codec import BackupError
+from .i18n import LanguageContext
 from .icons import ApplicationIcons
 from .navigation import Location, split_domain
 
@@ -35,6 +36,7 @@ class DirectoryTreeModel(QAbstractItemModel):
         self.domains = []
         self.suspended = False
         self.application_icons = ApplicationIcons()
+        self._fallback_language = LanguageContext(parent=self)
 
     def set_session(self, session):
         self.beginResetModel()
@@ -49,8 +51,7 @@ class DirectoryTreeModel(QAbstractItemModel):
                 if isinstance(value, str) and value.strip():
                     name = value.strip()
                     break
-        title = f"“{name}”的备份" if name else "备份"
-        self.root = DirectoryNode(title, Location(), ("root",)) if session else None
+        self.root = DirectoryNode(name or "", Location(), ("root",)) if session else None
         self.endResetModel()
 
     def node(self, index):
@@ -96,13 +97,14 @@ class DirectoryTreeModel(QAbstractItemModel):
                     ),
                     None,
                 )
-                context = getattr(QObject.parent(self).window(), "language_context", None)
-                if context:
-                    return (
-                        context.translate("{name}'s Backup", name=name)
-                        if name
-                        else context.translate("Backup")
-                    )
+                parent = QObject.parent(self)
+                context = getattr(parent.window(), "language_context", None) if parent else None
+                context = context or self._fallback_language
+                return (
+                    context.translate("{name}'s Backup", name=name)
+                    if name
+                    else context.translate("Backup")
+                )
             return node.name
         if role == Qt.ItemDataRole.ToolTipRole:
             return node.location.address
@@ -245,7 +247,9 @@ class DirectoryTree(QTreeView):
         self.setTextElideMode(Qt.TextElideMode.ElideNone)
         self.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self.setAccessibleName("备份文件夹树")
+        context = getattr(parent.window(), "language_context", None) if parent else None
+        context = context or LanguageContext(parent=self)
+        self.setAccessibleName(context.translate("Backup folder tree"))
         self.setUniformRowHeights(True)
         self.setIndentation(18)
         self.setIconSize(QSize(18, 18))

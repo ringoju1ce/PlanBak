@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 )
 
 from .appearance import is_dark, sync_background
+from .i18n import LanguageContext
 
 
 class DialogTitleBar(QWidget):
@@ -48,8 +49,7 @@ class DialogTitleBar(QWidget):
         layout.addWidget(self.title, 1)
         self.close_button = QToolButton(self)
         self.close_button.setObjectName("dialogCloseButton")
-        self.close_button.setAccessibleName("关闭")
-        self.close_button.setToolTip("关闭")
+        self._language_context = dialog.language_context or LanguageContext(parent=self)
         self.close_button.setAutoRaise(True)
         self.close_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.close_button.setFixedSize(28, 28)
@@ -65,12 +65,11 @@ class DialogTitleBar(QWidget):
         self.close_button.clicked.connect(dialog.close)
         layout.addWidget(self.close_button)
         dialog.windowTitleChanged.connect(self.title.setText)
-        if dialog.language_context:
-            dialog.language_context.changed.connect(self.retranslate)
-            self.retranslate()
+        self._language_context.changed.connect(self.retranslate)
+        self.retranslate()
 
     def retranslate(self):
-        text = self.window().language_context.translate("Close")
+        text = self._language_context.translate("Close")
         self.close_button.setAccessibleName(text)
         self.close_button.setToolTip(text)
 

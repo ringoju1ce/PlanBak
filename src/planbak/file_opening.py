@@ -52,7 +52,7 @@ def xml_root(header):
         raise Found
 
     def reject(*args):
-        raise ValueError("不解析实体声明")
+        raise ValueError("Entity declarations are not parsed")
 
     parser.StartElementHandler = start
     parser.EntityDeclHandler = reject

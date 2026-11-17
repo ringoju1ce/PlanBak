@@ -188,7 +188,8 @@ def test_title_bar_has_only_close_and_no_transition_on_double_click(qtbot, kind)
     bar = dialog.findChild(QWidget, "dialogTitleBar")
     assert bar and bar.isVisible()
     buttons = bar.findChildren(QToolButton)
-    assert len(buttons) == 1 and buttons[0].accessibleName() == "关闭"
+    assert len(buttons) == 1
+    assert buttons[0].accessibleName() == bar._language_context.translate("Close")
     spy = TransitionSpy()
     dialog.installEventFilter(spy)
     size = dialog.size()
