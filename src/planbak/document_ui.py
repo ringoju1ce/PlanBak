@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
 )
 
 from .dialogs import FixedDialog
+from .i18n import LanguageContext
 
 
 class DocumentToolBar(QToolBar):
@@ -93,21 +94,19 @@ class DocumentStatus(QWidget):
         self.label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         layout.addWidget(self.label, 1)
         self.details_button = QToolButton()
-        self.details_button.setText("详情…")
-        self.details_button.setAccessibleName("查看完整状态与说明")
-        self.details_button.setToolTip("查看并复制完整状态与说明")
+        self._fallback_language = LanguageContext(parent=self)
+        self.retranslate()
         self.details_button.clicked.connect(self.show_details)
         layout.addWidget(self.details_button)
         self.details_button.setVisible(details)
         self._refresh()
 
     def retranslate(self):
-        context = getattr(self.window(), "language_context", None)
-        if context:
-            tr = context.translate
-            self.details_button.setText(tr("Details…"))
-            self.details_button.setAccessibleName(tr("View full status and details"))
-            self.details_button.setToolTip(tr("View and copy full status and details"))
+        context = getattr(self.window(), "language_context", None) or self._fallback_language
+        tr = context.translate
+        self.details_button.setText(tr("Details…"))
+        self.details_button.setAccessibleName(tr("View full status and details"))
+        self.details_button.setToolTip(tr("View and copy full status and details"))
 
     def text(self):
         return self._text
@@ -151,10 +150,10 @@ class DocumentStatus(QWidget):
             self._refresh()
 
     def show_details(self):
-        context = getattr(self.window(), "language_context", None)
+        context = getattr(self.window(), "language_context", None) or self._fallback_language
 
         def title():
-            return context.translate("Status and Details") if context else "状态与说明"
+            return context.translate("Status and Details")
 
         self.show_text_details(title, self.full_text)
 
@@ -168,7 +167,7 @@ class DocumentStatus(QWidget):
         close = buttons.button(QDialogButtonBox.StandardButton.Close)
         buttons.rejected.connect(dialog.reject)
         layout.addWidget(buttons)
-        context = dialog.language_context
+        context = dialog.language_context or self._fallback_language
 
         def update_text():
             heading = title() if callable(title) else title
@@ -177,7 +176,7 @@ class DocumentStatus(QWidget):
             text.setAccessibleName(heading)
             if text.toPlainText() != body:
                 text.setPlainText(body)
-            close.setText(context.translate("Close") if context else "关闭")
+            close.setText(context.translate("Close"))
 
         update_text()
         if context:

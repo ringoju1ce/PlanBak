@@ -134,6 +134,19 @@ def test_status_long_plain_text_stays_bounded_and_details_are_copyable(qtbot):
     status.close()
 
 
+@pytest.mark.parametrize("language, expected", [("en", "Details…"), ("zh_CN", "详情…")])
+def test_status_initial_controls_follow_parent_language(qtbot, language, expected):
+    from PySide6.QtWidgets import QWidget
+
+    from planbak.i18n import LanguageContext
+
+    parent = QWidget()
+    parent.language_context = LanguageContext(language, parent)
+    qtbot.addWidget(parent)
+    status = DocumentStatus(parent=parent)
+    assert status.details_button.text() == expected
+
+
 def test_toolbar_action_and_button_share_state_without_dialog_default(qtbot):
     toolbar = DocumentToolBar("测试工具栏")
     qtbot.addWidget(toolbar)
