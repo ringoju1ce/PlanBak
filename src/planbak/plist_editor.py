@@ -247,8 +247,10 @@ class PlistDocument:
 
 
 class DateValue(QWidget):
-    def __init__(self, binary, parent=None):
+    def __init__(self, binary, parent=None, *, language_context=None):
         super().__init__(parent)
+        context = language_context or LanguageContext(parent=self)
+        tr = context.translate
         layout = QFormLayout(self)
         self.date = QDateEdit()
         self.date.setCalendarPopup(True)
@@ -262,10 +264,12 @@ class DateValue(QWidget):
         )
         self.fraction.setMaxLength(6)
         self.fraction.setEnabled(binary)
-        self.fraction.setToolTip("小数秒的六位数字；XML 日期只支持整秒")
-        layout.addRow("日期（UTC）：", self.date)
-        layout.addRow("时间（UTC）：", self.time)
-        layout.addRow("小数秒（六位）：0.", self.fraction)
+        self.fraction.setToolTip(
+            tr("Six digits of fractional seconds; XML dates support whole seconds only")
+        )
+        layout.addRow(tr("Date (UTC):"), self.date)
+        layout.addRow(tr("Time (UTC):"), self.time)
+        layout.addRow(tr("Fraction (six digits): 0."), self.fraction)
         self.form = layout
 
     def retranslate(self, tr, language):
@@ -311,10 +315,8 @@ def data_ascii_preview(data, limit=4096):
     """Bounded display only: retain undecodable bytes as visible escapes."""
     truncated = len(data) > limit
     sample = data[:limit].strip(b" \t\r\n")
-    if not data:
-        return "空 Data", False
     if not sample:
-        return "预览片段去除首尾空白后为空" if truncated else "去除首尾空白后无可见内容", truncated
+        return "", truncated
     return "".join(
         chr(byte) if 32 <= byte <= 126 or byte in (9, 10, 13) else f"\\x{byte:02X}"
         for byte in sample
@@ -327,7 +329,7 @@ class ValueDialog(FixedDialog):
         if self.language_context is None:
             self.language_context = LanguageContext(parent=self)
         self._error_source = None
-        self.setWindowTitle("编辑 plist 条目")
+        self.setWindowTitle(self.language_context.translate("Edit plist Item"))
         self.node, self.siblings, self.parent_kind = node, siblings, parent_kind
         self.binary = binary
         self.result_node = None
@@ -335,11 +337,11 @@ class ValueDialog(FixedDialog):
         form = self.form = QFormLayout()
         self.key_field = QLineEdit(node.key)
         self.key_field.setEnabled(parent_kind == "Dictionary")
-        form.addRow("键：", self.key_field)
+        form.addRow(self.language_context.translate("Key:"), self.key_field)
         self.type_field = QComboBox()
         self.type_field.addItems(TYPES if binary else TYPES[:-2])
         self.type_field.setCurrentText(node.kind)
-        form.addRow("类型：", self.type_field)
+        form.addRow(self.language_context.translate("Type:"), self.type_field)
         layout.addLayout(form)
         self.values = QStackedWidget()
         self.value_field = QPlainTextEdit()
@@ -359,7 +361,7 @@ class ValueDialog(FixedDialog):
         boolean_layout.setContentsMargins(0, 0, 0, 0)
         boolean_layout.addWidget(self.boolean_field)
         boolean_layout.addStretch()
-        self.date_field = DateValue(binary)
+        self.date_field = DateValue(binary, language_context=self.language_context)
         self.fixed_value = QLabel()
         self.fixed_value.setWordWrap(True)
         self.fixed_value.setTextFormat(Qt.TextFormat.PlainText)
@@ -369,9 +371,13 @@ class ValueDialog(FixedDialog):
         self.data_preview = QPlainTextEdit()
         self.data_preview.setReadOnly(True)
         self.data_preview.setFont(QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont))
-        self.data_preview.setAccessibleName("Data ASCII 预览（只读）")
+        self.data_preview.setAccessibleName(
+            self.language_context.translate("Data ASCII preview (read-only)")
+        )
         data_note = self.data_note = QLabel(
-            "预览仅移除首尾空白，不改变原始字节。替换或查看完整内容请使用 Data 条目的右键菜单。"
+            self.language_context.translate(
+                "The preview trims whitespace only; original bytes are unchanged. Use the Data item's context menu to replace or view its full contents."
+            )
         )
         data_note.setWordWrap(True)
         data_layout.addWidget(self.data_info)
@@ -394,8 +400,12 @@ class ValueDialog(FixedDialog):
         buttons = self.buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
-        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("确定")
-        buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("取消")
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText(
+            self.language_context.translate("OK")
+        )
+        buttons.button(QDialogButtonBox.StandardButton.Cancel).setText(
+            self.language_context.translate("Cancel")
+        )
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
@@ -479,13 +489,6 @@ class ValueDialog(FixedDialog):
             self.number_field.setText(
                 self.node.preview if existing else ("0.0" if kind == "Real" else "0")
             )
-            self.number_help.setText(
-                {
-                    "Integer": "整数范围：−2⁶³ 至 2⁶⁴−1",
-                    "Real": "支持小数和科学计数法；保留原值精度",
-                    "UID": "对象引用（UID）：0 至 2⁶⁴−1；不会自动调整对象关系",
-                }[kind]
-            )
         elif kind == "Boolean":
             self.values.setCurrentIndex(2)
             self.boolean_field.setCurrentIndex(0 if existing and self.node.value else 1)
@@ -494,18 +497,8 @@ class ValueDialog(FixedDialog):
             self.date_field.set_value(self.node.value if existing else datetime(2001, 1, 1))
         elif kind == "Data":
             self.values.setCurrentIndex(5)
-            data = self.node.value if existing else b""
-            preview, truncated = data_ascii_preview(data)
-            self.data_info.setText(
-                f"{len(data)} 字节 · ASCII 预览（只读）"
-                + (" · 仅显示前 4096 字节，已截断" if truncated else "")
-            )
-            self.data_preview.setPlainText(preview)
         else:
             self.values.setCurrentIndex(4)
-            self.fixed_value.setText(
-                ("null" if kind == "Null" else "子项目在树中管理；非空容器需先清空才能更改类型。")
-            )
 
     def accept(self):
         try:
@@ -585,12 +578,30 @@ class PlistEditor(DocumentWindow):
         self._xml_reason_error = None
         self._xml_error = None
         layout = QVBoxLayout(self)
-        action_bar = DocumentToolBar("plist 树形编辑操作", self)
+        action_bar = DocumentToolBar(self.language_context.translate("plist tree editing"), self)
         for label, method, attribute, icon, hint in (
-            ("添加", self.add_node, "add_button", "list-add", None),
-            ("编辑", self.edit_node, "edit_button", "document-edit", "F2"),
-            ("删除", self.delete_node, "delete_button", "edit-delete", "Delete"),
-            ("XML 编辑器", lambda: self.switch_mode(1), "xml_button", None, None),
+            (self.language_context.translate("Add"), self.add_node, "add_button", "list-add", None),
+            (
+                self.language_context.translate("Edit"),
+                self.edit_node,
+                "edit_button",
+                "document-edit",
+                "F2",
+            ),
+            (
+                self.language_context.translate("Delete"),
+                self.delete_node,
+                "delete_button",
+                "edit-delete",
+                "Delete",
+            ),
+            (
+                self.language_context.translate("XML Editor"),
+                lambda: self.switch_mode(1),
+                "xml_button",
+                None,
+                None,
+            ),
         ):
             if attribute == "xml_button":
                 action_bar.addSeparator()
@@ -600,8 +611,16 @@ class PlistEditor(DocumentWindow):
         layout.addWidget(action_bar)
         self.tree_actions = action_bar
         self.tree = QTreeWidget()
-        self.tree.setHeaderLabels(["键 / 索引", "类型", "值"])
-        self.tree.setAccessibleName("plist 键、类型与值")
+        self.tree.setHeaderLabels(
+            [
+                self.language_context.translate("Key / Index"),
+                self.language_context.translate("Type"),
+                self.language_context.translate("Value"),
+            ]
+        )
+        self.tree.setAccessibleName(
+            self.language_context.translate("plist keys, types, and values")
+        )
         self.tree.setAlternatingRowColors(True)
         self.tree.setSelectionMode(QTreeWidget.SelectionMode.ExtendedSelection)
         self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -630,10 +649,10 @@ class PlistEditor(DocumentWindow):
             QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Close, self
         )
         self.save_button = buttons.button(QDialogButtonBox.StandardButton.Save)
-        self.save_button.setText("保存")
-        self.save_button.setToolTip("保存（Ctrl+S）")
+        self.save_button.setText(self.language_context.translate("Save"))
+        self.save_button.setToolTip(self.language_context.translate("Save (Ctrl+S)"))
         self.close_button = buttons.button(QDialogButtonBox.StandardButton.Close)
-        self.close_button.setText("关闭")
+        self.close_button.setText(self.language_context.translate("Close"))
         self.save_button.clicked.connect(self.save_document)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
@@ -738,7 +757,7 @@ class PlistEditor(DocumentWindow):
         except Exception as exc:
             self._xml_cache = ""
             self._xml_reason_error = exc
-            self.xml_reason = f"无法使用 XML 模式：{exc}"
+            self.xml_reason = str(exc)
         self.xml_button.defaultAction().setEnabled(not self.xml_reason)
         self.update_xml_tooltip()
 
