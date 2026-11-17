@@ -494,6 +494,16 @@ def test_backup_validation_error_remains_stable_and_translates():
     assert LanguageContext(SIMPLIFIED_CHINESE).error(caught.value) == '路径不能是绝对路径或包含 . / ..'
 
 
+def test_hex_validation_error_translates_by_window_language():
+    from planbak.codec import BackupError
+    from planbak.hex_data import parse_offset
+
+    with pytest.raises(BackupError) as caught:
+        parse_offset("invalid", 128)
+    assert "十进制偏移" in LanguageContext(SIMPLIFIED_CHINESE).error(caught.value)
+    assert "decimal offset" in LanguageContext(ENGLISH).error(caught.value)
+
+
 def test_dynamic_backup_error_translates_template_not_filename(tmp_path):
     from planbak.backup import load_plist
     from planbak.codec import BackupError
@@ -638,6 +648,9 @@ def test_structured_error_templates_have_chinese_translations():
                 continue
             if node.func.id not in {'BackupError', 'PlistValidationError'}:
                 continue
+            if node.func.id == 'BackupError':
+                assert not node.args, f'{path.name}:{node.lineno}: use a translation template'
+                assert any(keyword.arg == 'english' for keyword in node.keywords)
             for keyword in node.keywords:
                 if keyword.arg != 'english' or not isinstance(keyword.value, ast.Constant):
                     continue

@@ -1404,7 +1404,7 @@ class MainWindow(QMainWindow):
             if location.domain:
                 entry = self.session.at(location.domain, location.path)
                 if not entry or entry.kind != "directory":
-                    raise BackupError("文件夹不存在", english="The folder does not exist")
+                    raise BackupError(english="The folder does not exist")
         except BackupError as exc:
             message(self, "Folder Not Found", exc, QMessageBox.Icon.Warning)
             return
@@ -1998,7 +1998,6 @@ class MainWindow(QMainWindow):
             session.close()
             if session.workspace.exists():
                 raise BackupError(
-                    "未能完全清理会话临时文件夹，请检查文件占用或权限",
                     english="The session temporary folder could not be fully cleared; check file usage and permissions",
                 )
 
@@ -2421,7 +2420,6 @@ class MainWindow(QMainWindow):
                 if kind == "external":
                     if name.endswith(("-wal", "-shm", "-journal")):
                         raise BackupError(
-                            "这是数据库的配套文件，请打开对应的主文件。",
                             english="This is a database companion file; open its corresponding main file.",
                         )
                     if target.suffix.lower() in {
@@ -2435,8 +2433,6 @@ class MainWindow(QMainWindow):
                         ".ldb",
                     }:
                         raise BackupError(
-                            "内置查看器只支持标准 SQLite；此文件可能使用其他格式或应用自身的加密。"
-                            "可通过右键菜单选择“以十六进制查看”“使用系统应用打开”，或导出项目。",
                             english="The built-in viewer supports standard SQLite only; this file may use another format or app-specific encryption. Use the context menu to view it as hexadecimal, open it in a system application, or export it.",
                         )
                 if kind != "image":
@@ -2536,12 +2532,10 @@ class MainWindow(QMainWindow):
             def stage(data):
                 if self.task or self.session is not session:
                     raise BackupError(
-                        "备份操作进行中，请稍后再保存",
                         english="A backup operation is in progress; try saving later",
                     )
                 if self._focus_owned_modal(focus=False):
                     raise BackupError(
-                        "请先完成或取消当前编辑弹窗，再保存 plist",
                         english="Finish or cancel the current edit dialog before saving the plist",
                     )
                 latest = directory / "before-save.plist"
@@ -3059,7 +3053,6 @@ class MainWindow(QMainWindow):
         source = self.manager.window_for_session(session_id)
         if source is None or source is self:
             raise BackupError(
-                "来源备份会话已关闭，或不属于当前程序；请先导出项目再添加。",
                 english="The source backup session is closed or belongs to another application; export items before adding them.",
             )
         return source.transfers.acquire()
@@ -3074,7 +3067,7 @@ class MainWindow(QMainWindow):
                 or not tokens
                 or any(not isinstance(t, str) for t in tokens)
             ):
-                raise BackupError("无效的拖放项目列表", english="Invalid list of dropped items")
+                raise BackupError(english="Invalid list of dropped items")
             borrowed.show_status()
             roots = borrowed.session.roots(tokens)
             conflict = any(session.at(domain, f"{parent}/{e.name}".lstrip("/")) for e in roots)

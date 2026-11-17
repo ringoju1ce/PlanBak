@@ -98,7 +98,6 @@ class ExternalEdits:
             stamp = file_stamp(record.path)
             if stamp == (None,):
                 raise BackupError(
-                    f"外部编辑文件已被移动或删除：{record.path.name}",
                     english="The externally edited file was moved or deleted: {name}",
                     values={"name": record.path.name},
                 )

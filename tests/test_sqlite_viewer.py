@@ -106,7 +106,7 @@ def test_snapshot_unknown_and_hot_journal_cleanup(tmp_path):
         session.import_paths([source], "HomeDomain", "Documents")
         token = session.at("HomeDomain", "Documents/not.db").token
         folder = session.workspace / "bad"
-        with pytest.raises(BackupError, match="不是标准 SQLite"):
+        with pytest.raises(BackupError, match="not a standard SQLite"):
             prepare_snapshot(session, token, folder)
         assert not folder.exists()
         source = tmp_path / "real.db"
@@ -115,7 +115,7 @@ def test_snapshot_unknown_and_hot_journal_cleanup(tmp_path):
         journal.write_bytes(b"nonempty")
         session.import_paths([source, journal], "HomeDomain", "Documents")
         token = session.at("HomeDomain", "Documents/real.db").token
-        with pytest.raises(BackupError, match="回滚日志"):
+        with pytest.raises(BackupError, match="rollback journal"):
             prepare_snapshot(session, token, folder)
         assert not folder.exists()
     finally:

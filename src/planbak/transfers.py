@@ -63,7 +63,6 @@ class OutgoingTransfers(QObject):
         session = self._get_session()
         if session is None or not self._can_start():
             raise BackupError(
-                "来源备份正在处理其他操作，请稍后复制",
                 english="The source backup is busy; try copying again later",
             )
         token = session.begin_transfer()
