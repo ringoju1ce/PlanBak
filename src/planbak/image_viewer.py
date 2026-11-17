@@ -392,6 +392,7 @@ class ImageViewer(QMainWindow):
         self.statusBar().addWidget(self.status, 1)
         self.canvas.scale_changed.connect(self.update_zoom)
         self._info = ""
+        self._info_data = None
         self._information = {}
         if on_load_progress:
             self.load_progress.connect(on_load_progress)
@@ -428,6 +429,7 @@ class ImageViewer(QMainWindow):
 
     def retranslate(self):
         tr = self.language_context.translate
+        self.update_image_info()
         self.setWindowTitle(tr("{name} — Image Viewer", name=self.items[self.index][1]))
         self.toolbar.setWindowTitle(tr("Image viewer controls"))
         self.toolbar.setAccessibleName(tr("Image viewer controls"))
@@ -463,6 +465,16 @@ class ImageViewer(QMainWindow):
             self.set_status(self._status_source, **self._status_values)
         elif not self.canvas.image.isNull():
             self.update_zoom(self.canvas.scale, self.canvas.fitting)
+
+    def update_image_info(self):
+        if self._info_data is None:
+            return
+        format_name, width, height, index, total = self._info_data
+        if format_name == "Image":
+            format_name = self.language_context.translate("Image")
+        self._info = f"{format_name} · {width} × {height} · {index}/{total}"
+        if "info" in self._status_values:
+            self._status_values["info"] = self._info
 
     @property
     def current_token(self):
@@ -591,10 +603,14 @@ class ImageViewer(QMainWindow):
                     self.setWindowTitle(
                         self.language_context.translate("{name} — Image Viewer", name=name)
                     )
-                    self._info = (
-                        f"{result.format} · {result.width} × {result.height} · "
-                        f"{self.index + 1}/{len(self.items)}"
+                    self._info_data = (
+                        result.format,
+                        result.width,
+                        result.height,
+                        self.index + 1,
+                        len(self.items),
                     )
+                    self.update_image_info()
                     self._information = {
                         language: information_text(result, LanguageContext(language).translate)
                         for language in (ENGLISH, SIMPLIFIED_CHINESE)

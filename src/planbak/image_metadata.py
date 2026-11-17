@@ -228,7 +228,10 @@ def information_text(result, translate=None):
         lines.append(tr("Backup path: {path}", path=result.backup_path))
     lines.extend(
         (
-            tr("Format: {format}", format=result.format),
+            tr(
+                "Format: {format}",
+                format=tr("Image") if result.format == "Image" else result.format,
+            ),
             tr("Image size: {width} × {height} pixels", width=result.width, height=result.height),
         )
     )

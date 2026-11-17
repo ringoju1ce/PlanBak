@@ -484,6 +484,26 @@ def test_image_canvas_initial_text_follows_parent_language(qtbot, language, load
     assert accessible in canvas.accessibleName()
 
 
+def test_unknown_image_format_follows_window_language(qtbot):
+    from PySide6.QtGui import QImage
+
+    from planbak.image_data import DecodedImage
+    from planbak.image_viewer import ImageViewer
+
+    parent = QWidget()
+    parent.language_context = LanguageContext(SIMPLIFIED_CHINESE, parent)
+    qtbot.addWidget(parent)
+    img = QImage(20, 10, QImage.Format.Format_RGB32)
+    viewer = ImageViewer([('one', 'x')], 'one', lambda *args, **kwargs: DecodedImage(img, 'Image'), lambda *_: True, parent)
+    qtbot.addWidget(viewer)
+    qtbot.waitUntil(lambda: viewer.task is None)
+    assert viewer._info.startswith('图片 ·')
+    assert '格式：图片' in viewer.image_information()
+    parent.language_context.set_language(ENGLISH)
+    assert viewer._info.startswith('Image ·')
+    assert 'Format: Image' in viewer.image_information()
+
+
 def test_xml_error_translates_without_changing_buffer(qtbot):
     from planbak.plist_editor import PlistDocument, PlistEditor
 

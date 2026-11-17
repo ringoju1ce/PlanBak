@@ -118,6 +118,7 @@
   "The source file is available again.": "源文件已恢复可用。",
   "{name} — Image Viewer": "{name} — 图片查看器",
   "Image Information": "图片信息",
+  "Image": "图片",
   "View image information and EXIF": "查看图片信息和 EXIF",
   "Image viewer controls": "图片查看操作",
   "Image preview; use arrow keys or the wheel to navigate, Ctrl+wheel to zoom, and drag to pan": "图片预览；左右键或滚轮切图，Ctrl+滚轮缩放，拖动平移",

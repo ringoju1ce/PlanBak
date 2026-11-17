@@ -135,7 +135,7 @@ def _decode(path, cancel):
         check_dimensions(image.width(), image.height())
         return DecodedImage(image, bytes(reader.format()).decode("ascii", "replace").upper())
     except Image.DecompressionBombError:
-        return large_result(path, cancel, "图片")
+        return large_result(path, cancel, "Image")
     except (OSError, ValueError) as exc:
         raise BackupError(
             english="Unable to read image: {error}",
@@ -146,9 +146,9 @@ def _decode(path, cancel):
             source.width * source.height > LARGE_PIXEL_THRESHOLD
             or max(source.size) > LARGE_EDGE_THRESHOLD
         ):
-            return large_result(path, cancel, source.format or "图片")
+            return large_result(path, cancel, source.format or "Image")
         check_dimensions(*source.size)
-        format_name = source.format or "图片"
+        format_name = source.format or "Image"
         # Pillow starts on the first frame; pillow-heif starts on the primary
         # image, which may differ from container frame zero.
         source.load()

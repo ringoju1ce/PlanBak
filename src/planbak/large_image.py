@@ -81,7 +81,7 @@ class LargeImage:
         self.lock = threading.RLock()
         self.state_lock = threading.Lock()
         self.capacity = lambda: True
-        self.format = "图片"
+        self.format = "Image"
 
     def lease(self):
         return LargeLease(self)
