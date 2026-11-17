@@ -51,12 +51,16 @@ def test_decode_orientation_primary_heif_and_limits(tmp_path, monkeypatch):
     image = decode_image(heif).image
     assert image.width() == 30 and image.pixelColor(5, 5).blue() > 240
     monkeypatch.setattr(module, "MAX_PIXELS", 10)
-    with pytest.raises(BackupError, match="上限"):
+    with pytest.raises(BackupError, match="limit"):
         decode_image(jpeg)
     broken = tmp_path / "broken.png"
     broken.write_bytes(b"not a picture")
-    with pytest.raises(BackupError, match="无法识别"):
+    with pytest.raises(BackupError, match="Unable to recognize") as caught:
         decode_image(broken)
+    from planbak.i18n import ENGLISH, SIMPLIFIED_CHINESE, LanguageContext
+
+    assert "无法识别图片" in LanguageContext(SIMPLIFIED_CHINESE).error(caught.value)
+    assert "Unable to recognize" in LanguageContext(ENGLISH).error(caught.value)
     with pytest.raises(Cancelled):
         decode_image(jpeg, lambda: True)
 

@@ -67,7 +67,6 @@ class DecodedImage:
 def check_dimensions(width, height):
     if width <= 0 or height <= 0 or width * height > MAX_PIXELS:
         raise BackupError(
-            "图片尺寸无效或超过普通解码的内存上限；可导出后使用系统应用查看。",
             english="The image dimensions are invalid or exceed the normal decoding memory limit; export it to view in a system application.",
         )
 
@@ -76,7 +75,6 @@ def decode_image(path, cancel=None):
     path = Path(path)
     if path.stat().st_size > MAX_FILE_BYTES:
         raise BackupError(
-            "图片文件超过 128 MiB 的预览上限；可导出后使用系统应用查看。",
             english="The image exceeds the 128 MiB preview limit; export it to view in a system application.",
         )
     while not DECODE_SLOTS.acquire(timeout=0.05):
@@ -123,7 +121,6 @@ def _decode(path, cancel):
         reader.setAutoTransform(True)
         if not reader.canRead() or bytes(reader.format()).lower() == b"pdf":
             raise BackupError(
-                "无法识别图片：文件可能损坏或格式不受支持。",
                 english="Unable to recognize the image; the file may be damaged or its format unsupported.",
             ) from None
         size = reader.size()
@@ -132,7 +129,6 @@ def _decode(path, cancel):
         check_cancel(cancel)
         if image.isNull():
             raise BackupError(
-                "无法解码图片：" + reader.errorString(),
                 english="Unable to decode image: {error}",
                 values={"error": reader.errorString()},
             )
@@ -142,7 +138,6 @@ def _decode(path, cancel):
         return large_result(path, cancel, "图片")
     except (OSError, ValueError) as exc:
         raise BackupError(
-            f"无法读取图片：{exc}",
             english="Unable to read image: {error}",
             values={"error": str(exc)},
         ) from exc
@@ -174,7 +169,6 @@ def _decode(path, cancel):
         check_cancel(cancel)
         if image.isNull():
             raise BackupError(
-                "图片解码失败或内存不足。",
                 english="Image decoding failed or memory is insufficient.",
             )
         return DecodedImage(image, format_name)

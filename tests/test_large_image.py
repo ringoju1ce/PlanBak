@@ -42,7 +42,7 @@ def test_region_cancel_and_tile_budget_leave_no_partial_file(tmp_path, monkeypat
     with pytest.raises(Cancelled):
         result.large.render((0, 0, 100, 100), (100, 100), lambda: True)
     monkeypatch.setattr(module, "MAX_TILE_BYTES", 1)
-    with pytest.raises(BackupError, match="缓存"):
+    with pytest.raises(BackupError, match="cache"):
         result.large.render((0, 0, 100, 100), (100, 100), lambda: False)
     assert not result.large.tiles.exists()
     result.large.close()

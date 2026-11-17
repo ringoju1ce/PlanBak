@@ -64,12 +64,10 @@ class ImageCache:
             entry = self.session.get(token)
             if entry.kind != "file":
                 raise BackupError(
-                    "此项目已不再是可读取的图片文件。",
                     english="This item is no longer a readable image file.",
                 )
             if entry.size > MAX_FILE_BYTES:
                 raise BackupError(
-                    "图片文件超过 128 MiB 的预览上限。",
                     english="The image exceeds the 128 MiB preview limit.",
                 )
             return entry, source_revision(self.session, token)
@@ -98,13 +96,11 @@ class ImageCache:
             _, current = self.source(token, cancel)
             if current != revision:
                 raise BackupError(
-                    "图片源文件在读取时发生变化，请重新打开。",
                     english="The source image changed while being read; open it again.",
                 )
             size = path.stat().st_size
             if size > MAX_FILE_BYTES:
                 raise BackupError(
-                    "图片文件超过 128 MiB 的预览上限。",
                     english="The image exceeds the 128 MiB preview limit.",
                 )
             with self._lock:
@@ -124,7 +120,6 @@ class ImageCache:
                         self.files.pop(token)
                         target.unlink(missing_ok=True)
                         raise BackupError(
-                            "图片文件缓存空间不足，请关闭部分图片窗口。",
                             english="The image file cache is full; close some image windows.",
                         )
                 finally:
@@ -229,14 +224,12 @@ class ImageCache:
                 cached = CachedFile(revision, path, path.stat().st_size, users=1)
                 if cached.size > MAX_FILE_BYTES:
                     raise BackupError(
-                        "图片文件超过 128 MiB 的预览上限。",
                         english="The image exceeds the 128 MiB preview limit.",
                     )
                 with self._lock:
                     self.files[token] = cached
                     if not self._trim():
                         raise BackupError(
-                            "图片文件缓存空间不足，请关闭部分图片窗口。",
                             english="The image file cache is full; close some image windows.",
                         )
             except BaseException:
@@ -269,7 +262,6 @@ class ImageCache:
             current, after = self.source(token, cancel)
             if after != revision:
                 raise BackupError(
-                    "图片源文件在读取时发生变化，请重新加载。",
                     english="The source image changed while being read; reload it.",
                 )
             result.name = current.name
@@ -281,7 +273,6 @@ class ImageCache:
                     if lease:
                         lease.release()
                     raise BackupError(
-                        "图片分块缓存空间不足，请关闭部分图片窗口。",
                         english="The image tile cache is full; close some image windows.",
                     )
             return replace(result, image=QImage(result.image), lease=lease)
