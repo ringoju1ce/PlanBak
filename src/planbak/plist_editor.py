@@ -196,14 +196,20 @@ def parse_value(kind, text):
         return text
     text = text.strip()
     if kind == "Integer":
-        value = int(text, 10)
+        try:
+            value = int(text, 10)
+        except ValueError as exc:
+            raise PlistValidationError(english="Enter a valid integer") from exc
         if not -(2**63) <= value < 2**64:
             raise PlistValidationError(
                 english="The integer must be between -2⁶³ and 2⁶⁴−1",
             )
         return value
     if kind == "Real":
-        value = float(text)
+        try:
+            value = float(text)
+        except ValueError as exc:
+            raise PlistValidationError(english="Enter a valid real number") from exc
         if not math.isfinite(value):
             raise PlistValidationError(english="Enter a finite real number")
         return value
@@ -212,12 +218,18 @@ def parse_value(kind, text):
             raise PlistValidationError(english="Boolean values must be true or false")
         return text.lower() == "true"
     if kind == "Date":
-        value = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        try:
+            value = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise PlistValidationError(english="Enter a valid date and time") from exc
         if value.tzinfo:
             value = value.astimezone(timezone.utc).replace(tzinfo=None)
         return value
     if kind == "UID":
-        return plistlib.UID(int(text, 10))
+        try:
+            return plistlib.UID(int(text, 10))
+        except ValueError as exc:
+            raise PlistValidationError(english="Enter a valid UID") from exc
     raise PlistValidationError(english="Unsupported value type")
 
 

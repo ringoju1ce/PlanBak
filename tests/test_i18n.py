@@ -599,6 +599,24 @@ def test_plist_validation_error_translates():
     assert LanguageContext(SIMPLIFIED_CHINESE).error(caught.value) == 'plist 包含循环引用，无法作为树编辑'
 
 
+@pytest.mark.parametrize(
+    'kind, chinese, english',
+    [
+        ('Integer', '有效的整数', 'valid integer'),
+        ('Real', '有效的实数', 'valid real number'),
+        ('Date', '有效的日期和时间', 'valid date and time'),
+        ('UID', '有效的 UID', 'valid UID'),
+    ],
+)
+def test_invalid_plist_scalar_translates(kind, chinese, english):
+    from planbak.plist_editor import parse_value
+
+    with pytest.raises(ValueError) as caught:
+        parse_value(kind, 'invalid')
+    assert chinese in LanguageContext(SIMPLIFIED_CHINESE).error(caught.value)
+    assert english in LanguageContext(ENGLISH).error(caught.value)
+
+
 def test_image_read_error_formats_in_both_languages():
     from planbak.codec import BackupError
 
