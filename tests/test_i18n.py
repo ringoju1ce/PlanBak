@@ -465,6 +465,21 @@ def test_image_metadata_explanations_translate_not_exif_values():
     assert '照片.png' in text
 
 
+@pytest.mark.parametrize(
+    'language, loading, accessible',
+    [(SIMPLIFIED_CHINESE, '正在加载…', '图片预览'), (ENGLISH, 'Loading…', 'Image preview')],
+)
+def test_image_canvas_initial_text_follows_parent_language(qtbot, language, loading, accessible):
+    from planbak.image_viewer import ImageCanvas
+
+    parent = QWidget()
+    parent.language_context = LanguageContext(language, parent)
+    qtbot.addWidget(parent)
+    canvas = ImageCanvas(parent)
+    assert canvas.message == loading
+    assert accessible in canvas.accessibleName()
+
+
 def test_xml_error_translates_without_changing_buffer(qtbot):
     from planbak.plist_editor import PlistDocument, PlistEditor
 

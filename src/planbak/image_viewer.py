@@ -20,7 +20,12 @@ class ImageCanvas(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setAccessibleName("图片预览；左右键或滚轮切图，Ctrl+滚轮缩放，拖动平移")
+        context = getattr(parent, "language_context", None) or LanguageContext(parent=self)
+        self.setAccessibleName(
+            context.translate(
+                "Image preview; use arrow keys or the wheel to navigate, Ctrl+wheel to zoom, and drag to pan"
+            )
+        )
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.grabGesture(Qt.GestureType.PinchGesture)
         self.image = QImage()
@@ -31,7 +36,7 @@ class ImageCanvas(QWidget):
         self.scale = 1.0
         self.fitting = True
         self.pan = QPointF()
-        self.message = "正在加载…"
+        self.message = context.translate("Loading…")
         self._drag = None
         self._wheel = 0.0
         self._wheel_mode = None
@@ -284,9 +289,10 @@ class ImageZoomSlider(QSlider):
 class ImageInformationStatus(DocumentStatus):
     def __init__(self, viewer):
         super().__init__(parent=viewer)
-        self.details_button.setText("图片信息")
-        self.details_button.setAccessibleName("图片信息")
-        self.details_button.setToolTip("查看图片信息和 EXIF")
+        tr = viewer.language_context.translate
+        self.details_button.setText(tr("Image Information"))
+        self.details_button.setAccessibleName(tr("Image Information"))
+        self.details_button.setToolTip(tr("View image information and EXIF"))
 
     def show_details(self):
         self.show_text_details(
@@ -320,6 +326,7 @@ class ImageViewer(QMainWindow):
         self.language_context = getattr(parent, "language_context", None) or LanguageContext(
             parent=self
         )
+        tr = self.language_context.translate
         self._status_source, self._status_values = None, {}
         self._canvas_source = None
         if parent is not None:
@@ -347,35 +354,39 @@ class ImageViewer(QMainWindow):
         self.setCentralWidget(self.canvas)
         self.canvas.navigate.connect(self.navigate)
         self.canvas.view_changed.connect(self.schedule_region)
-        toolbar = self.toolbar = DocumentToolBar("图片查看操作", self)
+        toolbar = self.toolbar = DocumentToolBar(tr("Image viewer controls"), self)
         self.addToolBar(Qt.ToolBarArea.BottomToolBarArea, toolbar)
         self.previous_button = toolbar.command(
-            "上一张", lambda: self.navigate(-1), icon="go-previous", hint="Left"
+            tr("Previous Image"), lambda: self.navigate(-1), icon="go-previous", hint="Left"
         )
         self.next_button = toolbar.command(
-            "下一张", lambda: self.navigate(1), icon="go-next", hint="Right"
+            tr("Next Image"), lambda: self.navigate(1), icon="go-next", hint="Right"
         )
-        self.loop_toggle = QCheckBox("循环滚动", toolbar)
-        self.loop_toggle.setToolTip("首尾循环切换图片；仅对当前窗口生效，关闭窗口后丢弃")
+        self.loop_toggle = QCheckBox(tr("Loop"), toolbar)
+        self.loop_toggle.setToolTip(tr("Loop through images in this window until it closes"))
         self.loop_toggle.toggled.connect(self.update_navigation)
         toolbar.addWidget(self.loop_toggle)
         toolbar.addSeparator()
-        self.fit_button = toolbar.command("适应窗口", self.canvas.fit, icon="zoom-fit-best")
-        self.actual_button = toolbar.command(
-            "实际大小", lambda: self.canvas.zoom(1.0), icon="zoom-original"
+        self.fit_button = toolbar.command(
+            tr("Fit to Window"), self.canvas.fit, icon="zoom-fit-best"
         )
-        self.actual_button.defaultAction().setToolTip("实际大小：100%（像素 1:1）")
+        self.actual_button = toolbar.command(
+            tr("Actual Size"), lambda: self.canvas.zoom(1.0), icon="zoom-original"
+        )
+        self.actual_button.defaultAction().setToolTip(tr("Actual size: 100% (1:1 pixels)"))
         toolbar.addSeparator()
         self.zoom_slider = ImageZoomSlider(Qt.Orientation.Horizontal)
-        self.zoom_slider.setAccessibleName("图片缩放倍率")
-        self.zoom_slider.setToolTip("调整缩放倍率；实际大小为100%（像素1:1），适应窗口是独立模式")
+        self.zoom_slider.setAccessibleName(tr("Image zoom"))
+        self.zoom_slider.setToolTip(
+            tr("Adjust zoom; actual size is 100% (1:1 pixels), fit to window is a separate mode")
+        )
         self.zoom_slider.setRange(-1661, 400)
         self.zoom_slider.setMinimumWidth(90)
         self.zoom_slider.setMaximumWidth(240)
         self.zoom_slider.valueChanged.connect(lambda value: self.canvas.zoom(2 ** (value / 100)))
         toolbar.addWidget(self.zoom_slider)
         toolbar.stretch()
-        self.reload_button = toolbar.command("重新加载", self.reload, icon="view-refresh")
+        self.reload_button = toolbar.command(tr("Reload"), self.reload, icon="view-refresh")
         self.status = ImageInformationStatus(self)
         self.statusBar().setSizeGripEnabled(True)
         self.statusBar().addWidget(self.status, 1)
