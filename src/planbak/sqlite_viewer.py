@@ -251,7 +251,11 @@ class SQLiteViewer(DocumentWindow):
             k: self.language_context.error(v) if isinstance(v, Exception) else v
             for k, v in values.items()
         }
-        self.status.setText(self.language_context.translate(source, **values) if source else "")
+        message = self.language_context.translate(source, **values) if source else ""
+        warning = (
+            self.language_context.translate(self.snapshot.warning) if self.snapshot.warning else ""
+        )
+        self.status.setText("\n\n".join(part for part in (message, warning) if part))
 
     def retranslate(self):
         tr = self.language_context.translate

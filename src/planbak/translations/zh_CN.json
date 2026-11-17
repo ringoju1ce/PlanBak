@@ -482,6 +482,7 @@
   "The change list has changed; select the change to discard again": "更改列表已变化，请重新选择要放弃更改的项目",
   "This is not a standard SQLite database; it may use another format or app-specific encryption.": "此文件不是标准 SQLite，可能使用其他格式或应用自身的加密。",
   "The database has a non-empty rollback journal; export it to handle this recovery state.": "数据库含非空回滚日志，暂不支持此恢复状态；请导出项目后处理。",
+  "This database uses WAL mode, but the backup has no associated WAL file; only the contents of the main database file can be shown.": "此数据库使用 WAL 模式，备份中未包含配套日志；只能显示现有主文件中的内容。",
   "Reading the database snapshot timed out; a journal may be incomplete.": "数据库快照读取超时，可能存在不完整的日志。",
   "Invalid page position": "无效的分页位置",
   "Only read-only queries returning results are supported": "只支持返回结果的只读查询",

@@ -338,3 +338,36 @@ def test_sqlite_unselected_current_cell_does_not_paint_focus_rectangle(qtbot, tm
     qtbot.keyClick(v.table, Qt.Key.Key_Down)
     assert v.table.currentIndex().row() == 1
     v.close()
+
+
+def test_missing_wal_warning_remains_visible_and_follows_language(tmp_path, qtbot):
+    from PySide6.QtWidgets import QWidget
+
+    from planbak.i18n import ENGLISH, SIMPLIFIED_CHINESE, LanguageContext
+
+    root = make_backup(tmp_path / 'backup')
+    session = BackupSession(root)
+    try:
+        source = tmp_path / 'wal-mode.db'
+        with sqlite3.connect(source) as connection:
+            assert connection.execute('PRAGMA journal_mode=WAL').fetchone()[0] == 'wal'
+            connection.execute('CREATE TABLE example(value)')
+        assert source.read_bytes()[18:20] == b'\x02\x02'
+        session.import_paths([source], 'HomeDomain', 'Documents')
+        token = session.at('HomeDomain', 'Documents/wal-mode.db').token
+        snapshot = prepare_snapshot(session, token, session.workspace / 'wal-snapshot')
+        assert snapshot.warning
+        parent = QWidget()
+        parent.language_context = LanguageContext(SIMPLIFIED_CHINESE, parent)
+        qtbot.addWidget(parent)
+        viewer = SQLiteViewer(snapshot, 'wal-mode.db', parent)
+        qtbot.addWidget(viewer)
+        qtbot.waitUntil(lambda: viewer.task is None)
+        assert '未包含配套日志' in viewer.status.full_text()
+        viewer.set_status('Read-only')
+        assert '未包含配套日志' in viewer.status.full_text()
+        parent.language_context.set_language(ENGLISH)
+        assert 'no associated WAL file' in viewer.status.full_text()
+        viewer.close()
+    finally:
+        session.close()

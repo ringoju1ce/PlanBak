@@ -83,7 +83,7 @@ def prepare_snapshot(session, token, directory, *, cancel=None, source=None):
         with main.open("rb") as stream:
             header = stream.read(20)
         if header[18:20] == b"\x02\x02" and not any(e.path.endswith("-wal") for e in files):
-            warning = "此数据库使用 WAL 模式，备份中未包含配套日志；只能显示现有主文件中的内容。"
+            warning = "This database uses WAL mode, but the backup has no associated WAL file; only the contents of the main database file can be shown."
         output = directory / "snapshot.sqlite"
         deadline = time.monotonic() + 30
 
