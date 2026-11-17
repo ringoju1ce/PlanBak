@@ -287,7 +287,7 @@ class BrowserRow:
 
 
 class BrowserModel(QAbstractTableModel):
-    headers = ("名称", "类型", "大小", "修改时间", "状态")
+    headers = ("Name", "Type", "Size", "Modified", "Status")
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -321,9 +321,7 @@ class BrowserModel(QAbstractTableModel):
 
     def headerData(self, section, orientation, role):
         if orientation == Qt.Orientation.Horizontal and role == Qt.ItemDataRole.DisplayRole:
-            return self.parent().language_context.translate(
-                ("Name", "Type", "Size", "Modified", "Status")[section]
-            )
+            return self.parent().language_context.translate(self.headers[section])
         return None
 
     @staticmethod
@@ -565,15 +563,17 @@ class MainWindow(QMainWindow):
         self._queued_transfer = None
         self._status_jobs = {}
         self._prefetch_jobs = {}
-        self.work_label = QLabel("就绪", self)
+        self.work_label = QLabel(self.language_context.translate("Ready"), self)
         self.work_progress = QProgressBar(self)
         self.work_progress.setFixedWidth(160)
         self.work_progress.setFixedHeight(self.work_label.sizeHint().height())
-        self.work_progress.setAccessibleName("后台任务进度")
+        self.work_progress.setAccessibleName(
+            self.language_context.translate("Background task progress")
+        )
         self.work_progress.hide()
         self.backup_status = QLabel(self)
         self.backup_status.setTextFormat(Qt.TextFormat.PlainText)
-        self.backup_status.setAccessibleName("备份状态")
+        self.backup_status.setAccessibleName(self.language_context.translate("Backup status"))
         self.backup_status.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self.work_label.setTextFormat(Qt.TextFormat.PlainText)
         self.work_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
@@ -739,30 +739,64 @@ class MainWindow(QMainWindow):
 
     def _create_actions(self):
         self.open_backup_action = self.action(
-            "打开备份…", self.open_backup, "Ctrl+O", "document-open"
+            self.language_context.translate("Open Backup…"),
+            self.open_backup,
+            "Ctrl+O",
+            "document-open",
         )
         self.open_new_window_action = self.action(
-            "在新窗口中打开备份…", lambda: self.open_backup(new_window=True)
+            self.language_context.translate("Open Backup in New Window…"),
+            lambda: self.open_backup(new_window=True),
         )
-        self.close_backup_action = self.action("关闭此备份", self.close_backup, "Ctrl+W")
-        self.add_action = self.action("添加文件…", self.add_files, icon="list-add")
-        self.add_folder_action = self.action("添加文件夹…", self.add_folder)
-        self.new_folder_action = self.action("新建文件夹…", self.new_folder, "Ctrl+Shift+N")
-        self.open_action = self.action("打开", self.open_file, icon="document-open")
+        self.close_backup_action = self.action(
+            self.language_context.translate("Close Backup"), self.close_backup, "Ctrl+W"
+        )
+        self.add_action = self.action(
+            self.language_context.translate("Add Files…"), self.add_files, icon="list-add"
+        )
+        self.add_folder_action = self.action(
+            self.language_context.translate("Add Folder…"), self.add_folder
+        )
+        self.new_folder_action = self.action(
+            self.language_context.translate("New Folder…"), self.new_folder, "Ctrl+Shift+N"
+        )
+        self.open_action = self.action(
+            self.language_context.translate("Open"), self.open_file, icon="document-open"
+        )
         self.extract_action = self.action(
-            "导出项目…", self.extract_selected, icon="document-save-as"
+            self.language_context.translate("Export Items…"),
+            self.extract_selected,
+            icon="document-save-as",
         )
-        self.rename_action = self.action("重命名…", self.rename_selected, "F2")
-        self.delete_action = self.action("删除", self.delete_selected, "Delete", "edit-delete")
-        self.save_action = self.action("应用更改…", self.save, "Ctrl+S", "document-save")
-        self.create_copy_action = self.action("创建备份副本…", self.create_backup_copy)
-        self.discard_action = self.action("放弃所有更改", self.discard)
-        self.up_action = self.action("上层文件夹", self.up, "Backspace", "go-up")
-        select_all = self.action("全选", self.select_all, "Ctrl+A")
+        self.rename_action = self.action(
+            self.language_context.translate("Rename…"), self.rename_selected, "F2"
+        )
+        self.delete_action = self.action(
+            self.language_context.translate("Delete"), self.delete_selected, "Delete", "edit-delete"
+        )
+        self.save_action = self.action(
+            self.language_context.translate("Apply Changes…"), self.save, "Ctrl+S", "document-save"
+        )
+        self.create_copy_action = self.action(
+            self.language_context.translate("Create Backup Copy…"), self.create_backup_copy
+        )
+        self.discard_action = self.action(
+            self.language_context.translate("Discard All Changes"), self.discard
+        )
+        self.up_action = self.action(
+            self.language_context.translate("Parent Folder"), self.up, "Backspace", "go-up"
+        )
+        select_all = self.action(
+            self.language_context.translate("Select All"), self.select_all, "Ctrl+A"
+        )
         self.select_all_action = select_all
-        enter = self.enter_action = self.action("打开 / 进入", self.activate_selection, "Return")
+        enter = self.enter_action = self.action(
+            self.language_context.translate("Open / Enter"), self.activate_selection, "Return"
+        )
         clear = self.clear_action = self.action(
-            "清除选择", lambda: self.active_view().clearSelection(), "Escape"
+            self.language_context.translate("Clear Selection"),
+            lambda: self.active_view().clearSelection(),
+            "Escape",
         )
         for action in (
             select_all,
@@ -778,7 +812,7 @@ class MainWindow(QMainWindow):
             self.grid.addAction(action)
         for action in (self.rename_action, self.delete_action):
             self.directory_tree.addAction(action)
-        file_menu = self.file_menu = self.menuBar().addMenu("文件")
+        file_menu = self.file_menu = self.menuBar().addMenu(self.language_context.translate("File"))
         file_menu.addActions(
             [
                 self.open_backup_action,
@@ -793,9 +827,11 @@ class MainWindow(QMainWindow):
         )
         file_menu.addSeparator()
         file_menu.addAction(self.close_backup_action)
-        self.quit_action = self.action("退出", self.close, "Ctrl+Q")
+        self.quit_action = self.action(
+            self.language_context.translate("Quit"), self.close, "Ctrl+Q"
+        )
         file_menu.addAction(self.quit_action)
-        edit_menu = self.edit_menu = self.menuBar().addMenu("编辑")
+        edit_menu = self.edit_menu = self.menuBar().addMenu(self.language_context.translate("Edit"))
         edit_menu.addActions(
             [
                 select_all,
@@ -804,20 +840,24 @@ class MainWindow(QMainWindow):
                 self.discard_action,
             ]
         )
-        view_menu = self.view_menu = self.menuBar().addMenu("视图")
-        self.sidebar_action = QAction("文件夹树", self, checkable=True)
+        view_menu = self.view_menu = self.menuBar().addMenu(self.language_context.translate("View"))
+        self.sidebar_action = QAction(
+            self.language_context.translate("Folder Tree"), self, checkable=True
+        )
         self.sidebar_action.setShortcut(QKeySequence("F9"))
         self.sidebar_action.toggled.connect(self.toggle_sidebar)
         self.sidebar_action.setChecked(self.settings.value("sidebar_visible", True, type=bool))
         self.directory_tree.setVisible(self.sidebar_action.isChecked())
         self.addAction(self.sidebar_action)
         view_menu.addAction(self.sidebar_action)
-        language_menu = self.menuBar().addMenu("Language")
+        # Keep this entry recognizable even when the current language is unfamiliar.
+        language_menu = self.language_menu = self.menuBar().addMenu("Language")
         self.language_group = QActionGroup(self)
         self.language_group.setExclusive(True)
         self.language_actions = {}
-        for language, name in ((SIMPLIFIED_CHINESE, "简体中文"), (ENGLISH, "English")):
-            action = QAction(name, self, checkable=True)
+        for language, name in ((SIMPLIFIED_CHINESE, "Simplified Chinese"), (ENGLISH, "English")):
+            label = LanguageContext(language, self).translate(name)
+            action = QAction(label, self, checkable=True)
             action.setChecked(self.language_context.language == language)
             action.triggered.connect(
                 lambda _checked, value=language: self.language_context.set_language(value)
@@ -825,8 +865,8 @@ class MainWindow(QMainWindow):
             self.language_group.addAction(action)
             language_menu.addAction(action)
             self.language_actions[language] = action
-        help_menu = self.help_menu = self.menuBar().addMenu("帮助")
-        self.about_action = self.action("关于", self.show_about)
+        help_menu = self.help_menu = self.menuBar().addMenu(self.language_context.translate("Help"))
+        self.about_action = self.action(self.language_context.translate("About"), self.show_about)
         help_menu.addAction(self.about_action)
 
     def retranslate_main_actions(self):
@@ -904,7 +944,9 @@ class MainWindow(QMainWindow):
         dialog.deleteLater()
 
     def _create_toolbar(self):
-        toolbar = self.file_toolbar = QToolBar("文件操作", self)
+        toolbar = self.file_toolbar = QToolBar(
+            self.language_context.translate("File actions"), self
+        )
         toolbar.setMovable(False)
         self.addToolBar(toolbar)
         add_button = QToolButton()
@@ -916,8 +958,8 @@ class MainWindow(QMainWindow):
         toolbar.addWidget(add_button)
         toolbar.addAction(self.open_action)
         toolbar.addSeparator()
-        self.list_action = QAction("列表", self, checkable=True)
-        self.grid_action = QAction("网格", self, checkable=True)
+        self.list_action = QAction(self.language_context.translate("List"), self, checkable=True)
+        self.grid_action = QAction(self.language_context.translate("Grid"), self, checkable=True)
         group = QActionGroup(self)
         group.addAction(self.list_action)
         group.addAction(self.grid_action)
@@ -926,16 +968,22 @@ class MainWindow(QMainWindow):
         self.grid_action.triggered.connect(lambda: self.set_view(True))
         toolbar.addActions([self.list_action, self.grid_action])
         self.sort_combo = QComboBox()
-        self.sort_combo.addItems(BrowserModel.headers)
-        self.sort_combo.setToolTip("排序方式")
+        self.sort_combo.addItems(
+            [self.language_context.translate(key) for key in BrowserModel.headers]
+        )
+        self.sort_combo.setToolTip(self.language_context.translate("Sort by"))
         self.sort_combo.setCurrentIndex(self.settings.value("sort", 0, type=int))
         self.sort_combo.currentIndexChanged.connect(self.refresh)
         toolbar.addWidget(self.sort_combo)
-        self.descending = QAction("降序", self, checkable=True)
+        self.descending = QAction(
+            self.language_context.translate("Descending"), self, checkable=True
+        )
         self.descending.setChecked(self.settings.value("descending", False, type=bool))
         self.descending.toggled.connect(self.refresh)
         toolbar.addAction(self.descending)
-        self.directories_first = QAction("文件夹优先", self, checkable=True)
+        self.directories_first = QAction(
+            self.language_context.translate("Folders First"), self, checkable=True
+        )
         self.directories_first.setChecked(self.settings.value("directories_first", True, type=bool))
         self.directories_first.toggled.connect(self.refresh)
         toolbar.addAction(self.directories_first)
@@ -943,32 +991,34 @@ class MainWindow(QMainWindow):
         header.setSectionsClickable(True)
         header.setSortIndicatorShown(True)
         header.sectionClicked.connect(self.sort_by_column)
-        self.icon_label = QLabel(" 图标 ")
+        self.icon_label = QLabel(" " + self.language_context.translate("Icon") + " ")
         toolbar.addWidget(self.icon_label)
         self.icon_slider = QSlider(Qt.Orientation.Horizontal)
         self.icon_slider.setRange(24, 128)
         self.icon_slider.setValue(self.settings.value("icons", 48, type=int))
         self.icon_slider.setFixedWidth(90)
-        self.icon_slider.setAccessibleName("图标大小")
+        self.icon_slider.setAccessibleName(self.language_context.translate("Icon size"))
         self.icon_slider.valueChanged.connect(self.set_icon_size)
         toolbar.addWidget(self.icon_slider)
         self.set_icon_size(self.icon_slider.value())
-        navigation = self.navigation_toolbar = QToolBar("导航", self)
+        navigation = self.navigation_toolbar = QToolBar(
+            self.language_context.translate("Navigation"), self
+        )
         navigation.setMovable(False)
         self.addToolBarBreak()
         self.addToolBar(navigation)
         navigation.addAction(self.up_action)
         self.location = QLineEdit("/")
-        self.location.setAccessibleName("文件夹路径")
+        self.location.setAccessibleName(self.language_context.translate("Folder path"))
         self.location.returnPressed.connect(self.go_location)
         navigation.addWidget(self.location)
 
     def _create_changes(self):
-        self.changes_dock = QDockWidget("更改列表", self)
+        self.changes_dock = QDockWidget(self.language_context.translate("Changes"), self)
         container = QWidget()
         layout = QVBoxLayout(container)
         self.changes_list = QListView()
-        self.changes_list.setAccessibleName("更改列表")
+        self.changes_list.setAccessibleName(self.language_context.translate("Changes"))
         self.changes_list.setUniformItemSizes(True)
         self.changes_list.setTextElideMode(Qt.TextElideMode.ElideMiddle)
         self.changes_model = PendingChangesModel(self)
@@ -976,10 +1026,12 @@ class MainWindow(QMainWindow):
         self.changes_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.changes_list.customContextMenuRequested.connect(self.pending_context_menu)
         layout.addWidget(self.changes_list)
-        self.apply_changes_button = QPushButton("应用更改")
+        self.apply_changes_button = QPushButton(self.language_context.translate("Apply Changes"))
         self.apply_changes_button.clicked.connect(self.save_action.trigger)
         layout.addWidget(self.apply_changes_button)
-        discard = self.discard_button = QPushButton("放弃所有更改")
+        discard = self.discard_button = QPushButton(
+            self.language_context.translate("Discard All Changes")
+        )
         discard.clicked.connect(self.discard)
         layout.addWidget(discard)
         self.changes_dock.setWidget(container)

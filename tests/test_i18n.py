@@ -156,6 +156,10 @@ def test_language_menu_changes_only_its_window(factory):
     first.language_actions[ENGLISH].trigger()
     assert first.file_menu.title() == 'File'
     assert second.file_menu.title() == '文件'
+    assert first.language_menu.title() == 'Language'
+    assert second.language_menu.title() == 'Language'
+    assert first.language_actions[SIMPLIFIED_CHINESE].text() == '简体中文'
+    assert second.language_actions[SIMPLIFIED_CHINESE].text() == '简体中文'
     assert first.language_actions[ENGLISH].isChecked()
     assert second.language_actions[SIMPLIFIED_CHINESE].isChecked()
 

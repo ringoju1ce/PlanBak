@@ -1776,7 +1776,7 @@ def test_database_unknown_format_and_sidecars_report_clear_error(
         choose(w, name)
         w.open_file()
         qtbot.waitUntil(lambda: w.task is None)
-        assert expected in str(errors[-1])
+        assert expected in w.language_context.error(errors[-1])
     assert not w.readonly.database_viewers and not w.external_edits.records
 
 
