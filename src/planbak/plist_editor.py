@@ -177,9 +177,9 @@ class PlistNode:
     @property
     def preview(self):
         if self.container:
-            return f"{len(self.children)} 个条目"
+            return LanguageContext().translate("{count} items", count=len(self.children))
         if self.kind == "Data":
-            return f"{len(self.value)} 字节"
+            return LanguageContext().translate("{count} bytes", count=len(self.value))
         if self.kind == "Boolean":
             return "true" if self.value else "false"
         if self.kind == "Date":

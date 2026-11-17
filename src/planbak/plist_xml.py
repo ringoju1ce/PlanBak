@@ -153,7 +153,9 @@ def parse_xml(text):
     except PlistXmlError:
         raise
     except expat.ExpatError as exc:
-        raise PlistXmlError(str(exc), exc.lineno, exc.offset + 1) from exc
+        raise PlistXmlError(
+            expat.ErrorString(exc.code) or str(exc), exc.lineno, exc.offset + 1
+        ) from exc
     except Exception as exc:
         raise PlistXmlError(
             str(exc), parser.CurrentLineNumber, parser.CurrentColumnNumber + 1

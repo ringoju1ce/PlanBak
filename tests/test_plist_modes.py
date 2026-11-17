@@ -94,6 +94,15 @@ def test_xml_error_retains_parameters_independently_of_display_language():
     assert "Duplicate dictionary key: 名字：{x}" in error.localized(LanguageContext(ENGLISH).translate)
 
 
+def test_xml_parser_syntax_error_is_localized():
+    from planbak.i18n import ENGLISH, SIMPLIFIED_CHINESE, LanguageContext
+
+    with pytest.raises(PlistXmlError) as caught:
+        parse_xml("<plist><array></plist>")
+    assert "标签不匹配" in caught.value.localized(LanguageContext(SIMPLIFIED_CHINESE).translate)
+    assert "mismatched tag" in caught.value.localized(LanguageContext(ENGLISH).translate)
+
+
 @pytest.mark.parametrize(
     "value", [plistlib.UID(0), None, datetime(2025, 1, 1, microsecond=123456), "contains\x00null"]
 )

@@ -725,3 +725,15 @@ def test_literal_translation_keys_have_chinese_entries():
             if isinstance(key, ast.Constant) and isinstance(key.value, str) and key.value not in catalog:
                 missing.append(f'{path.name}:{node.lineno}: {key.value}')
     assert not missing, '\n'.join(missing)
+
+
+def test_expat_error_messages_have_chinese_entries():
+    import json
+    from pathlib import Path
+    from xml.parsers import expat
+
+    catalog = json.loads(
+        (Path(__file__).resolve().parents[1] / 'src' / 'planbak' / 'translations' / 'zh_CN.json')
+        .read_text(encoding='utf-8')
+    )
+    assert not (set(expat.errors.messages.values()) - catalog.keys())
