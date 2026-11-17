@@ -2132,6 +2132,19 @@ def test_browser_type_sort_uses_visible_folder_type_for_virtual_nodes(window):
     assert all(w.model.index(i, 1).data() == "文件夹" for i in range(len(names)))
 
 
+def test_browser_type_sort_uses_stable_categories():
+    from planbak.app import BrowserModel, BrowserRow
+
+    def row(name, kind):
+        return BrowserRow(name, "HomeDomain", name, kind)
+
+    items = [row("folder", "directory"), row("plain", "file"), row("b.txt", "file"),
+             row("a.PNG", "file"), row("link", "special"), row("domain", "domain")]
+    assert [item.name for item in sorted(items, key=BrowserModel.type_sort_key)] == [
+        "a.PNG", "b.txt", "plain", "folder", "domain", "link"
+    ]
+
+
 def test_independent_document_windows_close_with_session_and_allow_multiple_files(
     window, qtbot, tmp_path, monkeypatch
 ):

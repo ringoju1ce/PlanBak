@@ -325,15 +325,17 @@ class BrowserModel(QAbstractTableModel):
         return None
 
     @staticmethod
-    def type_label(row):
-        return {
-            "domain": "文件夹",
-            "group": "文件夹",
-            "parent": "上层文件夹",
-            "directory": "文件夹",
-            "file": Path(row.name).suffix.lstrip(".").upper() or "文件",
-            "special": "链接 / 特殊条目",
-        }.get(row.kind, row.kind)
+    def type_sort_key(row):
+        if row.kind == "file":
+            suffix = Path(row.name).suffix.lstrip(".")
+            return (0, suffix.casefold()) if suffix else (2, "")
+        if row.kind == "parent":
+            return (1, "")
+        if row.kind in ("domain", "group", "directory"):
+            return (3, "")
+        if row.kind == "special":
+            return (4, "")
+        return (5, row.kind.casefold())
 
     def data(self, index, role=Qt.ItemDataRole.DisplayRole):
         if not index.isValid() or index.row() >= self.visible_count:
@@ -1318,7 +1320,7 @@ class MainWindow(QMainWindow):
 
         def key(row):
             if sort == 1:
-                return (BrowserModel.type_label(row).casefold(), row.name.casefold())
+                return (BrowserModel.type_sort_key(row), row.name.casefold())
             if sort == 2:
                 return (row.entry.size if row.entry else 0, row.name.casefold())
             if sort == 3:
@@ -2992,7 +2994,7 @@ class MainWindow(QMainWindow):
             try:
                 content = json.loads(bytes(snapshot.data(INTERNAL_MIME)))
                 if not isinstance(content, dict):
-                    raise ValueError("无效拖放内容")
+                    raise ValueError("Invalid drop content")
                 local = self.session and content["session"] == self.session.session_id
                 if not local:
                     # 仅取得快速的会话租约，不在原生事件内弹窗或导出文件。
