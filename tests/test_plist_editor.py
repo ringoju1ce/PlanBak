@@ -70,7 +70,7 @@ def test_plist_uid_archive_and_xml_precision():
     assert plistlib.loads(doc.serialize()) == value
     doc = PlistDocument(plistlib.dumps({"date": datetime(2025, 1, 1)}))
     doc.root.children[0].value = datetime(2025, 1, 1, microsecond=1)
-    with pytest.raises(ValueError, match="无损"):
+    with pytest.raises(ValueError, match="without loss"):
         doc.serialize()
     assert parse_value("Date", "2025-01-01T09:00:00+09:00") == datetime(2025, 1, 1)
 

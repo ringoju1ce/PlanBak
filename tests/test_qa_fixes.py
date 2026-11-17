@@ -316,7 +316,7 @@ def test_plist_shared_graph_is_rejected_before_expansion(depth):
         value=[value,value]
     data=plistlib.dumps(value,fmt=plistlib.FMT_BINARY)
     assert len(data)<2048
-    with pytest.raises(ValueError,match='节点'):
+    with pytest.raises(ValueError,match='nodes'):
         PlistDocument(data)
 
 
@@ -324,7 +324,7 @@ def test_plist_cycles_rejected_and_small_shared_graph_edits_independent():
     from planbak.plist_editor import PlistDocument
     value=[]
     value.append(value)
-    with pytest.raises(ValueError,match='循环'):
+    with pytest.raises(ValueError,match='cycle'):
         PlistNode.from_value(value)
     shared=['before']
     document=PlistDocument(plistlib.dumps([shared,shared],fmt=plistlib.FMT_BINARY))
@@ -337,7 +337,7 @@ def test_plist_depth_limit_rejects_deep_nonshared_tree():
     value='leaf'
     for _ in range(MAX_PLIST_DEPTH+1):
         value=[value]
-    with pytest.raises(ValueError,match='层'):
+    with pytest.raises(ValueError,match='nesting levels'):
         PlistNode.from_value(value)
 
 

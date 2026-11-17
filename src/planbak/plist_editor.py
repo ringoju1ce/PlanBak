@@ -53,8 +53,8 @@ MAX_PLIST_DEPTH = 128
 
 
 class PlistValidationError(ValueError):
-    def __init__(self, message, *, english, values=None):
-        super().__init__(message)
+    def __init__(self, *, english, values=None):
+        super().__init__(english.format(**(values or {})))
         self.translation_source = english
         self.translation_values = values or {}
 
@@ -67,7 +67,6 @@ def validate_structure(value):
     def measure(current, depth):
         if depth > MAX_PLIST_DEPTH:
             raise PlistValidationError(
-                "plist 嵌套超过 128 层，请导出后处理",
                 english="The plist exceeds 128 nesting levels; export it to process it",
             )
         if not isinstance(current, (dict, list)):
@@ -75,7 +74,6 @@ def validate_structure(value):
         identity = id(current)
         if identity in active:
             raise PlistValidationError(
-                "plist 包含循环引用，无法作为树编辑",
                 english="The plist contains a cycle and cannot be edited as a tree",
             )
         if identity not in measured:
@@ -89,7 +87,6 @@ def validate_structure(value):
                     height = max(height, levels + 1)
                     if nodes > MAX_PLIST_NODES:
                         raise PlistValidationError(
-                            "plist 展开超过 100000 个节点，请导出后处理",
                             english="The plist expands beyond 100,000 nodes; export it to process it",
                         )
                 measured[identity] = nodes, height
@@ -98,7 +95,6 @@ def validate_structure(value):
         nodes, height = measured[identity]
         if depth + height - 1 > MAX_PLIST_DEPTH:
             raise PlistValidationError(
-                "plist 嵌套超过 128 层，请导出后处理",
                 english="The plist exceeds 128 nesting levels; export it to process it",
             )
         return nodes, height
@@ -150,7 +146,6 @@ class PlistNode:
         }.get(type(value))
         if kind is None:
             raise PlistValidationError(
-                f"不支持的 plist 类型：{type(value).__name__}",
                 english="Unsupported plist type: {type}",
                 values={"type": type(value).__name__},
             )
@@ -160,9 +155,7 @@ class PlistNode:
         if self.kind == "Dictionary":
             keys = [child.key for child in self.children]
             if len(set(keys)) != len(keys):
-                raise PlistValidationError(
-                    "字典中存在重复的键", english="The dictionary contains duplicate keys"
-                )
+                raise PlistValidationError(english="The dictionary contains duplicate keys")
             return {child.key: child.to_value() for child in self.children}
         if self.kind == "Array":
             return [child.to_value() for child in self.children]
@@ -206,20 +199,17 @@ def parse_value(kind, text):
         value = int(text, 10)
         if not -(2**63) <= value < 2**64:
             raise PlistValidationError(
-                "整数必须介于 -2⁶³ 和 2⁶⁴−1 之间",
                 english="The integer must be between -2⁶³ and 2⁶⁴−1",
             )
         return value
     if kind == "Real":
         value = float(text)
         if not math.isfinite(value):
-            raise PlistValidationError("请输入有限实数", english="Enter a finite real number")
+            raise PlistValidationError(english="Enter a finite real number")
         return value
     if kind == "Boolean":
         if text.lower() not in ("true", "false"):
-            raise PlistValidationError(
-                "布尔值只能是 true 或 false", english="Boolean values must be true or false"
-            )
+            raise PlistValidationError(english="Boolean values must be true or false")
         return text.lower() == "true"
     if kind == "Date":
         value = datetime.fromisoformat(text.replace("Z", "+00:00"))
@@ -228,7 +218,7 @@ def parse_value(kind, text):
         return value
     if kind == "UID":
         return plistlib.UID(int(text, 10))
-    raise PlistValidationError("不支持的值类型", english="Unsupported value type")
+    raise PlistValidationError(english="Unsupported value type")
 
 
 class PlistDocument:
@@ -248,7 +238,6 @@ class PlistDocument:
         # Refuse values that would silently lose precision, e.g. XML fractional dates.
         if not same_value(plistlib.loads(data), value):
             raise PlistValidationError(
-                "当前格式无法无损保存这些值；XML 日期只支持整秒",
                 english="The current format cannot save these values without loss; XML dates support whole seconds only",
             )
         return data
@@ -304,7 +293,6 @@ class DateValue(QWidget):
             control.hasAcceptableInput() for control in (self.date, self.time, self.fraction)
         ):
             raise PlistValidationError(
-                "请输入合法的 UTC 日期、时间及六位小数秒",
                 english="Enter a valid UTC date, time, and six fractional digits",
             )
         day, time = self.date.date(), self.time.time()
@@ -525,13 +513,10 @@ class ValueDialog(FixedDialog):
             if self.parent_kind == "Dictionary" and any(
                 n is not self.node and n.key == key for n in self.siblings
             ):
-                raise PlistValidationError(
-                    "该字典已存在同名键", english="This dictionary already contains that key"
-                )
+                raise PlistValidationError(english="This dictionary already contains that key")
             kind = self.type_field.currentText()
             if self.node.container and self.node.children and kind != self.node.kind:
                 raise PlistValidationError(
-                    "请先清空容器的子项目，再更改类型",
                     english="Remove the container's children before changing its type",
                 )
             children = self.node.children if kind == self.node.kind and self.node.container else []
@@ -563,7 +548,6 @@ class ValueDialog(FixedDialog):
                 encoded = plistlib.dumps(probe, fmt=fmt, sort_keys=False)
                 if not same_value(plistlib.loads(encoded), probe):
                     raise PlistValidationError(
-                        "当前格式无法无损保存该值；XML 日期只支持整秒",
                         english="This value cannot be saved without loss; XML dates support whole seconds only",
                     )
             self.result_node = PlistNode(kind, key, value, children)
@@ -734,13 +718,11 @@ class PlistEditor(DocumentWindow):
                 node = pending.pop()
                 if node.kind in ("UID", "Null"):
                     raise PlistValidationError(
-                        f"标准 plist XML 无法表示 {node.kind} 类型",
                         english="Standard plist XML cannot represent the {type} type",
                         values={"type": node.kind},
                     )
                 if node.kind == "Date" and node.value.microsecond:
                     raise PlistValidationError(
-                        "此 Date 包含小数秒，XML 日期只支持整秒",
                         english="This Date contains fractional seconds; XML dates support whole seconds only",
                     )
                 pending.extend(node.children)
@@ -748,7 +730,6 @@ class PlistEditor(DocumentWindow):
             data = plistlib.dumps(value, fmt=plistlib.FMT_XML, sort_keys=False)
             if not same_value(parse_xml(data.decode("utf-8")), value):
                 raise PlistValidationError(
-                    "当前值无法无损转换为 XML（日期的小数秒会丢失）",
                     english="The current value cannot be converted to XML without losing fractional seconds",
                 )
             self._xml_cache = data.decode("utf-8")
@@ -791,7 +772,6 @@ class PlistEditor(DocumentWindow):
             data = plistlib.dumps(value, fmt=self.document.format, sort_keys=False)
             if not same_value(plistlib.loads(data), value):
                 raise PlistValidationError(
-                    "源文件格式无法无损保存这些值",
                     english="The original file format cannot save these values without loss",
                 )
         except Exception as exc:

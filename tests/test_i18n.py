@@ -545,16 +545,16 @@ def test_plist_toolbar_tooltips_follow_language_and_keep_shortcut(qtbot):
     assert 'Find' in editor.xml.search_button.toolTip() and 'Ctrl+F' in editor.xml.search_button.toolTip()
 
 
-def test_plist_validation_error_preserves_api_and_translates():
+def test_plist_validation_error_translates():
     from planbak.plist_editor import validate_structure
 
     value = []
     value.append(value)
     with pytest.raises(ValueError) as caught:
         validate_structure(value)
-    assert str(caught.value) == 'plist 包含循环引用，无法作为树编辑'
+    assert str(caught.value) == 'The plist contains a cycle and cannot be edited as a tree'
     assert 'contains a cycle' in LanguageContext(ENGLISH).error(caught.value)
-    assert LanguageContext(SIMPLIFIED_CHINESE).error(caught.value) == str(caught.value)
+    assert LanguageContext(SIMPLIFIED_CHINESE).error(caught.value) == 'plist 包含循环引用，无法作为树编辑'
 
 
 def test_image_read_error_formats_in_both_languages():
@@ -648,9 +648,8 @@ def test_structured_error_templates_have_chinese_translations():
                 continue
             if node.func.id not in {'BackupError', 'PlistValidationError'}:
                 continue
-            if node.func.id == 'BackupError':
-                assert not node.args, f'{path.name}:{node.lineno}: use a translation template'
-                assert any(keyword.arg == 'english' for keyword in node.keywords)
+            assert not node.args, f'{path.name}:{node.lineno}: use a translation template'
+            assert any(keyword.arg == 'english' for keyword in node.keywords)
             for keyword in node.keywords:
                 if keyword.arg != 'english' or not isinstance(keyword.value, ast.Constant):
                     continue
