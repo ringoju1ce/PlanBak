@@ -27,7 +27,7 @@ def to_qimage(image):
     if image.bands == 3:
         image = image.bandjoin(255)
     if image.bands != 4:
-        raise BackupError(english="Unable to convert this image’s color channels.")
+        raise BackupError(english="Unable to convert this image's color channels.")
     data = image.write_to_memory()
     return QImage(
         data, image.width, image.height, image.width * 4, QImage.Format.Format_RGBA8888

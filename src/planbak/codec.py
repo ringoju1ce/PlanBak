@@ -211,7 +211,7 @@ class Metadata:
     def __init__(self, blob: bytes):
         if len(blob) > MAX_METADATA_BYTES:
             raise BackupError(
-                english="File metadata exceeds the application’s 8 MiB limit",
+                english="File metadata exceeds the application's 8 MiB limit",
             )
         if blob.startswith(b"bplist00") and len(blob) >= 32:
             # 二进制 plist 尾部已有对象数量；在 plistlib 分配对象前拒绝异常表。

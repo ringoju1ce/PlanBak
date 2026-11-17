@@ -499,7 +499,7 @@ class BackupSession(SessionOverlay):
         for entry in entries:
             if not entry.path:
                 raise BackupError(
-                    english="The backup’s top-level folders cannot be modified",
+                    english="The backup's top-level folders cannot be modified",
                 )
             if not any(
                 e.domain == entry.domain and entry.path.startswith(e.path + "/") for e in result
@@ -894,7 +894,7 @@ class BackupSession(SessionOverlay):
                         blob = meta.dump()
                         if len(blob) > MAX_METADATA_BYTES:
                             raise BackupError(
-                                english="Modified file metadata exceeds the application’s 8 MiB limit; changes were not applied and the backup and staged content were preserved",
+                                english="Modified file metadata exceeds the application's 8 MiB limit; changes were not applied and the backup and staged content were preserved",
                             )
                         out_db.execute(
                             "INSERT INTO Files(fileID,domain,relativePath,flags,file) VALUES(?,?,?,?,?)",

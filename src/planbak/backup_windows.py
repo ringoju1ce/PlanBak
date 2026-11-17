@@ -37,7 +37,7 @@ class BackupClaim:
         if shared is not None and (
             shared.manager is not manager or shared.owner() is not owner or shared.released
         ):
-            raise BackupError(english="Cannot share another session’s backup lock")
+            raise BackupError(english="Cannot share another session's backup lock")
         self._acquire(keys, shared=shared)
 
     def _acquire(self, keys, *, shared=None):

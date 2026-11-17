@@ -745,6 +745,15 @@ def test_literal_translation_keys_have_chinese_entries():
     assert not missing, '\n'.join(missing)
 
 
+def test_translation_keys_use_straight_apostrophes():
+    import json
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[1] / 'src' / 'planbak' / 'translations' / 'zh_CN.json'
+    catalog = json.loads(path.read_text(encoding='utf-8'))
+    assert not [key for key in catalog if '’' in key]
+
+
 def test_expat_error_messages_have_chinese_entries():
     import json
     from pathlib import Path
